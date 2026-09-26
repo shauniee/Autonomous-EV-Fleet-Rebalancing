@@ -1,0 +1,292 @@
+import asyncio
+import logging
+from uuid import uuid4
+from fastapi import HTTPException
+from ev_fleet.common.clock import Clock
+from ev_fleet.common.settings import DispatchSettings, Settings
+from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, VehicleClaim
+from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
+from ev_fleet.contracts.demand import ZoneState
+from ev_fleet.contracts.recommendations import Recommendation
+from ev_fleet.rebalancing.policy import assess
+from .clients import request_json
+from .store import DispatchStore
+
+
+TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
+
+
+class DispatchService:
+    def __init__(self, client, settings=None, clock=None):
+        self.client = client
+        self.settings = settings or DispatchSettings.from_env()
+        self.clock = clock or Clock()
+        self.store = DispatchStore(self.clock)
+
+    def transition(self, record, state, reason=None):
+        record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
+
+    def claim_url(self, record):
+        return f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}/claims/{record.data['dispatch_id']}"
+
+    async def prepare(self, record):
+        recommendation = await request_json(self.client, "GET",
+            f"{self.settings.rebalancing_url}/api/v1/recommendations/{record.data['recommendation_id']}", model=Recommendation)
+        if str(recommendation.recommendation_id) != record.data["recommendation_id"]:
+            raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
+        if recommendation.expires_at <= self.clock.now():
+            raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+        if not recommendation.selected_vehicle_id:
+            raise HTTPException(409, "NO_RECOMMENDED_VEHICLE")
+        target, fleet = await asyncio.gather(
+            request_json(self.client, "GET", f"{self.settings.demand_url}/api/v1/zones/{recommendation.target.zone_id}", model=ZoneState),
+            request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
+        if target != recommendation.target:
+            raise HTTPException(409, "TARGET_CHANGED")
+        if fleet.instance_id != recommendation.fleet_snapshot.instance_id:
+            raise HTTPException(409, "FLEET_INSTANCE_CHANGED")
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == recommendation.selected_vehicle_id), None)
+        if vehicle is None:
+            raise HTTPException(409, "VEHICLE_NOT_FOUND")
+        policy = Settings(**recommendation.policy_settings)
+        assessment = assess(vehicle.model_dump(mode="json"), target.model_dump(mode="json"), policy, self.clock.now())
+        if not assessment["eligible"]:
+            raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
+        command_id = uuid4()
+        claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
+            expected_version=vehicle.state_version, target_zone_id=target.zone_id,
+            target_position=target.position, approve_before=recommendation.expires_at,
+            min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
+            route_factor=max(policy.route_factor, self.settings.route_factor),
+            energy_margin_factor=max(policy.energy_margin_factor, self.settings.energy_margin_factor))
+        command = RelocationCommand(dispatch_id=record.data["dispatch_id"], command_id=command_id,
+            vehicle_id=vehicle.vehicle_id, fleet_instance_id=fleet.instance_id,
+            target_zone_id=target.zone_id, target_position=target.position, issued_at=self.clock.now(),
+            min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
+            energy_margin_factor=claim.energy_margin_factor)
+        record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
+                           revalidated_metrics=assessment)
+        # Store the exact request BEFORE the remote mutation. Never silently refresh its version.
+        record.claim_request = claim.model_dump(mode="json")
+
+    async def acquire(self, record):
+        receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
+        self.check_receipt(record, receipt)
+        record.claimed = True
+        if record.claim_tick is None:
+            elapsed = max(0, (self.clock.now() - receipt.acquired_at).total_seconds())
+            record.claim_tick = self.clock.monotonic() - elapsed
+        record.data["claim_held"] = receipt.status == "ACTIVE"
+        if receipt.status == "RELEASED":
+            self.finish(record, receipt.outcome)
+        else:
+            self.transition(record, "PENDING")
+
+    def check_receipt(self, record, receipt):
+        command = record.data["command"]
+        if (str(receipt.dispatch_id) != record.data["dispatch_id"] or
+            str(receipt.command_id) != command["command_id"] or
+            str(receipt.fleet_instance_id) != command["fleet_instance_id"] or
+            receipt.vehicle_id != record.data["vehicle_id"]):
+            raise HTTPException(503, "CLAIM_IDENTITY_MISMATCH")
+
+    def finish(self, record, outcome):
+        record.data["claim_held"] = False
+        record.data["completed_at"] = self.clock.now().isoformat()
+        self.transition(record, "SUCCEEDED" if outcome == "ARRIVED" else "REJECTED",
+                        None if outcome == "ARRIVED" else "EV_REJECTED_COMMAND")
+
+    async def approve(self, body):
+        record = await self.store.begin(body)
+        async with record.lock:
+            if record.claimed or record.data["state"] in TERMINAL:
+                return record.view()
+            try:
+                if not record.claim_request:
+                    await self.prepare(record)
+                await self.acquire(record)
+            except HTTPException as exc:
+                self.handle_approval_error(record, exc)
+                if exc.status_code in (404, 409, 422):
+                    raise HTTPException(409, exc.detail) from exc
+            return record.view()
+
+    def handle_approval_error(self, record, exc):
+        # A Fleet epoch change after an attempted claim cannot prove the old claim did not execute.
+        uncertain = exc.status_code >= 500 or (record.claim_request and exc.detail == "FLEET_INSTANCE_CHANGED")
+        self.transition(record, "UNKNOWN" if uncertain else "REJECTED", str(exc.detail))
+        if uncertain and record.claim_request:
+            record.data["claim_held"] = None  # Unknown, not proof that the EV is free.
+
+    async def refresh(self, record):
+        """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
+        if record.data["state"] in TERMINAL:
+            return
+        if not record.claimed:
+            try:
+                if not record.claim_request:
+                    await self.prepare(record)
+                await self.acquire(record)
+            except HTTPException as exc:
+                self.handle_approval_error(record, exc)
+            return
+        try:
+            receipt = await request_json(self.client, "GET", self.claim_url(record), model=VehicleClaim)
+            self.check_receipt(record, receipt)
+            if receipt.status == "RELEASED":
+                self.finish(record, receipt.outcome)
+                return
+            record.data["claim_held"] = True
+            vehicle = await request_json(self.client, "GET",
+                f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}", model=VehicleState)
+            if not vehicle.active_claim or vehicle.active_claim != receipt:
+                raise HTTPException(409, "CLAIM_OWNERSHIP_UNCONFIRMED")
+            telemetry = vehicle.telemetry
+            if vehicle.stale or vehicle.connectivity != "ONLINE":
+                self.transition(record, "UNKNOWN", "VEHICLE_OFFLINE_OR_STALE")
+                return
+            if record.data["state"] == "UNKNOWN" and not record.data["acknowledged_at"] and not record.release_outcome:
+                self.transition(record, "SENT" if record.sent_tick is not None else "PENDING")
+            if telemetry and str(telemetry.active_dispatch_id) == record.data["dispatch_id"]:
+                record.data["last_contact_at"] = telemetry.observed_at.isoformat()
+                if telemetry.distance_travelled_km is not None:
+                    record.data["distance_travelled_km"] = max(record.data["distance_travelled_km"], telemetry.distance_travelled_km)
+                state = telemetry.relocation_state
+                if state == "ARRIVED":
+                    record.release_outcome = "ARRIVED"
+                    record.data["arrival_soc_pct"] = telemetry.soc_pct
+                    self.transition(record, "ARRIVAL_PENDING")
+                elif state == "FAILED":
+                    self.transition(record, "FAILED", "EV_EXECUTION_FAILED")
+                    return  # Retain claim; physical failure does not establish availability.
+                elif state == "RELOCATING":
+                    if record.release_outcome == "REJECTED":
+                        self.transition(record, "UNKNOWN", "REJECTION_CONTRADICTS_MOVEMENT")
+                        return
+                    self.transition(record, "IN_PROGRESS")
+                    record.data["acknowledged_at"] = record.data["acknowledged_at"] or self.clock.now().isoformat()
+                    # Accepted fresh telemetry is execution evidence even when ACK was lost.
+                    record.progress_tick = self.clock.monotonic()
+                elif state == "DISPATCHED" and record.ack and record.ack["accepted"]:
+                    self.transition(record, "ACKNOWLEDGED")
+            if record.release_outcome:
+                outcome = record.release_outcome
+                receipt = await request_json(self.client, "POST", self.claim_url(record) + "/release",
+                    {"command_id": record.data["command"]["command_id"], "outcome": outcome}, VehicleClaim)
+                self.check_receipt(record, receipt)
+                if receipt.status != "RELEASED" or receipt.outcome != outcome:
+                    raise HTTPException(503, "RELEASE_NOT_CONFIRMED")
+                self.finish(record, outcome)
+                return
+            if record.claim_tick is not None and record.data["acknowledged_at"] is None:
+                if self.clock.monotonic() - record.claim_tick >= self.settings.ack_timeout_seconds:
+                    self.transition(record, "UNKNOWN", "ACK_TIMEOUT")
+            elif record.progress_tick is not None and self.clock.monotonic() - record.progress_tick >= self.settings.progress_timeout_seconds:
+                self.transition(record, "UNKNOWN", "PROGRESS_TIMEOUT")
+        except HTTPException as exc:
+            if record.release_outcome and exc.status_code == 409 and exc.detail in ("COMPLETION_TELEMETRY_PENDING", "COMPLETION_NOT_CONFIRMED"):
+                self.transition(record, "ARRIVAL_PENDING" if record.release_outcome == "ARRIVED" else "UNKNOWN", str(exc.detail))
+            else:
+                self.transition(record, "UNKNOWN", str(exc.detail))
+
+    async def get(self, dispatch_id):
+        record = self.store.get(dispatch_id)
+        async with record.lock:
+            await self.refresh(record)
+            return record.view()
+
+    async def commands(self, vehicle_id):
+        for record in list(self.store.records.values()):
+            if record.data["vehicle_id"] != vehicle_id:
+                continue
+            async with record.lock:
+                await self.refresh(record)
+                if (not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
+                    record.data["state"] == "UNKNOWN" and record.data["failure_reason"] != "ACK_TIMEOUT"):
+                    continue
+                # Only a positively reconciled claim can be delivered. ACK timeout permits same-ID redelivery.
+                if record.sent_tick is None:
+                    record.sent_tick = self.clock.monotonic()
+                    self.transition(record, "SENT")
+                record.data["delivery_attempts"] += 1
+                return {"commands": [record.view()["command"]]}
+        return {"commands": []}
+
+    def check_command(self, record, body):
+        if (not record.claimed or not record.data["delivery_attempts"] or
+            record.data["command"]["command_id"] != str(body.command_id) or
+            record.data["vehicle_id"] != body.vehicle_id):
+            raise HTTPException(409, "COMMAND_ID_CONFLICT")
+
+    async def acknowledge(self, dispatch_id, body):
+        record = self.store.get(dispatch_id)
+        async with record.lock:
+            self.check_command(record, body)
+            payload = body.model_dump(mode="json")
+            if record.ack:
+                if record.ack != payload:
+                    raise HTTPException(409, "ACK_CONFLICT")
+                return record.view()
+            if record.data["state"] in TERMINAL:
+                raise HTTPException(409, "DISPATCH_TERMINAL")
+            if not body.accepted and record.data["state"] in ("IN_PROGRESS", "ARRIVAL_PENDING"):
+                raise HTTPException(409, "COMMAND_ALREADY_STARTED")
+            record.ack = payload
+            if body.accepted:
+                record.data["acknowledged_at"] = self.clock.now().isoformat()
+                record.progress_tick = self.clock.monotonic()
+                if record.data["state"] not in ("IN_PROGRESS", "ARRIVAL_PENDING"):
+                    self.transition(record, "ACKNOWLEDGED")
+            else:
+                record.release_outcome = "REJECTED"
+                await self.refresh(record)
+            return record.view()
+
+    async def event(self, dispatch_id, body):
+        record = self.store.get(dispatch_id)
+        async with record.lock:
+            self.check_command(record, body)
+            payload = body.model_dump(mode="json")
+            previous = record.events.get(body.sequence)
+            if previous == payload:
+                return record.view()
+            if body.sequence <= record.event_sequence:
+                raise HTTPException(409, "EVENT_SEQUENCE_CONFLICT")
+            if record.data["state"] in TERMINAL:
+                raise HTTPException(409, "DISPATCH_TERMINAL")
+            age = (self.clock.now() - body.observed_at).total_seconds()
+            if age < -5 or age >= self.settings.stale_seconds:
+                raise HTTPException(422, "EVENT_TIME_INVALID")
+            if body.distance_travelled_km < record.data["distance_travelled_km"]:
+                raise HTTPException(409, "DISTANCE_REGRESSION")
+            if record.release_outcome and body.kind == "PROGRESS":
+                raise HTTPException(409, "LIFECYCLE_REGRESSION")
+            if record.ack and not record.ack["accepted"]:
+                raise HTTPException(409, "COMMAND_REJECTED")
+            record.events[body.sequence] = payload
+            record.event_sequence = body.sequence
+            record.data["distance_travelled_km"] = body.distance_travelled_km
+            record.data["last_contact_at"] = body.observed_at.isoformat()
+            record.progress_tick = self.clock.monotonic()
+            if body.kind == "FAILED":
+                self.transition(record, "FAILED", body.reason or "EV_EXECUTION_FAILED")
+            elif body.kind == "ARRIVED":
+                record.release_outcome = "ARRIVED"
+                self.transition(record, "ARRIVAL_PENDING")
+                await self.refresh(record)
+            else:
+                record.data["acknowledged_at"] = record.data["acknowledged_at"] or self.clock.now().isoformat()
+                self.transition(record, "IN_PROGRESS")
+            return record.view()
+
+    async def reconcile_loop(self):
+        while True:
+            for record in list(self.store.records.values()):
+                if record.lock.locked() or record.data["state"] in TERMINAL:
+                    continue
+                try:
+                    async with record.lock:
+                        await self.refresh(record)
+                except Exception:
+                    logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])
+            await asyncio.sleep(self.settings.reconcile_interval_seconds)

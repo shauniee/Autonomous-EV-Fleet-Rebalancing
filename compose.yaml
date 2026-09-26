@@ -1,0 +1,92 @@
+x-backend: &backend
+  build: .
+  init: true
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+services:
+  fleet:
+    <<: *backend
+    ports: ["127.0.0.1:${FLEET_PORT:-8001}:8000"]
+    environment:
+      STALE_SECONDS: ${STALE_SECONDS:-15}
+      OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
+      MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
+      ROUTE_FACTOR: ${ROUTE_FACTOR:-1.3}
+      ENERGY_MARGIN_FACTOR: ${ENERGY_MARGIN_FACTOR:-1.15}
+      ARRIVAL_TOLERANCE_KM: ${ARRIVAL_TOLERANCE_KM:-0.05}
+  demand:
+    <<: *backend
+    command: ["uvicorn", "ev_fleet.demand.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports: ["127.0.0.1:${DEMAND_PORT:-8002}:8000"]
+  rebalancing:
+    <<: *backend
+    command: ["uvicorn", "ev_fleet.rebalancing.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports: ["127.0.0.1:${REBALANCING_PORT:-8003}:8000"]
+    environment:
+      FLEET_URL: http://fleet:8000
+      DEMAND_URL: http://demand:8000
+      STALE_SECONDS: ${STALE_SECONDS:-15}
+      OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
+      MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
+      ROUTE_FACTOR: ${ROUTE_FACTOR:-1.3}
+      ENERGY_MARGIN_FACTOR: ${ENERGY_MARGIN_FACTOR:-1.15}
+      DISTANCE_SCALE_KM: ${DISTANCE_SCALE_KM:-50}
+      RECOMMENDATION_TTL_SECONDS: ${RECOMMENDATION_TTL_SECONDS:-10}
+      CHARGING_MAX_AGE_SECONDS: ${CHARGING_MAX_AGE_SECONDS:-3600}
+    depends_on:
+      fleet: {condition: service_healthy}
+      demand: {condition: service_healthy}
+  ev-01:
+    build: .
+    init: true
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--vehicle-id", "ev-01", "--zone", "bishan", "--soc", "80"]
+    depends_on:
+      fleet: {condition: service_healthy}
+  ev-02:
+    build: .
+    init: true
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--vehicle-id", "ev-02", "--zone", "tampines", "--soc", "35"]
+    depends_on:
+      fleet: {condition: service_healthy}
+  dispatch:
+    <<: *backend
+    profiles: [relocation]
+    command: ["uvicorn", "ev_fleet.dispatch.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports: ["127.0.0.1:${DISPATCH_PORT:-8004}:8000"]
+    environment:
+      FLEET_URL: http://fleet:8000
+      DEMAND_URL: http://demand:8000
+      REBALANCING_URL: http://rebalancing:8000
+      STALE_SECONDS: ${STALE_SECONDS:-15}
+      OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
+      MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
+      ROUTE_FACTOR: ${ROUTE_FACTOR:-1.3}
+      ENERGY_MARGIN_FACTOR: ${ENERGY_MARGIN_FACTOR:-1.15}
+      ACK_TIMEOUT_SECONDS: ${ACK_TIMEOUT_SECONDS:-15}
+      PROGRESS_TIMEOUT_SECONDS: ${PROGRESS_TIMEOUT_SECONDS:-30}
+      RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-1}
+    depends_on:
+      fleet: {condition: service_healthy}
+      demand: {condition: service_healthy}
+      rebalancing: {condition: service_healthy}
+  ev-moving-01:
+    build: .
+    init: true
+    profiles: [relocation]
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-01", "--zone", "bishan", "--soc", "90", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
+    depends_on:
+      fleet: {condition: service_healthy}
+      dispatch: {condition: service_healthy}
+  ev-moving-02:
+    build: .
+    init: true
+    profiles: [relocation]
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-02", "--zone", "tampines", "--soc", "60", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
+    depends_on:
+      fleet: {condition: service_healthy}
+      dispatch: {condition: service_healthy}
