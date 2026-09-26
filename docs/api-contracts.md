@@ -1,5 +1,9 @@
 # API contracts
 
+Phase 3A adds read-only `/api/v1/heat-map`, `/api/v1/heat-map/hotspots`, and
+`/api/v1/demand-simulation` to Demand. See [heat-map contracts and calculations](phase3a-demand-heatmap.md).
+Existing zone, manual-demand and raw-demand hotspot contracts below remain unchanged.
+
 OpenAPI is served at `/openapi.json` and interactive documentation at `/docs` on
 each service. All timestamps must include a timezone. UUIDs are strings on the wire.
 Extra fields and non-finite numbers are rejected. Domain routes use `/api/v1`.

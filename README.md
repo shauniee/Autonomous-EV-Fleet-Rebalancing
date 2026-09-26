@@ -1,7 +1,7 @@
 # Autonomous EV Fleet Rebalancing — Singapore
 
 CSC3104 Cloud and Distributed Computing project. A distributed, simulation-only
-backend for selecting and relocating EVs to dispatcher-selected Singapore zones.
+system for selecting and relocating EVs to dispatcher-selected Singapore zones.
 Recommendations do not reserve or dispatch vehicles. Phase 2 adds a separate
 explicit approval operation and gradual autonomous relocation simulation.
 
@@ -18,8 +18,16 @@ explicit approval operation and gradual autonomous relocation simulation.
 - Optional moving EV nodes with incremental position/SOC updates and verified arrival.
 - Four-service real HTTP tests and repeatable container smoke checks.
 
-No frontend, real-road autonomy, ML, maintenance/reservations, external maps/charging
-integration, database, Kubernetes deployment or experiment runner is included.
+Phase 3B adds a React dispatcher dashboard with a Leaflet/OpenStreetMap display.
+No real-road autonomy, ML, maintenance/reservations, external charging integration,
+database, Kubernetes deployment or experiment runner is included.
+
+## Phase 3A demand and heat-map backend
+
+Phase 3A now adds a [dynamic demand and heat-map backend](docs/phase3a-demand-heatmap.md)
+on the existing Demand Service. `GET /api/v1/heat-map` combines demand with fresh
+available/inbound Fleet capacity; simulation is opt-in and manual updates remain
+supported. See [Phase 3A verification](docs/phase3a-verification.md).
 
 ## Phase 2 relocation demo
 
@@ -133,3 +141,14 @@ Phase 1 tests remain unchanged. Container execution evidence is tracked separate
 See [architecture](docs/architecture.md), [API contracts](docs/api-contracts.md),
 [roadmap](docs/implementation-plan.md), [Phase 1 verification](docs/verification.md),
 and [Phase 2 verification](docs/phase2-verification.md).
+## Phase 3B dispatcher dashboard
+
+The React dashboard adds a Singapore demand map, fleet telemetry, recommendation review, explicit dispatch approval and live relocation monitoring. Backend business rules and service ownership remain unchanged.
+
+See [dashboard setup and workflow](docs/phase3b-dashboard.md) and [verification status](docs/phase3b-verification.md).
+
+```powershell
+docker compose --profile relocation up --build fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+```
+
+Dashboard: http://127.0.0.1:8080. Enable dynamic demand with `DEMAND_SIMULATION_ENABLED=true`, or use the existing manual demand API. For local development, run the existing backend and moving nodes, then `cd dashboard`, `npm.cmd ci`, and `npm.cmd run dev`.

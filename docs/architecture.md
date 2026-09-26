@@ -1,5 +1,9 @@
 # Phase 1 architecture
 
+The current Phase 3A extension is documented in [dynamic demand and heat-map composition](phase3a-demand-heatmap.md).
+It adds an optional simulator and a read-only API composition module inside Demand,
+using a Fleet HTTP snapshot without storing a second source of vehicle truth.
+
 This document records the preserved Phase 1 foundation. The implemented Phase 2
 extension, including Dispatch Service, cloud-owned claims and moving simulators,
 is described in [Phase 2 dispatch](phase2-dispatch.md). References below to future

@@ -9,6 +9,10 @@ x-backend: &backend
     start_period: 5s
 
 services:
+  dashboard:
+    build: ./dashboard
+    profiles: [relocation]
+    ports: ["127.0.0.1:${DASHBOARD_PORT:-8080}:80"]
   fleet:
     <<: *backend
     ports: ["127.0.0.1:${FLEET_PORT:-8001}:8000"]
@@ -23,6 +27,24 @@ services:
     <<: *backend
     command: ["uvicorn", "ev_fleet.demand.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${DEMAND_PORT:-8002}:8000"]
+    environment:
+      FLEET_URL: http://fleet:8000
+      MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
+      DEMAND_SIMULATION_ENABLED: ${DEMAND_SIMULATION_ENABLED:-false}
+      DEMAND_RANDOM_SEED: ${DEMAND_RANDOM_SEED:-42}
+      DEMAND_UPDATE_INTERVAL_SECONDS: ${DEMAND_UPDATE_INTERVAL_SECONDS:-30}
+      DEMAND_MIN_DEMAND: ${DEMAND_MIN_DEMAND:-0}
+      DEMAND_MAX_DEMAND: ${DEMAND_MAX_DEMAND:-20}
+      DEMAND_MAX_STEP: ${DEMAND_MAX_STEP:-3}
+      DEMAND_MANUAL_HOLD_SECONDS: ${DEMAND_MANUAL_HOLD_SECONDS:-60}
+      DEMAND_MAX_AGE_SECONDS: ${DEMAND_MAX_AGE_SECONDS:-300}
+      DEMAND_FLEET_SNAPSHOT_MAX_AGE_SECONDS: ${DEMAND_FLEET_SNAPSHOT_MAX_AGE_SECONDS:-5}
+      DEMAND_TELEMETRY_MAX_AGE_SECONDS: ${DEMAND_TELEMETRY_MAX_AGE_SECONDS:-15}
+      DEMAND_ZONE_RADIUS_KM: ${DEMAND_ZONE_RADIUS_KM:-2}
+      DEMAND_CRITICAL_SHORTAGE_RATIO: ${DEMAND_CRITICAL_SHORTAGE_RATIO:-0.5}
+      DEMAND_MEDIUM_DEMAND: ${DEMAND_MEDIUM_DEMAND:-5}
+      DEMAND_HIGH_DEMAND: ${DEMAND_HIGH_DEMAND:-10}
+      DEMAND_FLEET_TIMEOUT_SECONDS: ${DEMAND_FLEET_TIMEOUT_SECONDS:-2}
   rebalancing:
     <<: *backend
     command: ["uvicorn", "ev_fleet.rebalancing.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

@@ -1,8 +1,9 @@
 import asyncio
+from datetime import timedelta
 from uuid import uuid4
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
-from ev_fleet.contracts.demand import Zone
+from ev_fleet.contracts.demand import Zone, DemandUpdate
 
 
 # Representative simulation points, not surveyed pickup bays or charger locations.
@@ -17,11 +18,12 @@ SINGAPORE_ZONES = [
 
 
 class DemandStore:
-    def __init__(self, clock=None):
+    def __init__(self, clock=None, manual_hold_seconds=60):
         self.clock = clock or Clock()
         self.lock = asyncio.Lock()
         self.zones = {}
         self.instance_id = str(uuid4())
+        self.manual_hold_seconds = manual_hold_seconds
 
     def record(self, zone_id):
         if zone_id not in self.zones:
@@ -33,7 +35,8 @@ class DemandStore:
             if zone.zone_id in self.zones:
                 raise HTTPException(409, "ZONE_EXISTS")
             record = {"zone": zone, "version": 1, "demand_version": 0,
-                      "charging_version": 0, "demand": None, "charging": None}
+                      "charging_version": 0, "demand": None, "charging": None,
+                      "demand_source": "UNKNOWN", "hold_tick": None, "hold_until": None}
             self.zones[zone.zone_id] = record
             return self.view(record)
 
@@ -55,6 +58,10 @@ class DemandStore:
             if record[field] and body.observed_at < record[field].observed_at:
                 raise HTTPException(409, "OBSERVATION_OUT_OF_ORDER")
             record[field] = body
+            if field == "demand":
+                record["demand_source"] = "MANUAL"
+                record["hold_tick"] = self.clock.monotonic() + self.manual_hold_seconds
+                record["hold_until"] = self.clock.now() + timedelta(seconds=self.manual_hold_seconds)
             record[version_key] += 1
             record["version"] += 1
             return self.view(record)
@@ -67,6 +74,42 @@ class DemandStore:
         async with self.lock:
             return {"snapshot_at": self.clock.now().isoformat(), "instance_id": self.instance_id,
                     "zones": [self.view(record) for record in self.zones.values()]}
+
+    def provenance(self, record):
+        active = record["hold_tick"] is not None and self.clock.monotonic() < record["hold_tick"]
+        return {"source": record["demand_source"],
+                "manual_hold_until": record["hold_until"].isoformat() if active else None}
+
+    async def composition_snapshot(self):
+        # Fleet data is never stored here. This is a copy of demand-owned state only.
+        async with self.lock:
+            return {"snapshot_at": self.clock.now(), "instance_id": self.instance_id,
+                    "zones": [self.view(record) for record in self.zones.values()],
+                    "provenance": {key: self.provenance(record) for key, record in self.zones.items()}}
+
+    async def simulation_tick(self, simulator):
+        async with self.lock:
+            if not simulator.settings.simulation_enabled:
+                return 0
+            now, tick = self.clock.now(), self.clock.monotonic()
+            changed = 0
+            for key in sorted(self.zones):
+                record = self.zones[key]
+                if record["hold_tick"] is not None and tick < record["hold_tick"]:
+                    continue
+                if record["demand"] and record["demand"].observed_at > now:
+                    continue  # A clock correction must not overwrite a newer observation.
+                current = record["demand"].desired_available_vehicles if record["demand"] else None
+                value = simulator.next_value(current)
+                record["demand"] = DemandUpdate(expected_version=record["demand_version"],
+                    observed_at=now, desired_available_vehicles=value)
+                record["demand_source"] = "SIMULATED"
+                record["demand_version"] += 1
+                record["version"] += 1
+                changed += 1
+            simulator.tick_count += 1
+            simulator.last_tick_at = now
+            return changed
 
 
 async def seed(store):

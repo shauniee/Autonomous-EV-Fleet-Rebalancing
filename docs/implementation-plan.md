@@ -5,12 +5,15 @@
    nodes register independently, fresh telemetry ranks correctly, stale nodes are
    excluded, a farther energy-suitable EV can win, tests pass, container smoke test
    succeeds or is explicitly pending on environment availability.
-2. **Approved relocation (current, implemented):** Dispatch service, atomic Fleet claims, idempotent commands,
+2. **Approved relocation (implemented):** Dispatch service, atomic Fleet claims, idempotent commands,
    polling/acknowledgement, simulated movement and energy consumption, arrival,
    disconnection and ambiguous-delivery reconciliation. No real-road driving.
    See [Phase 2 guide](phase2-dispatch.md) and [verification](phase2-verification.md).
-3. **Dashboard:** Singapore demand heat map, markers, selection, recommendation
-   explanations, explicit approval and relocation progress.
+3. **Phase 3A dynamic demand and heat-map backend (current):** seeded optional demand
+   simulation, manual holds, Fleet API composition, current/projected shortages,
+   semantic severity and partial-data handling. See [Phase 3A guide](phase3a-demand-heatmap.md).
+   **Phase 3B dashboard (later):** Singapore demand heat map, markers, selection,
+   recommendation explanations, explicit approval and relocation progress.
 4. **Durability and deployment:** persistent state, durable command recovery,
    dispatcher/device authentication, then Kubernetes. No multiple in-memory replicas.
 5. **Evaluation:** nearest eligible baseline, reproducible paired scenarios, raw

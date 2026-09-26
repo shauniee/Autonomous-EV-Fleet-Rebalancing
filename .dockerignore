@@ -4,3 +4,8 @@ __pycache__
 .pytest_cache
 *.egg-info
 .env
+dashboard/node_modules
+dashboard/.npm-cache
+dashboard/dist
+dashboard/test-results
+dashboard/playwright-report
