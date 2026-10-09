@@ -152,3 +152,14 @@ docker compose --profile relocation up --build fleet demand rebalancing dispatch
 ```
 
 Dashboard: http://127.0.0.1:8080. Enable dynamic demand with `DEMAND_SIMULATION_ENABLED=true`, or use the existing manual demand API. For local development, run the existing backend and moving nodes, then `cd dashboard`, `npm.cmd ci`, and `npm.cmd run dev`.
+
+## Phase 4 experimental evaluation
+
+Phase 4 compares the unchanged energy-aware policy with a nearest-eligible-EV baseline using paired seeded scenarios, isolated state, repeated trials, raw JSON/CSV, confidence intervals, tables and SVG graphs. It does not change the application default or dispatch lifecycle.
+
+See [the Phase 4 evaluation guide](docs/phase4-evaluation.md) and
+[the verified results](docs/phase4-verification.md). Run the full 600-trial matrix with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_phase4_evaluation.py --repetitions 30
+```

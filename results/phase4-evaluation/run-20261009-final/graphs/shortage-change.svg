@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1430" height="430" viewBox="0 0 1430 430">
+<rect width="100%" height="100%" fill="#f7faf8"/>
+<text x="35" y="38" font-family="Arial" font-size="22" fill="#173f43">Destination shortage change</text>
+<line x1="55" y1="286.25" x2="1400" y2="286.25" stroke="#78908d"/>
+<rect x="70" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="97.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="97.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">balanced_fl</text>
+<text x="97.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="136" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="163.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="163.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">balanced_fl</text>
+<text x="163.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="202" y="95.00" width="54" height="191.25" fill="#1e7b6d" rx="3"/>
+<text x="229.00" y="89.00" text-anchor="middle" font-family="Arial" font-size="10">3.00</text>
+<text x="229.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">changing_de</text>
+<text x="229.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="268" y="95.00" width="54" height="191.25" fill="#557b9b" rx="3"/>
+<text x="295.00" y="89.00" text-anchor="middle" font-family="Arial" font-size="10">3.00</text>
+<text x="295.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">changing_de</text>
+<text x="295.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="334" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="361.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="361.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">concurrent_</text>
+<text x="361.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="400" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="427.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="427.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">concurrent_</text>
+<text x="427.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="466" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="493.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="493.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">disconnect_</text>
+<text x="493.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="532" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="559.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="559.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">disconnect_</text>
+<text x="559.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="598" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="625.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="625.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">farther_hig</text>
+<text x="625.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="664" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="691.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="691.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">farther_hig</text>
+<text x="691.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="730" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="757.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="757.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">limited_cha</text>
+<text x="757.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="796" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="823.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="823.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">limited_cha</text>
+<text x="823.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="862" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="889.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="889.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">multiple_el</text>
+<text x="889.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="928" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="955.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="955.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">multiple_el</text>
+<text x="955.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="994" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="1021.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1021.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">multiple_ho</text>
+<text x="1021.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="1060" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="1087.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1087.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">multiple_ho</text>
+<text x="1087.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="1126" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="1153.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1153.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">nearest_low</text>
+<text x="1153.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="1192" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="1219.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1219.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">nearest_low</text>
+<text x="1219.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<rect x="1258" y="286.25" width="54" height="63.75" fill="#1e7b6d" rx="3"/>
+<text x="1285.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1285.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">offline_bef</text>
+<text x="1285.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">energy aware</text>
+<rect x="1324" y="286.25" width="54" height="63.75" fill="#557b9b" rx="3"/>
+<text x="1351.00" y="280.25" text-anchor="middle" font-family="Arial" font-size="10">-1.00</text>
+<text x="1351.00" y="370" text-anchor="middle" font-family="Arial" font-size="8">offline_bef</text>
+<text x="1351.00" y="383" text-anchor="middle" font-family="Arial" font-size="8">nearest ev</text>
+<text x="20" y="210" transform="rotate(-90 20 210)" font-family="Arial" font-size="12">After minus before</text>
+<text x="70" y="414" font-family="Arial" font-size="10" fill="#557">Green: energy-aware · Blue: nearest EV</text>
+</svg>

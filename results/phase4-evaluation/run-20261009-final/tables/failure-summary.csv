@@ -1,0 +1,3 @@
+scenario,algorithm,reason,count
+concurrent_requests,energy_aware,VEHICLE_VERSION_CONFLICT,30
+concurrent_requests,nearest_ev,VEHICLE_VERSION_CONFLICT,30

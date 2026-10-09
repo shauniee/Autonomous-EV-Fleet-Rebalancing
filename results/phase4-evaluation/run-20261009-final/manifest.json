@@ -1,0 +1,57 @@
+{
+  "phase": "4",
+  "research_question": "Does energy-aware selection reduce operationally poor relocations while maintaining reasonable distance and response time?",
+  "started_at": "2026-10-09T14:05:17.040760+00:00",
+  "config": {
+    "repetitions": 30,
+    "seed_start": 0,
+    "low_arrival_soc_pct": 30.0,
+    "speed_kph": 45.0,
+    "step_seconds": 60.0,
+    "bootstrap_samples": 2000,
+    "analysis_seed": 4242
+  },
+  "scenarios": [
+    "balanced_fleet",
+    "nearest_low_soc",
+    "farther_high_soc",
+    "limited_charging",
+    "multiple_eligible",
+    "multiple_hotspots",
+    "offline_before_selection",
+    "disconnect_during_relocation",
+    "changing_demand",
+    "concurrent_requests"
+  ],
+  "algorithms": [
+    "energy_aware",
+    "nearest_ev"
+  ],
+  "planned_scenario_trials": 600,
+  "repository": {
+    "commit": "973f51fc9e274ed857283d0ef84534c817057fa4",
+    "dirty": true,
+    "evaluation_source_sha256": "61ecdbd9209c7020e61b755ffb23e57e9d1e48e96cfc08a7fcc03962badd42c4",
+    "evaluation_sources": [
+      "experiments/phase4/__init__.py",
+      "experiments/phase4/analysis.py",
+      "experiments/phase4/cluster.py",
+      "experiments/phase4/config.py",
+      "experiments/phase4/runner.py",
+      "experiments/phase4/scenarios.py",
+      "src/ev_fleet/rebalancing/policy.py",
+      "src/ev_fleet/rebalancing/strategies.py",
+      "src/ev_fleet/rebalancing/app.py"
+    ]
+  },
+  "environment": {
+    "python": "3.10.1 (tags/v3.10.1:2cd268a, Dec  6 2021, 19:10:37) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.26200-SP0"
+  },
+  "weights_frozen": {
+    "distance": 0.35,
+    "current_soc": 0.2,
+    "arrival_reserve": 0.35,
+    "charging_fit": 0.1
+  }
+}

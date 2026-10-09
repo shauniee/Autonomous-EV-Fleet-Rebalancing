@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="13" failures="0" errors="0" time="1.2779699">
+    <testsuite name="tests/App.test.tsx" timestamp="2026-10-09T13:56:32.891Z" hostname="ShaunDesktop" tests="11" failures="0" errors="0" skipped="0" time="1.0789108">
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; renders all zones using backend severity, independently of high raw demand" time="0.215423">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; separates recommendation from approval and shows backend explanation" time="0.152293">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; keeps partial demand visible and null supply unknown" time="0.0606098">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; keeps fleet visible when Demand is unavailable" time="0.0409187">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; shows backend relocation, acknowledgement and uncertainty without inventing progress" time="0.0189181">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; blocks expired recommendation approval" time="0.088238">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; displays backend exclusions when no EV is eligible without allowing approval" time="0.092469">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; shows stale telemetry and disables review while preserving the recommendation explanation" time="0.0770215">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; clears the recommendation when target changes" time="0.0975716">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; ignores a recommendation that arrives after its target was changed" time="0.0774944">
+        </testcase>
+        <testcase classname="tests/App.test.tsx" name="dispatcher dashboard &gt; retries an ambiguous approval with the same ID, also after reload" time="0.155713">
+        </testcase>
+    </testsuite>
+    <testsuite name="tests/usePolling.test.tsx" timestamp="2026-10-09T13:56:32.895Z" hostname="ShaunDesktop" tests="2" failures="0" errors="0" skipped="0" time="0.1990591">
+        <testcase classname="tests/usePolling.test.tsx" name="retains the last snapshot with an explicit error after a failed refresh" time="0.1886076">
+        </testcase>
+        <testcase classname="tests/usePolling.test.tsx" name="does not overlap polls and ignores a cancelled older response" time="0.0083405">
+        </testcase>
+    </testsuite>
+</testsuites>

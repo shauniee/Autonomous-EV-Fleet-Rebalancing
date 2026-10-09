@@ -56,9 +56,6 @@ def assess(vehicle, target, settings, now):
 
 
 def rank(snapshot, target, settings, now):
-    assessments = [assess(vehicle, target, settings, now) for vehicle in snapshot["vehicles"]]
-    eligible = sorted((row for row in assessments if row["eligible"]),
-                      key=lambda row: (-row["score"], -row["predicted_arrival_soc_pct"],
-                                       row["distance_km"], row["vehicle_id"]))
-    return eligible, sorted((row for row in assessments if not row["eligible"]),
-                            key=lambda row: row["vehicle_id"])
+    # Backwards-compatible public helper: the product default remains energy-aware.
+    from .strategies import ENERGY_AWARE
+    return ENERGY_AWARE.rank(snapshot, target, settings, now)

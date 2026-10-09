@@ -11,11 +11,11 @@ from ev_fleet.contracts.recommendations import RecommendationRequest, Recommenda
 from ev_fleet.contracts.vehicles import FleetSnapshot
 from ev_fleet.contracts.demand import ZoneState
 from .clients import get_json
-from .policy import POLICY_VERSION, rank
+from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
 
 
-def create_app(settings=None, client=None, clock=None):
+def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     app = base_app("EV Rebalancing Service")
     config = settings or Settings.from_env()
     clock = clock or Clock()
@@ -41,20 +41,19 @@ def create_app(settings=None, client=None, clock=None):
             target = ZoneState.model_validate(target).model_dump(mode="json")
             if target["zone_id"] != body.target_zone_id:
                 raise ValueError("target identity mismatch")
-            eligible, excluded = rank(fleet, target, config, now)
+            eligible, excluded = strategy.rank(fleet, target, config, now)
             source = {key: fleet[key] for key in ("instance_id", "snapshot_version", "snapshot_at")}
         except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
         winner = eligible[0] if eligible else None
         record = {"recommendation_id": str(uuid4()), "created_at": now.isoformat(),
                   "expires_at": (now + timedelta(seconds=config.recommendation_ttl_seconds)).isoformat(),
-                  "policy_version": POLICY_VERSION, "policy_settings": config.model_dump(exclude={"fleet_url", "demand_url"}),
+                  "policy_version": strategy.policy_version, "policy_settings": config.model_dump(exclude={"fleet_url", "demand_url"}),
                   "target": target, "fleet_snapshot": source,
                   "selected_vehicle_id": winner["vehicle_id"] if winner else None,
                   "ranked_candidates": eligible, "excluded_candidates": excluded,
                   "decision_latency_ms": (clock.monotonic() - start) * 1000,
-                  "explanation": (f"{winner['vehicle_id']} has the highest eligible weighted score; "
-                                  f"predicted arrival SOC is {winner['predicted_arrival_soc_pct']:.1f}%."
+                  "explanation": (strategy.explanation(winner)
                                   if winner else "No EV satisfies all eligibility checks."),
                   "assumptions": ["Singapore simulated coordinates", "Estimated distance, not road routing",
                                   "Manual simulated charging data", "Advisory only; no reservation or dispatch"]}

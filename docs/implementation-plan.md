@@ -16,8 +16,10 @@
    recommendation explanations, explicit approval and relocation progress.
 4. **Durability and deployment:** persistent state, durable command recovery,
    dispatcher/device authentication, then Kubernetes. No multiple in-memory replicas.
-5. **Evaluation:** nearest eligible baseline, reproducible paired scenarios, raw
-   records and analysis of distance, SOC, arrivals, demand coverage and failure handling.
+5. **Phase 4 experimental evaluation:** nearest eligible baseline, reproducible paired
+   scenarios, isolated trial state, raw JSON/CSV, confidence intervals, graphs and analysis
+   of distance, SOC, arrivals, demand coverage and failure handling. Product policy weights
+   remain fixed and the application default remains energy-aware.
 
 Six-person allocation: Fleet/concurrency; Demand/charging; selection/metrics;
 simulator/telemetry; HTTP integration/failures and later Dispatch; deployment/logging/
