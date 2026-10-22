@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fleet
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demand
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: demand
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rebalancing
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rebalancing
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dispatch
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dispatch
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dashboard
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+

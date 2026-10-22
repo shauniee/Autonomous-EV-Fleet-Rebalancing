@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ev-fleet-config
+data:
+  FLEET_URL: http://fleet:8000
+  DEMAND_URL: http://demand:8000
+  REBALANCING_URL: http://rebalancing:8000
+  TELEMETRY_INTERVAL_SECONDS: "5"
+  STALE_SECONDS: "15"
+  OFFLINE_SECONDS: "30"
+  MIN_RESERVE_PCT: "20"
+  ROUTE_FACTOR: "1.3"
+  ENERGY_MARGIN_FACTOR: "1.15"
+  DISTANCE_SCALE_KM: "50"
+  RECOMMENDATION_TTL_SECONDS: "10"
+  CHARGING_MAX_AGE_SECONDS: "3600"
+  ACK_TIMEOUT_SECONDS: "15"
+  PROGRESS_TIMEOUT_SECONDS: "30"
+  RECONCILE_INTERVAL_SECONDS: "1"
+  ARRIVAL_TOLERANCE_KM: "0.05"
+  SIMULATION_TIME_SCALE: "30"
+  DEMAND_SIMULATION_ENABLED: "false"
+  DEMAND_RANDOM_SEED: "42"
+  DEMAND_UPDATE_INTERVAL_SECONDS: "30"
+  DEMAND_MIN_DEMAND: "0"
+  DEMAND_MAX_DEMAND: "20"
+  DEMAND_MAX_STEP: "3"
+  DEMAND_MANUAL_HOLD_SECONDS: "60"
+  DEMAND_MAX_AGE_SECONDS: "300"
+  DEMAND_FLEET_SNAPSHOT_MAX_AGE_SECONDS: "5"
+  DEMAND_TELEMETRY_MAX_AGE_SECONDS: "15"
+  DEMAND_ZONE_RADIUS_KM: "2"
+  DEMAND_CRITICAL_SHORTAGE_RATIO: "0.5"
+  DEMAND_MEDIUM_DEMAND: "5"
+  DEMAND_HIGH_DEMAND: "10"
+  DEMAND_FLEET_TIMEOUT_SECONDS: "2"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-nginx
+data:
+  default.conf: |
+    server {
+        listen 80;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location = /health {
+            access_log off;
+            default_type text/plain;
+            return 200 'ok';
+        }
+
+        location /api/fleet/ {
+            proxy_pass http://fleet:8000/api/v1/;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 8s;
+        }
+
+        location /api/demand/ {
+            proxy_pass http://demand:8000/api/v1/;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 8s;
+        }
+
+        location /api/rebalancing/ {
+            proxy_pass http://rebalancing:8000/api/v1/;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 8s;
+        }
+
+        location /api/dispatch/ {
+            proxy_pass http://dispatch:8000/api/v1/;
+            proxy_connect_timeout 2s;
+            proxy_read_timeout 8s;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+

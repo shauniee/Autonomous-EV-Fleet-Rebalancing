@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ev-fleet
+
+resources:
+  - configmaps.yaml
+  - services.yaml
+  - backends.yaml
+  - simulators.yaml
+  - dashboard.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: autonomous-ev-fleet-rebalancing
+    includeSelectors: false
+    includeTemplates: true
+

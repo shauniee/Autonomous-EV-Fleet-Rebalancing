@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ev-fleet
+  labels:
+    app.kubernetes.io/name: ev-fleet
+    app.kubernetes.io/part-of: autonomous-ev-fleet-rebalancing
+
