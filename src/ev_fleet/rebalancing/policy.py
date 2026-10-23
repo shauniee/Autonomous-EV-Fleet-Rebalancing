@@ -1,8 +1,5 @@
 from datetime import datetime
-from .metrics import distance_km
-
-
-POLICY_VERSION = "ev-aware-v1"
+from ev_fleet.common.travel import distance_km
 
 
 def parse_timestamp(value):
@@ -53,9 +50,3 @@ def assess(vehicle, target, settings, now):
                   score=sum(components.values()),
                   charging_assessment="AVAILABLE" if available else "NONE" if fresh else "UNKNOWN_OR_STALE")
     return result
-
-
-def rank(snapshot, target, settings, now):
-    # Backwards-compatible public helper: the product default remains energy-aware.
-    from .strategies import ENERGY_AWARE
-    return ENERGY_AWARE.rank(snapshot, target, settings, now)

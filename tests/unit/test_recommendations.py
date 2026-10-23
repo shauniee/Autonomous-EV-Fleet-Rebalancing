@@ -1,7 +1,8 @@
 import pytest
 from ev_fleet.common.settings import Settings
-from ev_fleet.rebalancing.policy import assess, rank
-from ev_fleet.rebalancing.metrics import distance_km
+from ev_fleet.common.travel import distance_km
+from ev_fleet.rebalancing.policy import assess
+from ev_fleet.rebalancing.strategies import ENERGY_AWARE
 
 
 def vehicle(clock, name="near", soc=30, latitude=1.283):
@@ -18,7 +19,9 @@ def target():
 
 def test_farther_ev_can_win(clock):
     near, far = vehicle(clock), vehicle(clock, "far", 90, 1.35)
-    ranked, excluded = rank({"vehicles": [near, far]}, target(), Settings(), clock.now())
+    ranked, excluded = ENERGY_AWARE.rank(
+        {"vehicles": [near, far]}, target(), Settings(), clock.now()
+    )
     assert not excluded
     assert ranked[0]["vehicle_id"] == "far"
     assert ranked[0]["distance_km"] > ranked[1]["distance_km"]
@@ -41,7 +44,9 @@ def test_exclusions(clock, change, reason):
 
 def test_reserve_boundary_and_tie(clock):
     a, b = vehicle(clock, "a", 20), vehicle(clock, "b", 20)
-    ranked, excluded = rank({"vehicles": [b, a]}, target(), Settings(), clock.now())
+    ranked, excluded = ENERGY_AWARE.rank(
+        {"vehicles": [b, a]}, target(), Settings(), clock.now()
+    )
     assert not excluded and ranked[0]["vehicle_id"] == "a"
     assert ranked[0]["predicted_arrival_soc_pct"] == 20
     assert ranked[0]["energy_required_kwh"] == 0
