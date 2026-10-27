@@ -147,3 +147,42 @@ def test_closed_facility_and_invalid_quantity_rejected(clock):
                     expected_zone_id="tampines", expected_position=closed.position))
             assert error.value.detail == "PARKING_CLOSED"
     asyncio.run(scenario())
+
+
+def test_competing_batches_cannot_double_claim_vehicles_or_parking(clock):
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            for vehicle in ("ev-1", "ev-2"):
+                await cluster.vehicle(vehicle)
+            recommendations = await asyncio.gather(*[
+                cluster.client.post("http://rebalancing.test/api/v1/batch-recommendations",
+                    json={"target_zone_id": "cbd", "quantity": 2})
+                for _ in range(2)])
+            assert all(r.status_code == 201 for r in recommendations)
+            ids = [r.json()["batch_recommendation_id"] for r in recommendations]
+            results = await asyncio.gather(*[
+                cluster.dispatch.approve_batch(BatchApproval(request_id=uuid4(),
+                    batch_recommendation_id=identifier)) for identifier in ids])
+            assert sorted(r["status"] for r in results) == ["APPROVED", "REJECTED"]
+            active = [h["receipt"] for h in cluster.facilities.holds.values()
+                      if h["status"] in ("RESERVED", "OCCUPIED")]
+            assert len(active) == 2
+            assert len({hold["vehicle_id"] for hold in active}) == 2
+            fleet = [await cluster.fleet.get(name) for name in ("ev-1", "ev-2")]
+            assert sum(bool(vehicle["active_claim"]) for vehicle in fleet) == 2
+    asyncio.run(scenario())
+
+
+def test_charging_hold_requires_an_available_charger():
+    async def scenario():
+        store = FacilitiesStore()
+        site = BY_ID["mock-cbd-03"]
+        assert site.charging_available == 0
+        with pytest.raises(HTTPException) as exc:
+            await store.reserve(site.facility_id, ParkingHoldRequest(
+                dispatch_id=uuid4(), vehicle_id="ev-low-battery",
+                expected_zone_id="cbd", expected_position=site.position,
+                requires_charging=True))
+        assert exc.value.detail == "CHARGING_FULL"
+        assert (await store.get(site.facility_id)).parking_available == site.parking_available
+    asyncio.run(scenario())
