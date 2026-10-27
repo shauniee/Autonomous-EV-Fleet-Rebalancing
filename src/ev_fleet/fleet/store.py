@@ -70,10 +70,11 @@ class FleetStore:
             age = (now - update.observed_at).total_seconds()
             if age < -5 or age >= self.settings.stale_seconds:
                 raise HTTPException(422, "OBSERVATION_TIME_INVALID")
-            record.update(telemetry=update, received_at=now,
-                          received_tick=self.clock.monotonic(), initial_age=max(0, age))
+            # Reject impossible relocation telemetry BEFORE mutating the vehicle record.
             if record["active_rental"] is not None and (update.relocation_state != "IDLE" or update.active_dispatch_id is not None):
                 raise HTTPException(409, "RENTED_RELOCATION_CONFLICT")
+            record.update(telemetry=update, received_at=now,
+                          received_tick=self.clock.monotonic(), initial_age=max(0, age))
             if update.relocation_state == "RELOCATING" or record["active_rental"] is not None:
                 record["current_zone_id"] = None
             record["state_version"] += 1
