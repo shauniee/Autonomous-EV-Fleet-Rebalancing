@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from ev_fleet.common.logging import base_app
 from ev_fleet.common.dashboard_cache import DashboardCache
 from fastapi import Response
@@ -66,10 +67,14 @@ def create_app(store=None, cache=None):
     async def release(vehicle_id: str, dispatch_id: UUID, body: ClaimRelease):
         return await state.release(vehicle_id, dispatch_id, body)
 
-    @app.on_event("shutdown")
-    async def stop_display_cache():
-        await display_cache.aclose()
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            await display_cache.aclose()
 
+    app.router.lifespan_context = lifespan
     return app
 
 
