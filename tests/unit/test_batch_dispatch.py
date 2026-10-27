@@ -102,7 +102,7 @@ def test_batch_conflicting_vehicle_becomes_partial_and_releases_parking(clock):
             assert result == await cluster.dispatch.approve_batch(approval)
             holds = list(cluster.facilities.holds.values())
             assert sum(h["status"] == "RESERVED" for h in holds) == 1
-            assert sum(h["status"] == "RELEASED" for h in holds) == 0 or 1
+            assert len(holds) == 1
             other = await cluster.dispatch.get_batch(key)
             assert other == result
     asyncio.run(scenario())

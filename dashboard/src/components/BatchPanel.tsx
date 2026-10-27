@@ -32,12 +32,12 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
   useEffect(() => { dialog.current?.showModal(); }, []);
   return <dialog ref={dialog} onCancel={onClose} aria-labelledby="batch-title">
     <div className="eyebrow">Explicit dispatcher approval</div>
-    <h2 id="batch-title">Confirm {batch.recommended_count} EV relocations</h2>
+    <h2 id="batch-title">Confirm {batch.recommended_count} EV {batch.recommended_count === 1 ? 'relocation' : 'relocations'}</h2>
     <p>{batch.target_zone_id.toUpperCase()} · {batch.unfulfilled_count} unfulfilled of {batch.requested_count} requested</p>
     <ol>{batch.assignments.map(a => <li key={a.recommendation_id}>{a.vehicle_id} → {a.facility_name}</li>)}</ol>
     <p className="muted">The backend rechecks each vehicle and atomically holds a mock parking space before claiming that EV. Partial approval is possible.</p>
     {expired && <p className="warning">Expired or stale data. Request another recommendation.</p>}
-    <div className="actions"><button autoFocus onClick={onClose}>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve {batch.recommended_count} EVs</button></div>
+    <div className="actions"><button autoFocus onClick={onClose}>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve {batch.recommended_count} {batch.recommended_count === 1 ? 'EV' : 'EVs'}</button></div>
   </dialog>;
 }
 

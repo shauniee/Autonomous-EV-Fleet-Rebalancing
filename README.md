@@ -323,11 +323,11 @@ results/                    Preserved Phase 4 evaluation output
 
 ## Phase 5A: simulated parking and charging catalogue
 
-A separate read-only Facilities Service now provides 15 clearly labelled MOCK
+A separate simulated Facilities Service now provides 15 clearly labelled MOCK
 parking/charging locations across the six simulated zones. The dispatcher map
 shows their pins and per-zone capacities, independently of Fleet/Demand health.
-This is **display and API groundwork only**: the current single-EV ranking,
-approval and relocation behavior does not use or reserve parking. Mock charger
+The legacy single-EV ranking remains zone-based; the Phase 5C batch pathway now
+uses mock parking capacity, but must be treated as an in-memory simulation. Mock charger
 bays are included in (not added to) reported parking capacity. Docker Compose
 and the local Kubernetes manifests include the new Facilities Service.
 
@@ -347,3 +347,27 @@ time appear in the Fleet dashboard and EV map. Rental state is in memory and
 does not survive restarts. There is **no pre-dispatch, parking allocation or
 automatic rental simulator** yet. For API examples and tests, see
 [Phase 5B guide](docs/phase5b-rental-lifecycle.md).
+
+
+## Phase 5C: multi-EV parking-aware allocation
+
+The dispatcher can request **1–20 EVs** for any selected zone using the
+parking-aware workflow. The backend ranks eligible EV–facility pairs with a
+deterministic greedy heuristic (existing 85% energy-aware score + 15% parking
+availability ratio), respects mock parking capacity and charging needs, and
+proposes partial fulfilment when insufficient vehicles/spaces exist.
+
+Batch recommendations do not hold vehicles or parking places. Explicit batch
+approval revalidates capacity and EV eligibility. The Facilities Service
+atomically holds mock parking slots before Fleet vehicle claims; completed
+arrivals mark slots occupied. Child dispatch outcomes are reported individually;
+the existing single-EV path remains available.
+
+**Not production-ready:** all reservations, rentals, batch state and mock
+occupancy remain process-local. Single replicas remain mandatory until durable
+PostgreSQL transactions and cross-service reconciliation are implemented.
+No rental-driving simulator, real parking reservation, charging provider, or
+live data integration is included.
+
+See [Phase 5C guide](docs/phase5c-bulk-parking.md) for API usage,
+assumptions, test commands and safety limitations.

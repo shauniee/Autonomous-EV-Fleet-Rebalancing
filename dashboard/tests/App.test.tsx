@@ -134,7 +134,7 @@ describe('dispatcher dashboard', () => {
     expect(facility).toHaveTextContent('CBD simulated parking 1');
     expect(facility).toHaveTextContent('12 / 90');
     expect(facility).toHaveTextContent('6 / 12');
-    expect(screen.getByText(/single-EV recommendation remains zone-based/i)).toBeInTheDocument();
+    expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
@@ -198,8 +198,8 @@ describe('dispatcher dashboard', () => {
     expect(fetch.mock.calls.filter(([path, init]) =>
       path === '/api/dispatch/batches' && init?.method === 'POST')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Review batch dispatch' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Confirm 1 EV relocations');
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EVs' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Confirm 1 EV relocation');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
     const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });
     expect(result).toHaveTextContent('APPROVED');
     const submissions = fetch.mock.calls.filter(([path, init]) =>

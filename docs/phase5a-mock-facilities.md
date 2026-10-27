@@ -63,3 +63,8 @@ runtime require verification in a Docker-enabled environment.
 A public "available space" is never necessarily an operator-reserved space.
 Future selection must apply destination operating permissions, capacity freshness,
 battery viability and exclusive fleet slot claims **at approval/execution time**.
+
+
+Phase 5C extends this service with in-process mock parking reservations and
+occupancy. It is no longer read-only. See `docs/phase5c-bulk-parking.md`
+for the POST hold endpoints. These are NOT reservations for real public bays.
