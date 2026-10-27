@@ -1,3 +1,5 @@
+param([switch]$SetupMetricsServer, [switch]$AllowInsecureLocalKubeletTls)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
@@ -14,6 +16,7 @@ function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
 
 Require-Command docker
 Require-Command kubectl
+if ($AllowInsecureLocalKubeletTls -and -not $SetupMetricsServer) { throw 'TLS workaround requires -SetupMetricsServer.' }
 
 & kubectl config use-context docker-desktop
 if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Kubernetes context 'docker-desktop' is unavailable." }
@@ -26,6 +29,12 @@ if ($LASTEXITCODE -ne 0 -or $nodeReady -ne "True") {
 $dockerContext = (& docker context show).Trim()
 if ($dockerContext -ne "desktop-linux") {
     throw "Docker must use the 'desktop-linux' context; current context is '$dockerContext'."
+}
+
+if ($SetupMetricsServer) {
+    & (Join-Path $PSScriptRoot "setup-local-metrics.ps1") -AllowInsecureKubeletTls:$AllowInsecureLocalKubeletTls
+} else {
+    Write-Host "Metrics Server setup skipped; HPA needs an existing healthy Metrics API." -ForegroundColor Yellow
 }
 
 Write-Host "Building reproducible local images..." -ForegroundColor Cyan
@@ -50,6 +59,8 @@ foreach ($deployment in @("fleet", "demand", "facilities", "rebalancing", "dispa
     Wait-Rollout deployment $deployment
 }
 Wait-Rollout statefulset ev-moving-extra 420
+& kubectl -n ev-fleet get hpa dashboard
+if ($LASTEXITCODE -ne 0) { throw "Dashboard HPA resource is missing." }
 
 $notReady = & kubectl -n ev-fleet get pods --field-selector=status.phase!=Running -o name
 if ($LASTEXITCODE -ne 0) { throw "Unable to read Pod status." }
@@ -81,6 +92,8 @@ try {
     Write-Host "Operator dashboard:   http://127.0.0.1:8080"
     Write-Host "Simulation dashboard: http://127.0.0.1:8090"
     Write-Host "PostgreSQL state is stored in the postgres-data-postgres-0 PVC."
+    Write-Host "Dashboard HPA: kubectl get hpa dashboard -n ev-fleet"
+    Write-Host "CPU metrics: kubectl top pods -n ev-fleet"
     Write-Host "Keep this window open. Press Ctrl+C to close both dashboard tunnels."
 
     while ($dashboardJob.State -eq "Running" -and $simulationJob.State -eq "Running") {
