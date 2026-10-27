@@ -30,6 +30,7 @@ main{max-width:1450px;margin:auto;padding:30px 28px}
 .page-intro p{color:#708281;margin:0}
 .panel{background:#fff;border:1px solid #dbe5e1;border-radius:12px;padding:22px;margin-bottom:22px;box-shadow:0 3px 12px #123d4205}
 .workspace{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(330px,1fr);gap:22px;align-items:start}
+.workspace-main{min-width:0}
 .section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
 .section-title h2,.section-title h3{margin:0}
 .map{height:410px;border-radius:8px;background:#e0eae5;z-index:0}
@@ -116,3 +117,8 @@ header{padding:18px}
 .quantity-picker label{font-weight:600;font-size:12px}
 .quantity-picker input{width:78px;border:1px solid #cad7d6;border-radius:7px;padding:9px;font:inherit;text-align:center}
 .quantity-picker input:focus-visible{outline:3px solid #327dd1}
+.relocation-request{min-height:230px}
+.relocation-request>p{max-width:650px}
+.relocation-request .quantity-picker{max-width:520px;background:#f4f7f5;border:1px solid #dce7e4;border-radius:9px;padding:18px}
+.relocation-request .quantity-picker label{font-size:14px}
+.relocation-request .quantity-picker input{width:110px;font-size:24px;font-weight:700;color:#153f47;background:#fff}

@@ -1,15 +1,14 @@
 # Local Kubernetes deployment (Docker Desktop kubeadm)
 
-This deployment runs the existing Singapore EV relocation demonstration on the
-single-node Docker Desktop Kubernetes cluster. It does not replace or modify the
-Docker Compose workflow.
+This deployment runs the complete Singapore EV relocation demonstration on the
+single-node Docker Desktop Kubernetes cluster, including the operator dashboard,
+simulation console, backend services, and 20 moving EV simulators.
 
-All application stores and EV physical simulation state remain in memory. Every
-state-owning service and each individual EV simulator therefore runs with one
-replica and the `Recreate` deployment strategy. Kubernetes can replace a failed
-Pod, but the replacement process cannot recover the failed process's in-memory
-vehicles, claims, recommendations, demand observations, dispatch journal, or EV
-journey state.
+Fleet, Demand, Facilities, Rebalancing and Dispatch write durable service
+snapshots to the local PostgreSQL StatefulSet. Redis is a fail-open cache for
+display-only snapshots. EV physical journey progress remains process-local, and
+the snapshot model is not safe for concurrent service replicas, so state-owning
+services and individual simulators still use one replica and `Recreate`.
 
 ## Prerequisites
 
@@ -18,6 +17,19 @@ journey state.
   provisioner.
 - `kubectl get nodes` reports `docker-desktop` as `Ready`.
 - Run commands from the repository root in Windows PowerShell.
+
+## Reproducible startup
+
+Use the repository-owned startup command on both the original machine and a new
+laptop:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
+```
+
+It performs the build, deployment, readiness waits, and both dashboard tunnels
+described below. The remaining commands in this document are for inspection and
+troubleshooting rather than an alternative startup workflow.
 
 Confirm the target runtimes before building:
 
@@ -41,9 +53,13 @@ docker --context desktop-linux build --platform linux/amd64 `
 docker --context desktop-linux build --platform linux/amd64 `
   -t csc3104/ev-fleet-dashboard:k8s-local .\dashboard
 
+docker --context desktop-linux build --platform linux/amd64 `
+  -t csc3104/ev-fleet-simulation-console:k8s-local .\simulation-console
+
 docker --context desktop-linux image inspect `
   csc3104/ev-fleet-backend:k8s-local `
-  csc3104/ev-fleet-dashboard:k8s-local
+  csc3104/ev-fleet-dashboard:k8s-local `
+  csc3104/ev-fleet-simulation-console:k8s-local
 ```
 
 No registry, `kind load`, AWS, or other cloud service is involved.
@@ -67,14 +83,24 @@ kubectl apply -f .\k8s\namespace.yaml
 kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
 kubectl apply -k .\k8s
 
-kubectl -n ev-fleet wait --for=condition=Available deployment --all --timeout=180s
+kubectl -n ev-fleet rollout status statefulset/postgres --timeout=300s
+kubectl -n ev-fleet wait --for=condition=Available deployment --all --timeout=300s
+kubectl -n ev-fleet rollout status statefulset/ev-moving-extra --timeout=300s
 kubectl -n ev-fleet get deployments,pods,services -o wide
+kubectl -n ev-fleet get statefulsets
 kubectl -n ev-fleet get endpointslices
 ```
 
-There should be eight `1/1` Deployments and six `ClusterIP` Services, including a read-only simulated Facilities Service. The only
-vehicle Deployments are `ev-moving-01` and `ev-moving-02`; do not start the
-stationary Compose nodes with the same IDs.
+There should be ten `1/1` Deployments, a `1/1` PostgreSQL StatefulSet, one
+`18/18` EV StatefulSet, 29 running Pods, nine `ClusterIP` Services, and one
+headless identity Service. The Fleet has
+20 moving EV simulators: `ev-moving-01`, `ev-moving-02`, and the stable StatefulSet
+identities `ev-moving-extra-0` through `ev-moving-extra-17`.
+
+The extra StatefulSet distributes three EVs to each Singapore zone. Their starting
+SOC values are deterministically spread from 65% to 94%. Each StatefulSet Pod name
+is also its Fleet vehicle ID, so Pod replacement preserves identity while still
+losing any process-local journey state as described above.
 
 To confirm the Pods are using the locally built images:
 
@@ -83,17 +109,22 @@ kubectl -n ev-fleet get pods `
   -o custom-columns='POD:.metadata.name,IMAGE:.spec.containers[0].image,IMAGE_ID:.status.containerStatuses[0].imageID'
 ```
 
-## Open the dashboard
+## Open both dashboards
 
-Keep this command running in a dedicated PowerShell terminal:
+Keep each command running in its own PowerShell terminal:
 
 ```powershell
 kubectl -n ev-fleet port-forward service/dashboard 8080:80
 ```
 
-Open <http://127.0.0.1:8080>. Only the dashboard is forwarded. Fleet, Demand,
-Rebalancing, Dispatch and Facilities remain internal `ClusterIP` Services; the dashboard
-proxies same-origin `/api/...` requests to them through Kubernetes service DNS.
+```powershell
+kubectl -n ev-fleet port-forward service/simulation-console 8090:8090
+```
+
+Open the operator dashboard at <http://127.0.0.1:8080> and the simulation console
+at <http://127.0.0.1:8090>. Only the two web interfaces are forwarded. Fleet,
+Demand, Rebalancing, Dispatch, and Facilities remain internal `ClusterIP` Services.
+Both dashboards reach the same backends through Kubernetes service DNS.
 
 If port 8080 is occupied, use `18080:80` and substitute port 18080 below.
 
@@ -146,8 +177,8 @@ node .\dashboard\scripts\verify-kubernetes.cjs http://127.0.0.1:8080
 
 ## Controlled Pod self-healing demonstration
 
-Run this only after a relocation has completed. Deleting Dispatch during an
-active relocation can strand an in-memory workflow and Fleet claim.
+Run this first with only completed relocations. Active-workflow recovery is a
+separate failure test because the EV simulator can be at any movement step.
 
 ```powershell
 $beforePod = kubectl -n ev-fleet get pods `
@@ -181,8 +212,8 @@ Invoke-RestMethod http://127.0.0.1:8080/api/dispatch/dispatches |
 ```
 
 Expected result: `Replaced` is `True`, the new Pod is Ready, and the dispatch list
-is empty. That empty list is evidence of lost in-memory Dispatch state, not a
-successful state recovery. Kubernetes restored the process only.
+still contains the same records. PostgreSQL restores the Dispatch snapshot while
+Kubernetes restores the process.
 
 ## Regression checks
 
@@ -196,10 +227,15 @@ npm.cmd run build
 npm.cmd run test:e2e
 Pop-Location
 
-docker compose config --quiet
-docker compose --profile relocation config --quiet
+Push-Location .\simulation-console\frontend
+npm.cmd ci
+npm.cmd run build
+Pop-Location
+
+kubectl kustomize .\k8s
+kubectl apply --dry-run=client -k .\k8s
 git diff --check
-git diff --exit-code -- compose.yaml dashboard src tests experiments results
+git diff --exit-code -- experiments results
 ```
 
 The Phase 4 experiment matrix does not need to be rerun merely to deploy its
@@ -218,7 +254,9 @@ kubectl -n ev-fleet logs deployment/fleet --tail=200
 kubectl -n ev-fleet logs deployment/demand --tail=200
 kubectl -n ev-fleet logs deployment/rebalancing --tail=200
 kubectl -n ev-fleet logs deployment/dispatch --tail=200
+kubectl -n ev-fleet logs deployment/simulation-console --tail=200
 kubectl -n ev-fleet logs deployment/ev-moving-01 --tail=200
+kubectl -n ev-fleet logs ev-moving-extra-0 --tail=200
 ```
 
 Check internal DNS from an existing backend image:
@@ -255,7 +293,7 @@ kubectl -n ev-fleet port-forward service/dispatch 8004:8000
 ## Cleanup
 
 This deletes all Kubernetes application resources and all of their ephemeral
-state. It does not remove Docker Compose resources or the locally built images.
+state. It does not remove the locally built images.
 
 ```powershell
 kubectl delete namespace ev-fleet --wait=true
@@ -268,5 +306,6 @@ needed:
 ```powershell
 docker --context desktop-linux image rm `
   csc3104/ev-fleet-backend:k8s-local `
-  csc3104/ev-fleet-dashboard:k8s-local
+  csc3104/ev-fleet-dashboard:k8s-local `
+  csc3104/ev-fleet-simulation-console:k8s-local
 ```

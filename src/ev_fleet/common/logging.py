@@ -42,6 +42,11 @@ def base_app(name: str) -> FastAPI:
 
     @app.get("/health/ready")
     async def ready():
-        return {"status": "ready", "instance_id": instance_id, "storage": "ephemeral"}
+        configured = getattr(app.state, "persistence", None)
+        repositories = configured if isinstance(configured, tuple) else (() if configured is None else (configured,))
+        if any(not repository.ready for repository in repositories):
+            raise HTTPException(503, "PERSISTENCE_NOT_READY")
+        storage = "postgresql" if any(repository.enabled for repository in repositories) else "ephemeral"
+        return {"status": "ready", "instance_id": instance_id, "storage": storage}
 
     return app

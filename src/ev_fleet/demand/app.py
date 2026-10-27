@@ -19,6 +19,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
     state = store or DemandStore(manual_hold_seconds=config.manual_hold_seconds)
     state.manual_hold_seconds = config.manual_hold_seconds
     app.state.store = state
+    app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('demand', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
     simulator = DemandSimulator(state, config)
@@ -27,6 +28,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
 
     @asynccontextmanager
     async def lifespan(app):
+        await state.start()
         if seed_zones and not state.zones:
             await seed(state)
         async with httpx.AsyncClient(timeout=config.fleet_timeout_seconds) as owned:
@@ -39,6 +41,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
                 yield
             finally:
                 await display_cache.aclose()
+                await state.close()
                 if task:
                     task.cancel()
                     with suppress(asyncio.CancelledError):

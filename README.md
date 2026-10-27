@@ -19,8 +19,9 @@ traffic, road-routing, or charging-station data.
 - Explainable energy-aware EV selection with eligibility and reserve checks.
 - Human-approved dispatch, atomic vehicle claims, idempotent commands, gradual
   movement, SOC consumption, arrival verification, and timeout reconciliation.
-- A React/TypeScript dashboard with a Leaflet/OpenStreetMap display.
-- Docker Compose and local Docker Desktop Kubernetes deployment options.
+- A React/TypeScript operator dashboard with a Leaflet/OpenStreetMap display.
+- A separate simulation console for setting demand and observing service state.
+- A complete local Docker Desktop Kubernetes deployment.
 - Unit, integration, dashboard, browser, container, and experimental evaluation
   evidence.
 
@@ -36,10 +37,11 @@ Each service owns a separate part of the simulation:
 | Dispatch Service | Approval, claim coordination, commands, lifecycle events, and reconciliation | 8004 |
 | Facilities Service | Simulated parking, chargers and capacity observations | 8005 |
 | EV simulators | Simulated physical position, SOC, command polling, and movement | None |
-| Dashboard | Operator view, recommendation review, and explicit approval | 8080 |
+| Operator dashboard | Map, recommendation review, and explicit dispatch approval | 8080 |
+| Simulation console | Demand input and read-only service, fleet, and dispatch observations | 8090 |
 
 Runtime state is exchanged only through service APIs. One service does not import
-another service's in-memory store.
+another service's private store or database repository.
 
 The relocation flow is:
 
@@ -59,150 +61,61 @@ Demand and Fleet observations
 A recommendation is advisory. It neither reserves nor moves an EV. Only the
 separate Dispatch approval operation can start a relocation.
 
-## Quick start: complete Docker Compose demonstration
+## Kubernetes startup
 
 ### Prerequisites
 
-- Docker Desktop with Docker Compose
+- Docker Desktop with Kubernetes enabled and Linux containers
+- `kubectl` using the `docker-desktop` context
 - PowerShell
+- Host ports 8080 and 8090 available
 
-From the repository root, start all five services, two moving EV simulators, and
-the dashboard:
-
-```powershell
-docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
-```
-
-Check that the containers are healthy:
+This is the only startup workflow. From the repository root, run one command:
 
 ```powershell
-docker compose --profile relocation ps
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
 
-Open the dashboard at <http://127.0.0.1:8080>.
+The script validates Docker Desktop, builds the three application images from
+the checked-in dependency lock, deploys PostgreSQL, Redis, every backend, both
+dashboards and all 20 EV simulators, waits for readiness, and opens both local
+port-forward tunnels. Keep that PowerShell window open.
 
-Demand starts unknown unless the optional demand simulator is enabled. For a
-repeatable manual demonstration, create a CBD hotspot through the dashboard proxy:
+Open both Kubernetes interfaces:
 
-```powershell
-$zone = Invoke-RestMethod http://127.0.0.1:8080/api/demand/zones/cbd
-$body = @{
-  expected_version = $zone.demand_version
-  observed_at = [DateTime]::UtcNow.ToString('o')
-  desired_available_vehicles = 12
-} | ConvertTo-Json
+- Simulation console (simulation dashboard): <http://127.0.0.1:8090>
+- Operator dashboard: <http://127.0.0.1:8080>
 
-Invoke-RestMethod -Method Put `
-  -Uri http://127.0.0.1:8080/api/demand/zones/cbd/demand `
-  -ContentType application/json `
-  -Body $body
-```
+Demand starts unknown. In the simulation console, create a repeatable manual
+hotspot:
 
-Then use the dashboard:
+1. Select **CBD** under **Set zone demand**.
+2. Enter `12` for desired available vehicles.
+3. Select **Apply demand**.
+4. Confirm that CBD shows the updated demand observation.
+
+Then use the operator dashboard:
 
 1. Select **CBD**.
-2. Select **Recommend EV**.
-3. Review the ranking, distance, energy, and predicted arrival SOC.
-4. Select **Review dispatch**.
-5. Select **Approve Dispatch**.
-6. Watch the relocation change from pending to in progress and then succeeded.
-7. Confirm that the EV finishes in CBD and becomes available again.
+2. In **Relocation request**, choose the number of EVs needed, from 1 to 20.
+3. Select **Recommend EV** or **Recommend N EVs**.
+4. Review the ranking and every proposed vehicle-to-parking assignment.
+5. Select **Review dispatch**.
+6. Approve the reviewed EV or batch within the 120-second review window.
+7. Watch each relocation change from pending to in progress and then succeeded.
+8. Confirm that the EVs finish in CBD and become available again.
 
-Follow the moving components in PowerShell if needed:
+Press `Ctrl+C` in the startup window when finished. PostgreSQL data remains in
+the `postgres-data-postgres-0` Kubernetes PVC for the next startup. For logs,
+troubleshooting, and teardown, see
+[Local Kubernetes deployment](docs/kubernetes-local.md).
 
-```powershell
-docker compose --profile relocation logs -f dispatch ev-moving-01 ev-moving-02
-```
+## Demand input
 
-Stop only this Compose project:
-
-```powershell
-docker compose --profile relocation down
-```
-
-## Other ways to run it
-
-### Stationary Phase 1 demonstration
-
-The default Compose configuration starts Fleet, Demand, Rebalancing, and two
-stationary EVs. It does not start Dispatch or the dashboard.
-
-```powershell
-docker compose up --build -d --wait
-docker compose ps
-docker compose down
-```
-
-API documentation is then available at:
-
-- Fleet: <http://127.0.0.1:8001/docs>
-- Demand: <http://127.0.0.1:8002/docs>
-- Rebalancing: <http://127.0.0.1:8003/docs>
-
-### Native Python and dashboard development
-
-Python 3.10 or newer is supported. Docker uses Python 3.12. Install the backend:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e '.[test]'
-```
-
-Run these services in separate PowerShell terminals:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn ev_fleet.fleet.app:app --port 8001 --workers 1
-.\.venv\Scripts\python.exe -m uvicorn ev_fleet.demand.app:app --port 8002 --workers 1
-.\.venv\Scripts\python.exe -m uvicorn ev_fleet.rebalancing.app:app --port 8003 --workers 1
-.\.venv\Scripts\python.exe -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
-.\\.venv\\Scripts\\python.exe -m uvicorn ev_fleet.facilities.app:app --port 8005 --workers 1
-```
-
-Run two moving EVs in two more terminals:
-
-```powershell
-.\.venv\Scripts\python.exe -m ev_fleet.simulator.cli --dispatch-url http://127.0.0.1:8004 --vehicle-id ev-moving-01 --zone bishan --soc 90 --time-scale 30
-.\.venv\Scripts\python.exe -m ev_fleet.simulator.cli --dispatch-url http://127.0.0.1:8004 --vehicle-id ev-moving-02 --zone tampines --soc 60 --time-scale 30
-```
-
-Install and run the development dashboard:
-
-```powershell
-Set-Location dashboard
-npm.cmd ci
-npm.cmd run dev
-```
-
-Open <http://127.0.0.1:5173>. Vite proxies browser API requests to ports
-8001-8005, so backend CORS changes are not required.
-
-### Local Kubernetes
-
-The repository includes one-replica Kubernetes Deployments, internal ClusterIP
-Services, ConfigMaps, health probes, and local-demo resource limits under `k8s/`.
-It uses locally built images with Docker Desktop Kubernetes and does not require a
-container registry or cloud service.
-
-Follow [the local Kubernetes guide](docs/kubernetes-local.md) for image builds,
-namespace creation, deployment, port-forwarding, verification, Pod recovery, logs,
-troubleshooting, and teardown.
-
-## Demand options
-
-Manual demand is recommended for a deterministic demonstration. Dynamic demand is
-optional and disabled by default. Enable it before starting Compose with:
-
-```powershell
-$env:DEMAND_SIMULATION_ENABLED = 'true'
-docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
-```
-
-Compose reads `.env` automatically. Native Python processes do not; set their
-environment variables in the relevant terminal. All supported settings and defaults
-are listed in [.env.example](.env.example).
+Manual demand through the simulation console is used for a deterministic
+demonstration. The console reads the current Demand version before applying an
+observation and confirms the updated value. All supported service settings and
+defaults are listed in [.env.example](.env.example).
 
 Timestamps use UTC on the wire. Dashboard times use Asia/Singapore. Distances are
 kilometres, energy is kWh, and state of charge is a percentage.
@@ -249,13 +162,13 @@ npm.cmd run test:e2e
 ```
 
 The browser suite starts isolated backend services and moving EV processes on test
-ports. It does not reuse the Compose or Kubernetes deployment.
+ports. It does not reuse the running Kubernetes deployment.
 
-Validate Compose configurations without starting containers:
+Validate the Kubernetes resources without changing the cluster:
 
 ```powershell
-docker compose config --quiet
-docker compose --profile relocation config --quiet
+kubectl kustomize .\k8s
+kubectl apply --dry-run=client -k .\k8s
 ```
 
 ## Phase 4 evaluation
@@ -280,13 +193,14 @@ See [the evaluation guide](docs/phase4-evaluation.md),
 ```text
 src/ev_fleet/contracts/    Validated request and response models
 src/ev_fleet/common/       Shared settings, logging, time, and travel calculations
-src/ev_fleet/fleet/        Fleet API and in-memory vehicle/claim state
+src/ev_fleet/fleet/        Fleet API and durable vehicle/claim state
 src/ev_fleet/demand/       Demand API, simulation, and heat-map composition
 src/ev_fleet/rebalancing/  Eligibility, strategies, ranking, and recommendations
 src/ev_fleet/dispatch/     Approval and relocation coordination
 src/ev_fleet/simulator/    Stationary and moving simulated EV processes
-src/ev_fleet/facilities/   Read-only mock parking/charging catalogue
+src/ev_fleet/facilities/   Mock parking/charging catalogue and allocations
 dashboard/                 React dashboard, Nginx proxy, and frontend tests
+simulation-console/        Demand input and service-observation console
 k8s/                       Local Kubernetes resources
 tests/                     Python unit and integration tests
 experiments/phase4/        Reproducible evaluation runner and analysis
@@ -297,17 +211,22 @@ results/                    Preserved Phase 4 evaluation output
 
 ## Important limitations
 
-- Fleet, Demand, Rebalancing, Dispatch, and simulator state is held in process
-  memory. Restarting a process or Pod can lose the state owned by that process.
-- Kubernetes can replace a failed Pod, but that does not recover lost in-memory
-  dispatch history.
-- State-owning services and individual EV simulators must remain at one worker and
-  one replica until durable shared state and cross-replica coordination exist.
+- Fleet, Demand, Rebalancing recommendations, Dispatch workflows, rentals and
+  mock parking allocations use PostgreSQL-backed durable snapshots. Redis stores
+  only short-lived display cache entries and may be lost without affecting
+  dispatch correctness.
+- Individual EV simulator journey progress remains process-local. A simulator Pod
+  replacement preserves its stable vehicle identity but starts a new telemetry
+  session and reconciles from Fleet and Dispatch APIs.
+- Durable snapshots provide restart recovery, not multi-replica transaction
+  safety. State-owning services and individual EV simulators must remain at one
+  worker and one replica until database-level per-entity locking and race tests
+  are implemented.
 - There is no authentication or authorization. Internal APIs must not be exposed to
   an untrusted network.
 - Coordinates, demand, charging, movement, and arrival are simulated. There is no
-  real-road autonomy, live map routing, ML, persistent database, maintenance model,
-  reservation system, or external charging integration.
+  real-road autonomy, live map routing, ML, maintenance model, real reservation
+  system, or external charging integration.
 - Public OpenStreetMap tiles require browser network access. The dashboard's zone
   list and service panels continue working if tiles fail.
 
@@ -327,9 +246,9 @@ A separate simulated Facilities Service now provides 15 clearly labelled MOCK
 parking/charging locations across the six simulated zones. The dispatcher map
 shows their pins and per-zone capacities, independently of Fleet/Demand health.
 The legacy single-EV ranking remains zone-based; the Phase 5C batch pathway now
-uses mock parking capacity, but must be treated as an in-memory simulation. Mock charger
-bays are included in (not added to) reported parking capacity. Docker Compose
-and the local Kubernetes manifests include the new Facilities Service.
+uses mock parking capacity persisted as simulation state in PostgreSQL. Mock charger
+bays are included in (not added to) reported parking capacity. The local
+Kubernetes manifests include the new Facilities Service.
 
 See [Phase 5A guide](docs/phase5a-mock-facilities.md) for endpoints, scope,
 verification instructions and the planned rental / multi-EV / parking allocation
@@ -343,8 +262,8 @@ claimed for immediate relocation, even if regular vehicle telemetry reports
 AVAILABLE. The return position and SOC are taken from fresh telemetry that
 arrived **after** rental start, so the customer may end at any position inside
 the simulated operating envelope. Confirmed rental status and expected return
-time appear in the Fleet dashboard and EV map. Rental state is in memory and
-does not survive restarts. There is **no pre-dispatch, parking allocation or
+time appear in the Fleet dashboard and EV map and survive service restarts in
+PostgreSQL. There is **no pre-dispatch, parking allocation or
 automatic rental simulator** yet. For API examples and tests, see
 [Phase 5B guide](docs/phase5b-rental-lifecycle.md).
 
@@ -363,9 +282,9 @@ atomically holds mock parking slots before Fleet vehicle claims; completed
 arrivals mark slots occupied. Child dispatch outcomes are reported individually;
 the existing single-EV path remains available.
 
-**Not production-ready:** all reservations, rentals, batch state and mock
-occupancy remain process-local. Single replicas remain mandatory until durable
-PostgreSQL transactions and cross-service reconciliation are implemented.
+**Not production-ready:** PostgreSQL snapshots provide local restart recovery,
+but do not provide per-entity multi-replica locking or cross-service transactions.
+Single replicas remain mandatory until those constraints and race tests exist.
 No rental-driving simulator, real parking reservation, charging provider, or
 live data integration is included.
 

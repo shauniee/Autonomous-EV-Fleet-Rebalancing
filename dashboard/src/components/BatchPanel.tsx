@@ -21,7 +21,7 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
     </table></div>
     <p className={remaining ? 'muted' : 'warning'}>{remaining ? `Expires in ${remaining}s` : 'Batch recommendation expired.'}</p>
     <p className="muted">No EV or parking space is claimed until an operator explicitly approves. Allocations may change if capacity becomes unavailable.</p>
-    <button className="primary" disabled={disabled || batch.recommended_count === 0 || remaining <= 0} onClick={onReview}>Review batch dispatch</button>
+    <button className="primary" disabled={disabled || batch.recommended_count === 0 || remaining <= 0} onClick={onReview}>Review dispatch</button>
   </div>;
 }
 

@@ -21,14 +21,21 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     app = base_app("EV Rebalancing Service")
     config = settings or Settings.from_env()
     clock = clock or Clock()
-    store = RecommendationStore(clock)
-    batch_store = RecommendationStore(clock)
+    store = RecommendationStore(clock, "rebalancing.recommendations")
+    batch_store = RecommendationStore(clock, "rebalancing.batches")
+    app.state.persistence = (store.repository, batch_store.repository)
 
     @asynccontextmanager
     async def lifespan(app):
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
-            app.state.client = client or owned
-            yield
+        await store.start()
+        await batch_store.start()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
+                app.state.client = client or owned
+                yield
+        finally:
+            await store.close()
+            await batch_store.close()
 
     app.router.lifespan_context = lifespan
 

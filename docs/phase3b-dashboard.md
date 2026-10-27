@@ -36,7 +36,7 @@ The dashboard has a Node build stage and an Nginx static runtime. Nginx resolves
 5. Select **Review dispatch**, then explicitly **Approve Dispatch** in the confirmation dialog.
 6. Follow backend acknowledgement, lifecycle, distance travelled and SOC under Relocations. On arrival, Fleet updates the destination and availability.
 
-Recommendations expire according to backend `expires_at` (default 10 seconds). Target changes clear recommendations. Demand changes can cause `TARGET_CHANGED` on approval; request a new recommendation and review again. The UI never silently substitutes another EV or automatically dispatches.
+Recommendations expire according to backend `expires_at` (default 120 seconds). Target changes clear recommendations. Demand changes can cause `TARGET_CHANGED` on approval; request a new recommendation and review again. The UI never silently substitutes another EV or automatically dispatches.
 
 The map colours `hotspot_severity` as green NORMAL, amber WARNING, red CRITICAL and grey UNKNOWN. Raw `demand_level` is separately displayed; HIGH demand is not itself CRITICAL. Backend nulls display Unknown, not zero. The map plots approximate zone centres, not invented administrative boundaries or routes.
 

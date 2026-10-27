@@ -80,9 +80,10 @@ docker compose --profile relocation up --build -d --wait `
   fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
 ```
 
-Use `http://127.0.0.1:8080`, select CBD, change EV count, preview assignments
-and approve. The same screen keeps a button for the old zone-only recommendation
-when quantity is one.
+Use `http://127.0.0.1:8080`, select CBD, and choose the EV count in the
+**Relocation request** panel below the map. Request the recommendation, inspect
+every proposed assignment, select **Review dispatch**, and approve the batch
+explicitly. A quantity of one keeps the single-EV approval path.
 
 There is no evidence here of successful container execution; run these checks
 on a Docker-capable machine before merging.

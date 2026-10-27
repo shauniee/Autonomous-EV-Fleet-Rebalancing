@@ -12,6 +12,7 @@ def create_app(store=None, cache=None):
     app = base_app("Fleet State Service")
     state = store or FleetStore()
     app.state.store = state
+    app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('fleet', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
 
@@ -69,6 +70,11 @@ def create_app(store=None, cache=None):
     @app.on_event("shutdown")
     async def stop_display_cache():
         await display_cache.aclose()
+        await state.close()
+
+    @app.on_event("startup")
+    async def restore_state():
+        await state.start()
 
     return app
 

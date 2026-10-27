@@ -4,11 +4,13 @@ kind: Kustomization
 namespace: ev-fleet
 
 resources:
+  - data-services.yaml
   - configmaps.yaml
   - services.yaml
   - backends.yaml
   - simulators.yaml
   - dashboard.yaml
+  - simulation-console.yaml
 
 labels:
   - pairs:

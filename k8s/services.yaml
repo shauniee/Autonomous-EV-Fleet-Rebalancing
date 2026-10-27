@@ -75,4 +75,27 @@ spec:
     - name: http
       port: 80
       targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simulation-console
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: simulation-console
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ev-moving-extra
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: ev-moving-extra
 

@@ -21,7 +21,7 @@ test('select hotspot, recommend, explicitly approve, observe real relocation and
   await page.getByRole('button', { name: 'Review dispatch' }).click();
   await expect(page.getByRole('dialog')).toContainText('Predicted arrival SOC');
   await page.screenshot({ path: 'test-results/dashboard-confirmation.png', fullPage: true });
-  await page.getByRole('button', { name: 'Approve Dispatch', exact: true }).click();
+  await page.getByRole('button', { name: 'Approve 1 EV', exact: true }).click();
   const card = page.locator('[data-testid^="dispatch-"]').first();
   await expect(card).toBeVisible();
   await expect(card).toContainText('IN PROGRESS');

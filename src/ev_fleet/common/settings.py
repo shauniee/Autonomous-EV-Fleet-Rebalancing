@@ -10,7 +10,7 @@ class Settings(Model):
     route_factor: float = Field(default=1.3, ge=1)
     energy_margin_factor: float = Field(default=1.15, ge=1)
     distance_scale_km: float = Field(default=50, gt=0)
-    recommendation_ttl_seconds: float = Field(default=10, gt=0)
+    recommendation_ttl_seconds: float = Field(default=120, gt=0)
     charging_max_age_seconds: float = Field(default=3600, gt=0)
     fleet_url: str = "http://localhost:8001"
     demand_url: str = "http://localhost:8002"

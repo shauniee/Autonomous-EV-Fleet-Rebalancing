@@ -47,6 +47,63 @@ def test_atomic_mock_parking_holds_do_not_overallocate_and_release_is_idempotent
     asyncio.run(scenario())
 
 
+def test_completed_vehicle_can_transfer_to_a_new_parking_facility():
+    async def scenario():
+        store = FacilitiesStore()
+        origin = BY_ID["mock-cbd-01"]
+        destination = BY_ID["mock-tampines-01"]
+        first = ParkingHoldRequest(
+            dispatch_id=uuid4(), vehicle_id="ev-repeat",
+            expected_zone_id=origin.zone_id, expected_position=origin.position)
+        second = ParkingHoldRequest(
+            dispatch_id=uuid4(), vehicle_id="ev-repeat",
+            expected_zone_id=destination.zone_id, expected_position=destination.position)
+
+        original = await store.reserve(origin.facility_id, first)
+        await store.change(original["dispatch_id"], "OCCUPIED")
+        origin_after_arrival = await store.get(origin.facility_id)
+
+        onward = await store.reserve(destination.facility_id, second)
+        assert onward["status"] == "RESERVED"
+        # The EV still occupies its origin until the onward trip succeeds.
+        assert (await store.get(origin.facility_id)).parking_available == origin_after_arrival.parking_available
+        with pytest.raises(HTTPException) as error:
+            await store.reserve(destination.facility_id, ParkingHoldRequest(
+                dispatch_id=uuid4(), vehicle_id="ev-repeat",
+                expected_zone_id=destination.zone_id, expected_position=destination.position))
+        assert error.value.detail == "VEHICLE_ALREADY_ASSIGNED_PARKING"
+
+        await store.change(onward["dispatch_id"], "OCCUPIED")
+        assert (await store.get_hold(original["dispatch_id"]))["status"] == "RELEASED"
+        assert (await store.get_hold(onward["dispatch_id"]))["status"] == "OCCUPIED"
+        assert (await store.get(origin.facility_id)).parking_available == origin_after_arrival.parking_available + 1
+
+    asyncio.run(scenario())
+
+
+def test_failed_onward_relocation_keeps_the_original_bay_occupied():
+    async def scenario():
+        store = FacilitiesStore()
+        origin = BY_ID["mock-cbd-01"]
+        destination = BY_ID["mock-tampines-01"]
+        first = ParkingHoldRequest(
+            dispatch_id=uuid4(), vehicle_id="ev-repeat",
+            expected_zone_id=origin.zone_id, expected_position=origin.position)
+        second = ParkingHoldRequest(
+            dispatch_id=uuid4(), vehicle_id="ev-repeat",
+            expected_zone_id=destination.zone_id, expected_position=destination.position)
+
+        original = await store.reserve(origin.facility_id, first)
+        await store.change(original["dispatch_id"], "OCCUPIED")
+        onward = await store.reserve(destination.facility_id, second)
+        await store.change(onward["dispatch_id"], "RELEASED")
+
+        assert (await store.get_hold(original["dispatch_id"]))["status"] == "OCCUPIED"
+        assert (await store.get_hold(onward["dispatch_id"]))["status"] == "RELEASED"
+
+    asyncio.run(scenario())
+
+
 def test_batch_recommendation_assigns_distinct_evs_and_parking_capacity(clock):
     async def scenario():
         async with Cluster(clock) as cluster:

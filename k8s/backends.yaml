@@ -30,6 +30,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ev-fleet-config
+            - secretRef:
+                name: ev-fleet-database
           ports:
             - name: http
               containerPort: 8000
@@ -100,6 +102,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ev-fleet-config
+            - secretRef:
+                name: ev-fleet-database
           ports:
             - name: http
               containerPort: 8000
@@ -170,6 +174,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ev-fleet-config
+            - secretRef:
+                name: ev-fleet-database
           ports:
             - name: http
               containerPort: 8000
@@ -240,6 +246,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ev-fleet-config
+            - secretRef:
+                name: ev-fleet-database
           ports:
             - name: http
               containerPort: 8000
@@ -310,6 +318,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ev-fleet-config
+            - secretRef:
+                name: ev-fleet-database
           ports:
             - name: http
               containerPort: 8000

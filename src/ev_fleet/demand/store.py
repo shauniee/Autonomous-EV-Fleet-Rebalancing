@@ -3,6 +3,7 @@ from datetime import timedelta
 from uuid import uuid4
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
+from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.contracts.demand import Zone, DemandUpdate
 
 
@@ -18,13 +19,37 @@ SINGAPORE_ZONES = [
 
 
 class DemandStore:
-    def __init__(self, clock=None, manual_hold_seconds=60):
+    def __init__(self, clock=None, manual_hold_seconds=60, repository=None):
         self.clock = clock or Clock()
         self.lock = asyncio.Lock()
         self.zones = {}
         self.instance_id = str(uuid4())
         self.version = 0
         self.manual_hold_seconds = manual_hold_seconds
+        self.repository = repository or SnapshotRepository.from_env("demand")
+
+    async def start(self):
+        await self.repository.start()
+        payload = await self.repository.load()
+        if payload:
+            self.instance_id = payload["instance_id"]
+            self.version = payload["version"]
+            self.zones = payload["zones"]
+            now, tick = self.clock.now(), self.clock.monotonic()
+            for record in self.zones.values():
+                hold_until = record["hold_until"]
+                remaining = 0 if hold_until is None else max(0, (hold_until - now).total_seconds())
+                record["hold_tick"] = tick + remaining if remaining else None
+        else:
+            await self.persist()
+
+    async def close(self):
+        await self.repository.close()
+
+    async def persist(self):
+        await self.repository.save({"instance_id": self.instance_id,
+                                    "version": self.version,
+                                    "zones": self.zones})
 
     def record(self, zone_id):
         if zone_id not in self.zones:
@@ -40,6 +65,7 @@ class DemandStore:
                       "demand_source": "UNKNOWN", "hold_tick": None, "hold_until": None}
             self.zones[zone.zone_id] = record
             self.version += 1
+            await self.persist()
             return self.view(record)
 
     def view(self, record):
@@ -67,6 +93,7 @@ class DemandStore:
             record[version_key] += 1
             record["version"] += 1
             self.version += 1
+            await self.persist()
             return self.view(record)
 
     async def get(self, zone_id):
@@ -113,6 +140,8 @@ class DemandStore:
             self.version += int(changed > 0)
             simulator.tick_count += 1
             simulator.last_tick_at = now
+            if changed:
+                await self.persist()
             return changed
 
 

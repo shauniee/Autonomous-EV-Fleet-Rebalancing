@@ -15,6 +15,8 @@ def create_app(settings=None, client=None, clock=None, background=True):
         async with httpx.AsyncClient(timeout=2) as owned:
             service = DispatchService(client or owned, settings, clock)
             app.state.service = service
+            app.state.persistence = service.repository
+            await service.start()
             worker = asyncio.create_task(service.reconcile_loop()) if background else None
             try:
                 yield
@@ -23,6 +25,7 @@ def create_app(settings=None, client=None, clock=None, background=True):
                     worker.cancel()
                     with suppress(asyncio.CancelledError):
                         await worker
+                await service.close()
 
     app.router.lifespan_context = lifespan
 

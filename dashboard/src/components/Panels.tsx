@@ -65,7 +65,7 @@ export function DispatchConfirmation({ recommendation, vehicle, expired, onClose
       <div><dt>Predicted arrival SOC (recommendation)</dt><dd>{number(candidate?.predicted_arrival_soc_pct, '%')}</dd></div>
     </dl><p className="muted">The backend revalidates this recommendation before claiming the vehicle.</p>
     {expired && <p role="alert" className="warning">Recommendation expired or current data unavailable. Close and refresh before approval.</p>}
-    <div className="actions"><button onClick={onClose} autoFocus>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve Dispatch</button></div>
+    <div className="actions"><button onClick={onClose} autoFocus>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve 1 EV</button></div>
   </dialog>;
 }
 export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {

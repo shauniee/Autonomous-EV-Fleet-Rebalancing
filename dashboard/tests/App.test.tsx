@@ -39,7 +39,7 @@ describe('dispatcher dashboard', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('bishan')).toBeInTheDocument();
     expect(within(dialog).getByText('85%')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve Dispatch' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve 1 EV' }));
     await screen.findByText(/Dispatch dispatch-1:/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
@@ -112,7 +112,7 @@ describe('dispatcher dashboard', () => {
     });
     const view = render(<App/>); await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Approve Dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
     await screen.findByText(/Approval outcome uncertain/);
     view.unmount(); render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry same approval' }));
@@ -191,13 +191,16 @@ describe('dispatcher dashboard', () => {
     });
     render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
-    fireEvent.change(screen.getByLabelText('Number of EVs to dispatch'), { target: { value: '3' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs & parking' }));
+    fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs' }));
     expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 3 EVs recommended');
     expect(screen.getByTestId('batch-recommendation')).toHaveTextContent('CBD simulated parking 1');
+    const recommendations = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(recommendations[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 3 });
     expect(fetch.mock.calls.filter(([path, init]) =>
       path === '/api/dispatch/batches' && init?.method === 'POST')).toHaveLength(0);
-    fireEvent.click(screen.getByRole('button', { name: 'Review batch dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('Confirm 1 EV relocation');
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
     const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });

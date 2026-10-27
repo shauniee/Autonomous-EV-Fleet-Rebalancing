@@ -155,4 +155,89 @@ spec:
             limits:
               cpu: 250m
               memory: 128Mi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ev-moving-extra
+spec:
+  serviceName: ev-moving-extra
+  replicas: 18
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ev-moving-extra
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ev-moving-extra
+        app.kubernetes.io/component: simulator
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ev-moving-extra
+          image: csc3104/ev-fleet-backend:k8s-local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: ev-fleet-config
+          command: ["sh", "-c"]
+          args:
+            - |
+              ordinal="${HOSTNAME##*-}"
+              case "$((ordinal % 6))" in
+                0) zone="jurong-east" ;;
+                1) zone="woodlands" ;;
+                2) zone="bishan" ;;
+                3) zone="punggol" ;;
+                4) zone="tampines" ;;
+                5) zone="cbd" ;;
+              esac
+              soc="$((65 + (ordinal * 7) % 31))"
+              exec python -m ev_fleet.simulator.cli \
+                --fleet-url http://fleet:8000 \
+                --dispatch-url http://dispatch:8000 \
+                --vehicle-id "$HOSTNAME" \
+                --zone "$zone" \
+                --soc "$soc" \
+                --time-scale "$SIMULATION_TIME_SCALE"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import json,os,urllib.request; vehicle_id=os.environ['HOSTNAME']; d=json.load(urllib.request.urlopen(f'http://fleet:8000/api/v1/vehicles/{vehicle_id}', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
 

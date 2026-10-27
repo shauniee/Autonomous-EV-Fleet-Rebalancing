@@ -11,23 +11,76 @@ from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendati
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
 from ev_fleet.contracts.dispatch import DispatchApproval
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
+from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
-from .store import DispatchStore
+from .store import DispatchRecord, DispatchStore
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
 
 
 class DispatchService:
-    def __init__(self, client, settings=None, clock=None):
+    def __init__(self, client, settings=None, clock=None, repository=None):
         self.client = client
         self.settings = settings or DispatchSettings.from_env()
         self.clock = clock or Clock()
         self.store = DispatchStore(self.clock)
         self.batch_lock = asyncio.Lock()
+        self.persist_lock = asyncio.Lock()
         self.batches = {}
         self.batch_recommendations = {}
+        self.repository = repository or SnapshotRepository.from_env("dispatch")
+
+    async def start(self):
+        await self.repository.start()
+        payload = await self.repository.load()
+        if not payload:
+            await self.persist()
+            return
+        self.store.requests = payload["requests"]
+        self.store.recommendations = payload["recommendations"]
+        self.batches = payload["batches"]
+        self.batch_recommendations = payload["batch_recommendations"]
+        tick = self.clock.monotonic()
+        for key, item in payload["records"].items():
+            record = DispatchRecord(
+                data=item["data"], claim_request=item["claim_request"],
+                parking_request=item["parking_request"], claimed=item["claimed"],
+                ack=item["ack"], events=item["events"],
+                event_sequence=item["event_sequence"],
+                release_outcome=item["release_outcome"])
+            if record.data["delivery_attempts"]:
+                record.sent_tick = tick
+            if record.claimed and record.data["state"] not in TERMINAL:
+                record.claim_tick = tick
+            if record.data["acknowledged_at"] and record.data["state"] not in TERMINAL:
+                record.progress_tick = tick
+            self.store.records[key] = record
+
+    async def close(self):
+        await self.persist()
+        await self.repository.close()
+
+    async def persist(self):
+        async with self.persist_lock:
+            records = {key: {
+                "data": record.data,
+                "claim_request": record.claim_request,
+                "parking_request": record.parking_request,
+                "claimed": record.claimed,
+                "ack": record.ack,
+                "events": record.events,
+                "event_sequence": record.event_sequence,
+                "release_outcome": record.release_outcome,
+            } for key, record in self.store.records.items()}
+            await self.repository.save({
+                "records": records,
+                "requests": self.store.requests,
+                "recommendations": self.store.recommendations,
+                "batches": self.batches,
+                "batch_recommendations": self.batch_recommendations,
+            })
 
     def transition(self, record, state, reason=None):
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
@@ -162,32 +215,35 @@ class DispatchService:
 
     async def approve(self, body):
         record = await self.store.begin(body)
-        async with record.lock:
-            if record.claimed or record.data["state"] in TERMINAL:
+        try:
+            async with record.lock:
+                if record.claimed or record.data["state"] in TERMINAL:
+                    return record.view()
+                try:
+                    if not record.claim_request:
+                        await self.prepare(record)
+                    await self.acquire(record)
+                except HTTPException as exc:
+                    # Only definite claim failures may free a parking reservation.
+                    # Lost responses keep the reservation until reconciliation.
+                    if (exc.status_code in (404, 409, 422) and not record.claimed
+                            and record.data["parking_status"] == "RESERVED"):
+                        try:
+                            released = await request_json(self.client, "POST",
+                                f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
+                                model=ParkingHold)
+                            if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
+                                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+                            record.data["parking_status"] = "RELEASED"
+                        except HTTPException:
+                            self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
+                            return record.view()
+                    self.handle_approval_error(record, exc)
+                    if exc.status_code in (404, 409, 422):
+                        raise HTTPException(409, exc.detail) from exc
                 return record.view()
-            try:
-                if not record.claim_request:
-                    await self.prepare(record)
-                await self.acquire(record)
-            except HTTPException as exc:
-                # Only definite claim failures may free a parking reservation.
-                # Lost responses keep the reservation until reconciliation.
-                if (exc.status_code in (404, 409, 422) and not record.claimed
-                        and record.data["parking_status"] == "RESERVED"):
-                    try:
-                        released = await request_json(self.client, "POST",
-                            f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
-                            model=ParkingHold)
-                        if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
-                            raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
-                        record.data["parking_status"] = "RELEASED"
-                    except HTTPException:
-                        self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
-                        return record.view()
-                self.handle_approval_error(record, exc)
-                if exc.status_code in (404, 409, 422):
-                    raise HTTPException(409, exc.detail) from exc
-            return record.view()
+        finally:
+            await self.persist()
 
     def handle_approval_error(self, record, exc):
         # A Fleet epoch change after an attempted claim cannot prove the old claim did not execute.
@@ -274,24 +330,29 @@ class DispatchService:
         record = self.store.get(dispatch_id)
         async with record.lock:
             await self.refresh(record)
-            return record.view()
+            result = record.view()
+        await self.persist()
+        return result
 
     async def commands(self, vehicle_id):
-        for record in list(self.store.records.values()):
-            if record.data["vehicle_id"] != vehicle_id:
-                continue
-            async with record.lock:
-                await self.refresh(record)
-                if (not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
-                    record.data["state"] == "UNKNOWN" and record.data["failure_reason"] != "ACK_TIMEOUT"):
+        try:
+            for record in list(self.store.records.values()):
+                if record.data["vehicle_id"] != vehicle_id:
                     continue
-                # Only a positively reconciled claim can be delivered. ACK timeout permits same-ID redelivery.
-                if record.sent_tick is None:
-                    record.sent_tick = self.clock.monotonic()
-                    self.transition(record, "SENT")
-                record.data["delivery_attempts"] += 1
-                return {"commands": [record.view()["command"]]}
-        return {"commands": []}
+                async with record.lock:
+                    await self.refresh(record)
+                    if (not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
+                        record.data["state"] == "UNKNOWN" and record.data["failure_reason"] != "ACK_TIMEOUT"):
+                        continue
+                    # Only a positively reconciled claim can be delivered. ACK timeout permits same-ID redelivery.
+                    if record.sent_tick is None:
+                        record.sent_tick = self.clock.monotonic()
+                        self.transition(record, "SENT")
+                    record.data["delivery_attempts"] += 1
+                    return {"commands": [record.view()["command"]]}
+            return {"commands": []}
+        finally:
+            await self.persist()
 
     def check_command(self, record, body):
         if (not record.claimed or not record.data["delivery_attempts"] or
@@ -321,7 +382,9 @@ class DispatchService:
             else:
                 record.release_outcome = "REJECTED"
                 await self.refresh(record)
-            return record.view()
+            result = record.view()
+        await self.persist()
+        return result
 
     async def event(self, dispatch_id, body):
         record = self.store.get(dispatch_id)
@@ -358,7 +421,9 @@ class DispatchService:
             else:
                 record.data["acknowledged_at"] = record.data["acknowledged_at"] or self.clock.now().isoformat()
                 self.transition(record, "IN_PROGRESS")
-            return record.view()
+            result = record.view()
+        await self.persist()
+        return result
 
     def batch_view(self, data):
         items = list(data["items"])
@@ -410,7 +475,9 @@ class DispatchService:
                 except HTTPException as exc:
                     item["state"] = "REJECTED" if exc.status_code in (404, 409, 422) else "UNKNOWN"
                     item["error"] = str(exc.detail)
-            return self.batch_view(data)
+            result = self.batch_view(data)
+        await self.persist()
+        return result
 
     async def get_batch(self, request_id):
         data = self.batches.get(str(request_id))
@@ -427,6 +494,7 @@ class DispatchService:
                 try:
                     async with record.lock:
                         await self.refresh(record)
+                    await self.persist()
                 except Exception:
                     logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])
             await asyncio.sleep(self.settings.reconcile_interval_seconds)

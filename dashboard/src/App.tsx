@@ -82,12 +82,12 @@ export default function App() {
     && now - Date.parse(facilities.updatedAt) < 30000;
   const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0;
   const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
-  async function recommend(legacy = false) {
+  async function recommend() {
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;
     setRecommending(true); setRecommendation(null); setBatch(null); setBatchResult(null); setError(''); setNotice('');
     try {
-      if (legacy) {
+      if (quantity === 1) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
           method: 'POST', body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
         });
@@ -163,19 +163,25 @@ export default function App() {
         catch (e) { setError(message(e)); }
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
-      <div className="workspace"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
+      <div className="workspace"><div className="workspace-main"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
         <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} selected={selected} onSelect={choose}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span><span>● Mock parking (teal)</span><span>● Mock charging (amber)</span></div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
         <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · Approximate simulation coordinates</p>
       </section>
-      <aside className="panel target-panel">{zone ? <><div className="eyebrow">Selected destination</div><ZoneDetails zone={zone}/><hr/><div className="quantity-picker"><label htmlFor="ev-count">Number of EVs to dispatch</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting} onChange={event => {
-          const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
-          setQuantity(value); setRecommendation(null); setBatch(null); setBatchResult(null);
-        }}/></div>
-        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || !facilitiesFresh} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : `Recommend ${quantity} EV${quantity === 1 ? '' : 's'} & parking`}</button>
-        {quantity === 1 && <button disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh} onClick={() => void recommend(true)}>Recommend EV</button>}<p className="muted">A recommendation does not move an EV.</p></> : <div className="empty"><div className="empty-icon">↗</div><h2>Where is an EV needed?</h2><p>Select a zone on the map or from the list to review its demand and request a recommendation.</p></div>}
+      <section className="panel relocation-request" aria-labelledby="relocation-request-title"><div className="section-title"><h2 id="relocation-request-title">Relocation request</h2><span className="muted">1–20 EVs</span></div>
+        {zone ? <><p>How many EVs should be relocated to <strong>{zone.name}</strong>?</p>
+          <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting} onChange={event => {
+            const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
+            setQuantity(value); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
+          }}/></div>
+          <p className="muted">The backend will rank eligible EVs and propose up to {quantity} relocation{quantity === 1 ? '' : 's'}. Nothing moves until the dispatcher reviews and approves.</p></>
+          : <p className="empty">Select a destination zone above before choosing the required number of EVs.</p>}
+      </section></div>
+      <aside className="panel target-panel">{zone ? <><div className="eyebrow">Selected destination</div><ZoneDetails zone={zone}/><hr/>
+        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || (quantity > 1 && !facilitiesFresh)} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
+        <p className="muted">A recommendation does not move an EV. The dispatcher must review and approve it.</p></> : <div className="empty"><div className="empty-icon">↗</div><h2>Where is an EV needed?</h2><p>Select a zone on the map or from the list to review its demand and request a recommendation.</p></div>}
         {zone && !fresh && <p className="warning">Fresh demand and fleet data are required to request or approve a recommendation.</p>}
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}

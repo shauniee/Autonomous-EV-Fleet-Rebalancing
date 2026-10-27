@@ -40,7 +40,7 @@ async function main() {
     const approvalResponse = page.waitForResponse(response =>
       response.url().includes('/api/dispatch/dispatches')
       && response.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Approve Dispatch', exact: true }).click();
+    await page.getByRole('button', { name: 'Approve 1 EV', exact: true }).click();
     const approved = await json(await approvalResponse);
 
     const card = page.locator('[data-testid^="dispatch-"]').first();

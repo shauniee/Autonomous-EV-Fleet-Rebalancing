@@ -12,6 +12,7 @@ def create_app(store=None, cache=None):
     app = base_app("Mock Parking and Charging Service")
     state = store or FacilitiesStore()
     app.state.store = state
+    app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('facilities', state.instance_id, 2)
     app.state.dashboard_cache = display_cache
     zone_ids = {item[0] for item in SINGAPORE_ZONES}
@@ -54,6 +55,11 @@ def create_app(store=None, cache=None):
     @app.on_event("shutdown")
     async def stop_display_cache():
         await display_cache.aclose()
+        await state.close()
+
+    @app.on_event("startup")
+    async def restore_state():
+        await state.start()
 
     return app
 

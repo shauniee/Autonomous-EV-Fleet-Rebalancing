@@ -6,16 +6,42 @@ from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings
 from ev_fleet.common.travel import distance_km, predicted_soc
+from ev_fleet.common.persistence import SnapshotRepository
 
 
 class FleetStore:
-    def __init__(self, settings=None, clock=None):
+    def __init__(self, settings=None, clock=None, repository=None):
         self.settings = settings or DispatchSettings.from_env()
         self.clock = clock or Clock()
         self.lock = asyncio.Lock()
         self.vehicles = {}
         self.instance_id = str(uuid4())
         self.version = 0
+        self.repository = repository or SnapshotRepository.from_env("fleet")
+
+    async def start(self):
+        await self.repository.start()
+        payload = await self.repository.load()
+        if payload:
+            self.instance_id = payload["instance_id"]
+            self.version = payload["version"]
+            self.vehicles = payload["vehicles"]
+            now, tick = self.clock.now(), self.clock.monotonic()
+            for record in self.vehicles.values():
+                if record["telemetry"] is not None:
+                    received_at = record["received_at"]
+                    record["initial_age"] = max(0, (now - received_at).total_seconds())
+                    record["received_tick"] = tick
+        else:
+            await self.persist()
+
+    async def close(self):
+        await self.repository.close()
+
+    async def persist(self):
+        await self.repository.save({"instance_id": self.instance_id,
+                                    "version": self.version,
+                                    "vehicles": self.vehicles})
 
     async def register(self, registration):
         async with self.lock:
@@ -32,6 +58,7 @@ class FleetStore:
                       "rental_start_requests": {}, "rental_return_requests": {}}
             self.vehicles[key] = record
             self.version += 1
+            await self.persist()
             return self.view(record)
 
     def record(self, vehicle_id):
@@ -52,6 +79,7 @@ class FleetStore:
                 # Preserve physical status, but require new-session telemetry for eligibility.
                 record["state_version"] += 1
                 self.version += 1
+                await self.persist()
             return {"session_id": str(record["session_id"])}
 
     async def telemetry(self, vehicle_id, update):
@@ -80,6 +108,7 @@ class FleetStore:
                 record["current_zone_id"] = None
             record["state_version"] += 1
             self.version += 1
+            await self.persist()
             return {"accepted": True, "duplicate": False, "vehicle": self.view(record)}
 
     def view(self, record):
@@ -148,6 +177,7 @@ class FleetStore:
             record["current_zone_id"] = None  # A free-floating customer controls the return position.
             record["state_version"] += 1
             self.version += 1
+            await self.persist()
             return deepcopy(data)
 
     async def return_rental(self, vehicle_id, rental_id, body):
@@ -190,6 +220,7 @@ class FleetStore:
             record["current_zone_id"] = None
             record["state_version"] += 1
             self.version += 1
+            await self.persist()
             return deepcopy(data)
 
     async def get_rental(self, vehicle_id, rental_id):
@@ -236,6 +267,7 @@ class FleetStore:
             record["active_claim"] = receipt
             record["state_version"] += 1
             self.version += 1
+            await self.persist()
             return deepcopy(receipt)
 
     async def get_claim(self, vehicle_id, dispatch_id):
@@ -274,6 +306,7 @@ class FleetStore:
                 record["current_zone_id"] = receipt["target_zone_id"]
             record["state_version"] += 1
             self.version += 1
+            await self.persist()
             return deepcopy(receipt)
 
     async def get(self, vehicle_id):
