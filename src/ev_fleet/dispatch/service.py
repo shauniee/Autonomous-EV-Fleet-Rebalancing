@@ -120,6 +120,7 @@ class DispatchService:
         record.data["claim_held"] = receipt.status == "ACTIVE"
         if receipt.status == "RELEASED":
             self.finish(record, receipt.outcome)
+            await self.sync_parking(record)
         else:
             self.transition(record, "PENDING")
 
@@ -137,6 +138,28 @@ class DispatchService:
         self.transition(record, "SUCCEEDED" if outcome == "ARRIVED" else "REJECTED",
                         None if outcome == "ARRIVED" else "EV_REJECTED_COMMAND")
 
+    async def sync_parking(self, record):
+        """Complete on verified arrival; release only after a known released claim."""
+        if record.data["parking_status"] != "RESERVED" or record.data["claim_held"] is not False:
+            return
+        state = record.data["state"]
+        if state not in TERMINAL:
+            return
+        action = "complete" if state == "SUCCEEDED" else "release"
+        try:
+            receipt = await request_json(self.client, "POST",
+                f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/{action}",
+                model=ParkingHold)
+            wanted = "OCCUPIED" if action == "complete" else "RELEASED"
+            if (str(receipt.dispatch_id) != record.data["dispatch_id"] or
+                    receipt.facility_id != record.data["parking_facility_id"] or
+                    receipt.status != wanted):
+                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+            record.data["parking_status"] = receipt.status
+        except HTTPException as exc:
+            logging.warning("parking finalisation pending dispatch=%s error=%s",
+                            record.data["dispatch_id"], exc.detail)
+
     async def approve(self, body):
         record = await self.store.begin(body)
         async with record.lock:
@@ -147,6 +170,20 @@ class DispatchService:
                     await self.prepare(record)
                 await self.acquire(record)
             except HTTPException as exc:
+                # Only definite claim failures may free a parking reservation.
+                # Lost responses keep the reservation until reconciliation.
+                if (exc.status_code in (404, 409, 422) and not record.claimed
+                        and record.data["parking_status"] == "RESERVED"):
+                    try:
+                        released = await request_json(self.client, "POST",
+                            f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
+                            model=ParkingHold)
+                        if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
+                            raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+                        record.data["parking_status"] = "RELEASED"
+                    except HTTPException:
+                        self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
+                        return record.view()
                 self.handle_approval_error(record, exc)
                 if exc.status_code in (404, 409, 422):
                     raise HTTPException(409, exc.detail) from exc
@@ -162,6 +199,7 @@ class DispatchService:
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
         if record.data["state"] in TERMINAL:
+            await self.sync_parking(record)
             return
         if not record.claimed:
             try:
@@ -176,6 +214,7 @@ class DispatchService:
             self.check_receipt(record, receipt)
             if receipt.status == "RELEASED":
                 self.finish(record, receipt.outcome)
+                await self.sync_parking(record)
                 return
             record.data["claim_held"] = True
             vehicle = await request_json(self.client, "GET",
@@ -218,6 +257,7 @@ class DispatchService:
                 if receipt.status != "RELEASED" or receipt.outcome != outcome:
                     raise HTTPException(503, "RELEASE_NOT_CONFIRMED")
                 self.finish(record, outcome)
+                await self.sync_parking(record)
                 return
             if record.claim_tick is not None and record.data["acknowledged_at"] is None:
                 if self.clock.monotonic() - record.claim_tick >= self.settings.ack_timeout_seconds:
@@ -323,7 +363,8 @@ class DispatchService:
     async def reconcile_loop(self):
         while True:
             for record in list(self.store.records.values()):
-                if record.lock.locked() or record.data["state"] in TERMINAL:
+                if record.lock.locked() or (record.data["state"] in TERMINAL
+                    and record.data["parking_status"] != "RESERVED"):
                     continue
                 try:
                     async with record.lock:
