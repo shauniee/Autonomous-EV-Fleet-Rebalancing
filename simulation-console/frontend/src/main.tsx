@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { DemandForm } from './DemandForm';
+import type { Zone } from './DemandForm';
 import './styles.css';
 
 type Resource<T> = {
@@ -7,7 +9,6 @@ type Resource<T> = {
   observed_at: string | null;
   error: string | null;
 };
-type Zone = { zone_id: string; name: string };
 type Vehicle = {
   vehicle_id: string;
   current_zone_id: string | null;
@@ -103,8 +104,8 @@ function App() {
       <p className="eyebrow">EV FLEET</p>
       <h1>Simulation probe</h1>
       <p className="description">
-        Read-only observations from the EV application. Updates every five
-        seconds after each completed request.
+        Configure zone demand and observe the EV application. Observations
+        update every five seconds after each completed request.
       </p>
       <p className="health" role="status">
         Console status: <strong>{status}</strong>
@@ -141,6 +142,12 @@ function App() {
           not zero.
         </p>
       </section>
+      <DemandForm
+        zones={observations?.zones.data ?? []}
+        available={
+          !!observations?.zones.data && !observations.zones.error && !error
+        }
+      />
       <section>
         <h2>Operating zones</h2>
         <p className="description">Discovered from the app’s Demand API.</p>
@@ -150,6 +157,10 @@ function App() {
             <div className="zone" key={zone.zone_id}>
               <strong>{zone.name}</strong>
               <small>{zone.zone_id}</small>
+              <small>
+                Desired supply:{' '}
+                {zone.demand?.desired_available_vehicles ?? 'Unknown'}
+              </small>
             </div>
           ))}
         </div>

@@ -76,6 +76,43 @@ small {
   color: #81571f;
   border-radius: 6px;
 }
+.success {
+  padding: 14px;
+  background: #e6f3ea;
+  color: #245b3b;
+  border-radius: 6px;
+}
+.demand-form {
+  max-width: 400px;
+}
+.demand-form label {
+  display: block;
+  margin: 16px 0;
+}
+.demand-form input,
+.demand-form select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  margin-top: 6px;
+  border: 1px solid #ccdcd1;
+  border-radius: 6px;
+  font: inherit;
+}
+.demand-form button {
+  padding: 10px 16px;
+  background: #193b30;
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.demand-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .table-wrap {
   overflow-x: auto;
 }

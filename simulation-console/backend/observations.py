@@ -7,10 +7,13 @@ import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from .demand import DemandValue
+
 
 class Zone(BaseModel):
     zone_id: str
     name: str
+    demand: DemandValue | None
 
 
 class Vehicle(BaseModel):
