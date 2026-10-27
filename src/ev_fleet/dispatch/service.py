@@ -360,6 +360,64 @@ class DispatchService:
                 self.transition(record, "IN_PROGRESS")
             return record.view()
 
+    def batch_view(self, data):
+        items = list(data["items"])
+        approved = sum(item["state"] not in ("REJECTED", "UNKNOWN") for item in items)
+        unknown = sum(item["state"] == "UNKNOWN" for item in items)
+        status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
+                  else "PARTIAL" if approved else "REJECTED")
+        return {**data, "status": status}
+
+    async def approve_batch(self, body):
+        key = str(body.request_id)
+        async with self.batch_lock:
+            data = self.batches.get(key)
+            if data is not None and data["batch_recommendation_id"] != str(body.batch_recommendation_id):
+                raise HTTPException(409, "BATCH_REQUEST_ID_CONFLICT")
+            if data is None:
+                rec = await request_json(self.client, "GET",
+                    f"{self.settings.rebalancing_url}/api/v1/batch-recommendations/{body.batch_recommendation_id}",
+                    model=BatchRecommendation)
+                if rec.batch_recommendation_id != body.batch_recommendation_id:
+                    raise HTTPException(503, "BATCH_IDENTITY_MISMATCH")
+                if rec.expires_at <= self.clock.now():
+                    raise HTTPException(409, "BATCH_EXPIRED")
+                if not rec.assignments:
+                    raise HTTPException(409, "NO_BATCH_ASSIGNMENTS")
+                existing = self.batch_recommendations.get(str(body.batch_recommendation_id))
+                if existing is not None and existing != key:
+                    raise HTTPException(409, "BATCH_ALREADY_APPROVED")
+                data = {"request_id": key, "batch_recommendation_id": str(body.batch_recommendation_id),
+                        "requested_count": rec.requested_count,
+                        "recommended_count": rec.recommended_count,
+                        "items": [{"recommendation_id": str(a.recommendation_id),
+                                   "vehicle_id": a.vehicle_id, "facility_id": a.facility_id,
+                                   "dispatch_id": None, "state": "PENDING", "error": None}
+                                  for a in rec.assignments]}
+                self.batches[key] = data
+                self.batch_recommendations[str(body.batch_recommendation_id)] = key
+            for item in data["items"]:
+                if item["state"] not in ("PENDING", "UNKNOWN"):
+                    continue
+                # Stable child idempotency key across HTTP retries.
+                child_id = uuid5(body.request_id, item["recommendation_id"])
+                try:
+                    result = await self.approve(DispatchApproval(
+                        request_id=child_id, recommendation_id=item["recommendation_id"]))
+                    item["dispatch_id"] = result["dispatch_id"]
+                    item["state"] = result["state"]
+                    item["error"] = result.get("failure_reason")
+                except HTTPException as exc:
+                    item["state"] = "REJECTED" if exc.status_code in (404, 409, 422) else "UNKNOWN"
+                    item["error"] = str(exc.detail)
+            return self.batch_view(data)
+
+    async def get_batch(self, request_id):
+        data = self.batches.get(str(request_id))
+        if data is None:
+            raise HTTPException(404, "BATCH_NOT_FOUND")
+        return self.batch_view(data)
+
     async def reconcile_loop(self):
         while True:
             for record in list(self.store.records.values()):
