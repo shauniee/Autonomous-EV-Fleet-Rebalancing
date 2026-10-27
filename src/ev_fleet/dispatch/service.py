@@ -1,13 +1,16 @@
 import asyncio
 import logging
-from uuid import uuid4
+from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings
 from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, VehicleClaim
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
-from ev_fleet.contracts.recommendations import Recommendation
+from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
+from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
+from ev_fleet.contracts.dispatch import DispatchApproval
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchStore
@@ -22,6 +25,9 @@ class DispatchService:
         self.settings = settings or DispatchSettings.from_env()
         self.clock = clock or Clock()
         self.store = DispatchStore(self.clock)
+        self.batch_lock = asyncio.Lock()
+        self.batches = {}
+        self.batch_recommendations = {}
 
     def transition(self, record, state, reason=None):
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
@@ -49,19 +55,45 @@ class DispatchService:
         if vehicle is None:
             raise HTTPException(409, "VEHICLE_NOT_FOUND")
         policy = Settings(**recommendation.policy_settings)
-        assessment = assess(vehicle.model_dump(mode="json"), target.model_dump(mode="json"), policy, self.clock.now())
+        parking = None
+        destination = target.position
+        assessed_target = target.model_dump(mode="json")
+        if recommendation.parking_facility_id:
+            parking = await request_json(self.client, "GET",
+                f"{self.settings.facilities_url}/api/v1/facilities/{recommendation.parking_facility_id}",
+                model=Facility)
+            if (parking.zone_id != target.zone_id or parking.status != "OPEN"
+                    or parking.parking_available <= 0 or parking.source != "MOCK"
+                    or parking.position != recommendation.target_position):
+                raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
+            destination = parking.position
+            assessed_target["position"] = parking.position.model_dump(mode="json")
+            assessed_target["charging"] = {
+                "observed_at": self.clock.now().isoformat(),
+                "available_slots": parking.charging_available}
+        assessment = assess(vehicle.model_dump(mode="json"), assessed_target, policy, self.clock.now())
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
+        if parking:
+            requires_charge = (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+                               or recommendation.requires_charging)
+            if requires_charge and parking.charging_available <= 0:
+                raise HTTPException(409, "CHARGING_FULL")
+            record.data["parking_facility_id"] = parking.facility_id
+            record.parking_request = ParkingHoldRequest(
+                dispatch_id=record.data["dispatch_id"], vehicle_id=vehicle.vehicle_id,
+                expected_zone_id=target.zone_id, expected_position=parking.position,
+                requires_charging=requires_charge).model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
             expected_version=vehicle.state_version, target_zone_id=target.zone_id,
-            target_position=target.position, approve_before=recommendation.expires_at,
+            target_position=destination, approve_before=recommendation.expires_at,
             min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
             route_factor=max(policy.route_factor, self.settings.route_factor),
             energy_margin_factor=max(policy.energy_margin_factor, self.settings.energy_margin_factor))
         command = RelocationCommand(dispatch_id=record.data["dispatch_id"], command_id=command_id,
             vehicle_id=vehicle.vehicle_id, fleet_instance_id=fleet.instance_id,
-            target_zone_id=target.zone_id, target_position=target.position, issued_at=self.clock.now(),
+            target_zone_id=target.zone_id, target_position=destination, issued_at=self.clock.now(),
             min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
             energy_margin_factor=claim.energy_margin_factor)
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
@@ -70,6 +102,15 @@ class DispatchService:
         record.claim_request = claim.model_dump(mode="json")
 
     async def acquire(self, record):
+        if record.parking_request:
+            hold = await request_json(self.client, "POST",
+                f"{self.settings.facilities_url}/api/v1/facilities/{record.data['parking_facility_id']}/holds",
+                record.parking_request, model=ParkingHold)
+            if (str(hold.dispatch_id) != record.data["dispatch_id"] or
+                    hold.vehicle_id != record.data["vehicle_id"] or
+                    hold.facility_id != record.data["parking_facility_id"] or hold.status != "RESERVED"):
+                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+            record.data["parking_status"] = hold.status
         receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
         self.check_receipt(record, receipt)
         record.claimed = True
