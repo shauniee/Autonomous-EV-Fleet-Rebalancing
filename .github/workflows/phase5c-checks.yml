@@ -33,3 +33,64 @@ jobs:
       - run: npm ci
       - run: npm test -- --run
       - run: npm run build
+
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start live Compose demonstration
+        run: |
+          docker compose --profile relocation up --build -d --wait \
+            fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
+      - name: Verify live parking-aware batch approval
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+          from uuid import uuid4
+
+          origin = 'http://127.0.0.1:8080'
+          def request(path, body=None):
+              data = json.dumps(body).encode() if body is not None else None
+              headers = {'Content-Type': 'application/json'} if data else {}
+              req = urllib.request.Request(origin + path, data=data, headers=headers)
+              with urllib.request.urlopen(req, timeout=8) as res:
+                  return json.load(res)
+
+          for attempt in range(45):
+              try:
+                  fleet = request('/api/fleet/vehicles')
+                  available = [v for v in fleet['vehicles']
+                               if v['effective_availability'] == 'AVAILABLE']
+                  if len(available) >= 2:
+                      break
+              except Exception:
+                  pass
+              time.sleep(1)
+          else:
+              raise AssertionError('Two fresh moving EVs were not available for smoke test')
+
+          sites = request('/api/facilities/facilities?zone_id=cbd')
+          assert sites['data_source'] == 'MOCK'
+          assert len(sites['facilities']) == 3
+          proposal = request('/api/rebalancing/batch-recommendations',
+                             {'target_zone_id': 'cbd', 'quantity': 2})
+          assert proposal['recommended_count'] == 2, proposal
+          approval = request('/api/dispatch/batches',
+                             {'request_id': str(uuid4()),
+                              'batch_recommendation_id': proposal['batch_recommendation_id']})
+          assert approval['status'] == 'APPROVED', approval
+          assert len(approval['items']) == 2, approval
+          print('Compose live batch smoke: 2 mock parking-aware EV dispatches approved')
+          PY
+      - name: Container status and recent logs
+        if: always()
+        run: |
+          docker compose --profile relocation ps
+          docker compose --profile relocation logs --tail 35
+      - name: Clean up containers
+        if: always()
+        run: docker compose --profile relocation down -v
