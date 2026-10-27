@@ -11,7 +11,7 @@ traffic, road-routing, or charging-station data.
 
 ## What the project demonstrates
 
-- Four independently running FastAPI services communicating over HTTP.
+- Five independently running FastAPI services communicating over HTTP, including the mock Facilities Service.
 - Simulated EV processes that register and continuously publish ordered telemetry.
 - Six representative Singapore zones: Jurong East, Woodlands, Bishan, Punggol,
   Tampines, and CBD.
@@ -34,6 +34,7 @@ Each service owns a separate part of the simulation:
 | Demand Service | Zone demand, charging observations, heat-map composition, and optional demand simulation | 8002 |
 | Rebalancing Service | Eligibility checks, scoring, ranking, and short-lived recommendations | 8003 |
 | Dispatch Service | Approval, claim coordination, commands, lifecycle events, and reconciliation | 8004 |
+| Facilities Service | Simulated parking, chargers and capacity observations | 8005 |
 | EV simulators | Simulated physical position, SOC, command polling, and movement | None |
 | Dashboard | Operator view, recommendation review, and explicit approval | 8080 |
 
@@ -65,12 +66,12 @@ separate Dispatch approval operation can start a relocation.
 - Docker Desktop with Docker Compose
 - PowerShell
 
-From the repository root, start all four services, two moving EV simulators, and
+From the repository root, start all five services, two moving EV simulators, and
 the dashboard:
 
 ```powershell
 docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
 ```
 
 Check that the containers are healthy:
@@ -156,6 +157,7 @@ Run these services in separate PowerShell terminals:
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.demand.app:app --port 8002 --workers 1
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.rebalancing.app:app --port 8003 --workers 1
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
+.\\.venv\\Scripts\\python.exe -m uvicorn ev_fleet.facilities.app:app --port 8005 --workers 1
 ```
 
 Run two moving EVs in two more terminals:
@@ -174,7 +176,7 @@ npm.cmd run dev
 ```
 
 Open <http://127.0.0.1:5173>. Vite proxies browser API requests to ports
-8001-8004, so backend CORS changes are not required.
+8001-8005, so backend CORS changes are not required.
 
 ### Local Kubernetes
 
@@ -195,7 +197,7 @@ optional and disabled by default. Enable it before starting Compose with:
 ```powershell
 $env:DEMAND_SIMULATION_ENABLED = 'true'
 docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
 ```
 
 Compose reads `.env` automatically. Native Python processes do not; set their
@@ -283,6 +285,7 @@ src/ev_fleet/demand/       Demand API, simulation, and heat-map composition
 src/ev_fleet/rebalancing/  Eligibility, strategies, ranking, and recommendations
 src/ev_fleet/dispatch/     Approval and relocation coordination
 src/ev_fleet/simulator/    Stationary and moving simulated EV processes
+src/ev_fleet/facilities/   Read-only mock parking/charging catalogue
 dashboard/                 React dashboard, Nginx proxy, and frontend tests
 k8s/                       Local Kubernetes resources
 tests/                     Python unit and integration tests
