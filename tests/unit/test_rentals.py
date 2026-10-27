@@ -105,6 +105,33 @@ def test_rental_start_and_dispatch_claim_are_mutually_exclusive(clock):
     asyncio.run(scenario())
 
 
+def test_rejected_relocation_telemetry_while_rented_does_not_mutate_fleet(clock):
+    async def scenario():
+        from ev_fleet.contracts.vehicles import TelemetryUpdate
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle()
+            state = await cluster.fleet.get("ev-1")
+            begin = RentalStart(rental_id=uuid4(), request_id=uuid4(),
+                                expected_version=state["state_version"],
+                                expected_end_at=clock.now() + timedelta(hours=2))
+            await cluster.fleet.start_rental("ev-1", begin)
+            before = await cluster.fleet.get("ev-1")
+            rejected = TelemetryUpdate(
+                session_id=cluster.sessions["ev-1"],
+                sequence=cluster.sequences["ev-1"] + 1, observed_at=clock.now(),
+                position={"latitude": 1.405, "longitude": 103.902}, soc_pct=40,
+                availability="UNAVAILABLE", relocation_state="RELOCATING",
+                active_dispatch_id=uuid4())
+            with pytest.raises(HTTPException) as exc:
+                await cluster.fleet.telemetry("ev-1", rejected)
+            assert exc.value.detail == "RENTED_RELOCATION_CONFLICT"
+            after = await cluster.fleet.get("ev-1")
+            assert after["state_version"] == before["state_version"]
+            assert after["telemetry"] == before["telemetry"]
+            assert after["active_rental"] == before["active_rental"]
+    asyncio.run(scenario())
+
+
 def test_rental_http_api_and_response_contract(clock):
     async def scenario():
         async with Cluster(clock) as cluster:
