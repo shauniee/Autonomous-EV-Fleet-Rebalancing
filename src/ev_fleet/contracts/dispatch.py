@@ -101,6 +101,8 @@ class Dispatch(Model):
     failure_reason: str | None
     claim_held: bool | None
     revalidated_metrics: dict | None = None
+    parking_facility_id: str | None = None
+    parking_status: Literal["RESERVED", "OCCUPIED", "RELEASED"] | None = None
 
 
 class DispatchList(Model):
@@ -109,3 +111,25 @@ class DispatchList(Model):
 
 class CommandList(Model):
     commands: list[RelocationCommand]
+
+class BatchApproval(Model):
+    request_id: UUID
+    batch_recommendation_id: UUID
+
+
+class BatchDispatchItem(Model):
+    recommendation_id: UUID
+    vehicle_id: str
+    facility_id: str
+    dispatch_id: UUID | None = None
+    state: str
+    error: str | None = None
+
+
+class BatchDispatch(Model):
+    request_id: UUID
+    batch_recommendation_id: UUID
+    requested_count: int = Field(ge=1)
+    recommended_count: int = Field(ge=0)
+    items: list[BatchDispatchItem]
+    status: Literal["APPROVED", "PARTIAL", "REJECTED", "UNKNOWN"]

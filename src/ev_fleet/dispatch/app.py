@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager, suppress
 from uuid import UUID
 import httpx
 from ev_fleet.common.logging import base_app
-from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList
+from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
 
 
@@ -29,6 +29,14 @@ def create_app(settings=None, client=None, clock=None, background=True):
     @app.post("/api/v1/dispatches", status_code=202, response_model=Dispatch)
     async def approve(body: DispatchApproval):
         return await app.state.service.approve(body)
+
+    @app.post("/api/v1/batches", status_code=202, response_model=BatchDispatch)
+    async def approve_batch(body: BatchApproval):
+        return await app.state.service.approve_batch(body)
+
+    @app.get("/api/v1/batches/{request_id}", response_model=BatchDispatch)
+    async def batch(request_id: UUID):
+        return await app.state.service.get_batch(request_id)
 
     @app.get("/api/v1/dispatches", response_model=DispatchList)
     async def dispatches(vehicle_id: str | None = None):
