@@ -72,7 +72,7 @@ kubectl -n ev-fleet get deployments,pods,services -o wide
 kubectl -n ev-fleet get endpointslices
 ```
 
-There should be eight `1/1` Deployments and six `ClusterIP` Services, including a read-only simulated Facilities Service. The only
+There should be nine `1/1` Deployments and seven `ClusterIP` Services, including simulated Facilities and the ephemeral Redis cache. The only
 vehicle Deployments are `ev-moving-01` and `ev-moving-02`; do not start the
 stationary Compose nodes with the same IDs.
 

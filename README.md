@@ -374,9 +374,10 @@ assumptions, test commands and safety limitations.
 
 ## Optional Redis dashboard caching
 
-Three **read-only** dashboard endpoints can now use an ephemeral Redis
-cache: fleet positions (1 second), demand heat-map (1 second) and mock
-parking/charger data (2 seconds). All decision-making and mutations
+The **demand heat-map** is cached by default (1-second TTL). Redis-backed
+Fleet and Facilities display endpoints are available for optional multi-operator
+load tests, but the default dashboard reads these two feeds directly because
+initial small-scale smoke measurements did not show a speed benefit. All decision-making and mutations
 continue through authoritative service APIs, not Redis. The dashboard
 remains usable when Redis is off or unavailable.
 
