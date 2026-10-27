@@ -132,6 +132,27 @@ def test_rejected_relocation_telemetry_while_rented_does_not_mutate_fleet(clock)
     asyncio.run(scenario())
 
 
+def test_rental_start_request_id_cannot_be_reused_for_different_rental(clock):
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle()
+            state = await cluster.fleet.get("ev-1")
+            rid = uuid4()
+            request_id = uuid4()
+            first = RentalStart(rental_id=rid, request_id=request_id,
+                                expected_version=state["state_version"],
+                                expected_end_at=clock.now() + timedelta(hours=2))
+            receipt = await cluster.fleet.start_rental("ev-1", first)
+            assert await cluster.fleet.start_rental("ev-1", first) == receipt
+            second = RentalStart(rental_id=uuid4(), request_id=request_id,
+                                 expected_version=(await cluster.fleet.get("ev-1"))["state_version"],
+                                 expected_end_at=first.expected_end_at)
+            with pytest.raises(HTTPException) as conflict:
+                await cluster.fleet.start_rental("ev-1", second)
+            assert conflict.value.detail == "RENTAL_REQUEST_ID_CONFLICT"
+    asyncio.run(scenario())
+
+
 def test_rental_http_api_and_response_contract(clock):
     async def scenario():
         async with Cluster(clock) as cluster:
