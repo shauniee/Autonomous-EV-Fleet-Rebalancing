@@ -119,4 +119,30 @@ describe('dispatcher dashboard', () => {
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual(bodies[1]);
   });
+  it('shows simulated parking/charger capacity for the selected zone without changing dispatch controls', async () => {
+    const site = {
+      facility_id: 'mock-cbd-01', name: 'CBD simulated parking 1', zone_id: 'cbd',
+      position: { latitude: 1.2842, longitude: 103.8532 },
+      parking_capacity: 90, parking_available: 12,
+      charging_bays: 12, charging_available: 6, connector_types: ['CCS2'],
+      status: 'OPEN', source: 'MOCK',
+    };
+    server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    const facility = await screen.findByTestId('facility-mock-cbd-01');
+    expect(facility).toHaveTextContent('CBD simulated parking 1');
+    expect(facility).toHaveTextContent('12 / 90');
+    expect(facility).toHaveTextContent('6 / 12');
+    expect(screen.getByText(/current EV recommendation does not use these spaces/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
+  });
+  it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
+    server({ '/api/facilities/facilities': new Error('Facilities down') });
+    render(<App/>);
+    expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
+    expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
+  });
 });
