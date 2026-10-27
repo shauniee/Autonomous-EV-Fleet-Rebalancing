@@ -7,6 +7,8 @@ data:
   DEMAND_URL: http://demand:8000
   REBALANCING_URL: http://rebalancing:8000
   FACILITIES_URL: http://facilities:8000
+  REDIS_URL: redis://redis:6379/0
+  DASHBOARD_CACHE_ENABLED: "true"
   TELEMETRY_INTERVAL_SECONDS: "5"
   STALE_SECONDS: "15"
   OFFLINE_SECONDS: "30"

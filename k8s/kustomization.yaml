@@ -9,6 +9,7 @@ resources:
   - backends.yaml
   - simulators.yaml
   - dashboard.yaml
+  - redis.yaml
 
 labels:
   - pairs:

@@ -6,7 +6,7 @@ vi.mock('../src/components/SingaporeMap', () => ({ SingaporeMap: () => <div>Map 
 
 function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
-    '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
+    '/api/demand/dashboard/heat-map': makeHeat(), '/api/fleet/dashboard/vehicles': makeFleet(),
     '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(), ...overrides,
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -46,14 +46,14 @@ describe('dispatcher dashboard', () => {
   it('keeps partial demand visible and null supply unknown', async () => {
     const heat = makeHeat(); heat.status = 'PARTIAL'; heat.fleet_status = 'UNAVAILABLE'; heat.issues = ['FLEET_UNAVAILABLE'];
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';
-    server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': new Error('Fleet down') }); render(<App/>);
+    server({ '/api/demand/dashboard/heat-map': heat, '/api/fleet/dashboard/vehicles': new Error('Fleet down') }); render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD UNKNOWN/ }));
     expect(screen.getByText(/FLEET_UNAVAILABLE/)).toBeInTheDocument();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled();
   });
   it('keeps fleet visible when Demand is unavailable', async () => {
-    server({ '/api/demand/heat-map': new Error('Demand down') }); render(<App/>);
+    server({ '/api/demand/dashboard/heat-map': new Error('Demand down') }); render(<App/>);
     expect(await screen.findByTestId('vehicle-ev-01')).toHaveTextContent('90%');
     expect(await screen.findByText(/Demand · unavailable/)).toBeInTheDocument();
   });
@@ -80,7 +80,7 @@ describe('dispatcher dashboard', () => {
   });
   it('shows stale telemetry and disables review while preserving the recommendation explanation', async () => {
     const fleet = makeFleet(); fleet.vehicles[0].stale = true;
-    server({ '/api/fleet/vehicles': fleet }); render(<App/>); await selectAndRecommend();
+    server({ '/api/fleet/dashboard/vehicles': fleet }); render(<App/>); await selectAndRecommend();
     expect(screen.getByTestId('vehicle-ev-01')).toHaveTextContent('STALE');
     expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeDisabled();
     expect(screen.getByText('Backend selected the highest scoring eligible EV.')).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe('dispatcher dashboard', () => {
       charging_bays: 12, charging_available: 6, connector_types: ['CCS2'],
       status: 'OPEN', source: 'MOCK',
     };
-    server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
+    server({ '/api/facilities/dashboard/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
     render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
     const facility = await screen.findByTestId('facility-mock-cbd-01');
@@ -138,7 +138,7 @@ describe('dispatcher dashboard', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
-    server({ '/api/facilities/facilities': new Error('Facilities down') });
+    server({ '/api/facilities/dashboard/facilities': new Error('Facilities down') });
     render(<App/>);
     expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
     expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
@@ -153,7 +153,7 @@ describe('dispatcher dashboard', () => {
       expected_end_at: new Date(Date.now() + 3600000).toISOString(),
       return_position: null, return_soc_pct: null,
     };
-    server({ '/api/fleet/vehicles': snapshot });
+    server({ '/api/fleet/dashboard/vehicles': snapshot });
     render(<App/>);
     const row = await screen.findByTestId('vehicle-ev-01');
     expect(row).toHaveTextContent('RENTED');
@@ -187,7 +187,7 @@ describe('dispatcher dashboard', () => {
     const fetch = server({
       '/api/rebalancing/batch-recommendations': batch,
       '/api/dispatch/batches': outcome,
-      '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
+      '/api/facilities/dashboard/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     });
     render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
