@@ -98,6 +98,13 @@ jobs:
           assert len(facilities2['facilities']) == 15
           print('Redis cache: warmed facilities snapshot is a HIT')
 
+          # Compare response times without requiring Redis to win on a small simulator.
+          subprocess_benchmark = __import__('subprocess')
+          subprocess_benchmark.run([
+              'python', 'scripts/benchmark_dashboard_cache.py',
+              '--base-url', origin, '--requests', '30'
+          ], check=True)
+
           # Redis downtime cannot prevent dashboard requests.
           import subprocess
           subprocess.run(['docker', 'compose', '--profile', 'relocation',

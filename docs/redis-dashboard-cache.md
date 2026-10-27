@@ -79,3 +79,17 @@ No throughput, improvement percentage or production readiness claim is made.
   Production deployment would require hardened networking and credentials.
 - Never use cached snapshots to decide eligibility, bypass optimistic version
   checks, approve an allocation, reserve a parking slot or claim a vehicle.
+
+### Repeatable timing smoke
+
+A paired, interleaved, **development-only** latency script is provided:
+
+```powershell
+python scripts/benchmark_dashboard_cache.py --base-url http://127.0.0.1:8080 --requests 100
+```
+
+It reports p50/p95 HTTP duration for each authoritative path versus its
+cached dashboard counterpart, with observed HIT/MISS/BYPASS distribution.
+The CI Compose smoke job prints a smaller 30-pair sample while Redis runs.
+Results are environment-dependent and not research conclusions. Measure
+multiple trials and steady state before claiming improvements.
