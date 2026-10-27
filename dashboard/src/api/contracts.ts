@@ -39,3 +39,12 @@ export interface Dispatch {
 export interface DispatchList { dispatches: Dispatch[] }
 export interface Claim { origin: Position }
 export interface Approval { request_id: string; recommendation_id: string }
+
+// Phase 5A: separate read-only MOCK facilities feed; NOT used by dispatch decisions.
+export interface Facility {
+  facility_id: string; name: string; zone_id: string; position: Position;
+  parking_capacity: number; parking_available: number;
+  charging_bays: number; charging_available: number;
+  connector_types: string[]; status: 'OPEN' | 'CLOSED'; source: 'MOCK';
+}
+export interface FacilitiesSnapshot { generated_at: string; data_source: 'MOCK'; facilities: Facility[] }

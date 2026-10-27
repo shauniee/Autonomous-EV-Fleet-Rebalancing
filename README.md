@@ -317,3 +317,17 @@ results/                    Preserved Phase 4 evaluation output
 - [Dashboard behaviour](docs/phase3b-dashboard.md)
 - [Local Kubernetes deployment](docs/kubernetes-local.md)
 - [Implementation history](docs/implementation-plan.md)
+
+## Phase 5A: simulated parking and charging catalogue
+
+A separate read-only Facilities Service now provides 15 clearly labelled MOCK
+parking/charging locations across the six simulated zones. The dispatcher map
+shows their pins and per-zone capacities, independently of Fleet/Demand health.
+This is **display and API groundwork only**: the current single-EV ranking,
+approval and relocation behavior does not use or reserve parking. Mock charger
+bays are included in (not added to) reported parking capacity. Docker Compose
+and the local Kubernetes manifests include the new Facilities Service.
+
+See [Phase 5A guide](docs/phase5a-mock-facilities.md) for endpoints, scope,
+verification instructions and the planned rental / multi-EV / parking allocation
+extensions. Historical Phase 4 evidence remains unchanged.

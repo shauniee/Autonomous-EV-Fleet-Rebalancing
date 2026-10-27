@@ -75,6 +75,11 @@ services:
     command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--vehicle-id", "ev-02", "--zone", "tampines", "--soc", "35"]
     depends_on:
       fleet: {condition: service_healthy}
+  facilities:
+    <<: *backend
+    profiles: [relocation]
+    command: ["uvicorn", "ev_fleet.facilities.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports: ["127.0.0.1:${FACILITIES_PORT:-8005}:8000"]
   dispatch:
     <<: *backend
     profiles: [relocation]

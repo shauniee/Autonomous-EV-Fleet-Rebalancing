@@ -5,7 +5,7 @@ export default defineConfig(({ mode }) => {
   return {
     server: {
       strictPort: true,
-      proxy: Object.fromEntries(['fleet', 'demand', 'rebalancing', 'dispatch'].map((service, i) => [
+      proxy: Object.fromEntries(['fleet', 'demand', 'rebalancing', 'dispatch', 'facilities'].map((service, i) => [
         `/api/${service}`, {
           target: env[`${service.toUpperCase()}_URL`] || `http://127.0.0.1:${8001 + i}`,
           rewrite: (path: string) => path.replace(`/api/${service}`, '/api/v1'),

@@ -72,7 +72,7 @@ kubectl -n ev-fleet get deployments,pods,services -o wide
 kubectl -n ev-fleet get endpointslices
 ```
 
-There should be seven `1/1` Deployments and five `ClusterIP` Services. The only
+There should be eight `1/1` Deployments and six `ClusterIP` Services, including a read-only simulated Facilities Service. The only
 vehicle Deployments are `ev-moving-01` and `ev-moving-02`; do not start the
 stationary Compose nodes with the same IDs.
 
@@ -92,7 +92,7 @@ kubectl -n ev-fleet port-forward service/dashboard 8080:80
 ```
 
 Open <http://127.0.0.1:8080>. Only the dashboard is forwarded. Fleet, Demand,
-Rebalancing, and Dispatch remain internal `ClusterIP` Services; the dashboard
+Rebalancing, Dispatch and Facilities remain internal `ClusterIP` Services; the dashboard
 proxies same-origin `/api/...` requests to them through Kubernetes service DNS.
 
 If port 8080 is occupied, use `18080:80` and substitute port 18080 below.

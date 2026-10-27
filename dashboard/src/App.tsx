@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, Dispatch, DispatchList, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
+import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { Badge, time } from './components/format';
 import { DispatchConfirmation, FleetPanel, RecommendationPanel, RelocationPanel, ServiceStatus, ZoneDetails } from './components/Panels';
 
@@ -17,6 +18,7 @@ export default function App() {
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
   const fleet = usePolling<Fleet>('/api/fleet/vehicles');
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
+  const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const [selected, setSelected] = useState('');
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [recommending, setRecommending] = useState(false);
@@ -51,6 +53,7 @@ export default function App() {
   }, []);
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
+  const sites = facilities.data?.facilities ?? [];
   const zone = zones.find(z => z.zone_id === selected);
   const current = recommendation && vehicles.find(v => v.vehicle_id === recommendation.selected_vehicle_id);
   const fresh = !!heat.data && !heat.error && !!fleet.data && !fleet.error && heat.data.fleet_status === 'FRESH'
@@ -91,16 +94,16 @@ export default function App() {
   }
   return <div className="app">
     <header><div className="brand-icon" aria-hidden="true">↗</div><div><div className="eyebrow">Operations / Singapore</div><h1>Fleet Dispatch</h1></div><span className="simulation">SIMULATION</span></header>
-    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
+    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name="Facilities (mock)" resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
     <main>
-      <div className="page-intro"><div><h2>A clear view. An informed move.</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); }}>Refresh now</button></div>
+      <div className="page-intro"><div><h2>A clear view. An informed move.</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); }}>Refresh now</button></div>
       {(heat.error || fleet.error || dispatches.error) && <p className="warning" role="status">Some services are unavailable. Retained observations are last known, not live. Healthy panels continue updating.</p>}
       {heat.data?.status === 'PARTIAL' && <p className="warning" role="status">Demand response is partial · Fleet {heat.data.fleet_status}. {heat.data.issues.join(' · ')}</p>}
       {error && <p className="warning" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
-        <SingaporeMap zones={zones} vehicles={vehicles} selected={selected} onSelect={choose}/>
-        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span></div>
+        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} selected={selected} onSelect={choose}/>
+        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span><span>● Mock parking (teal)</span><span>● Mock charging (amber)</span></div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
         <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · Approximate simulation coordinates</p>
@@ -109,6 +112,7 @@ export default function App() {
         {zone && !fresh && <p className="warning">Fresh demand and fleet data are required to request or approve a recommendation.</p>}
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
       </aside></div>
+      <FacilitiesPanel facilities={sites} selectedZone={selected} error={facilities.error}/>
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>
     </main>{confirming && recommendation && <DispatchConfirmation recommendation={recommendation} vehicle={current || undefined} expired={!!approvalBlocked} onClose={() => setConfirming(false)} onApprove={() => void approve()}/>}
