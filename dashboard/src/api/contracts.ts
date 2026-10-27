@@ -36,13 +36,14 @@ export interface Dispatch {
   command: { target_zone_id: string; target_position: Position } | null;
   created_at: string; acknowledged_at: string | null; last_contact_at: string | null;
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
+  parking_facility_id?: string | null; parking_status?: string | null;
   claim_held: boolean | null; revalidated_metrics: { distance_km?: number } | null;
 }
 export interface DispatchList { dispatches: Dispatch[] }
 export interface Claim { origin: Position }
 export interface Approval { request_id: string; recommendation_id: string }
 
-// Phase 5A: separate read-only MOCK facilities feed; NOT used by dispatch decisions.
+// Phase 5C: simulated facilities become capacity-aware for approved bulk dispatch.
 export interface Facility {
   facility_id: string; name: string; zone_id: string; position: Position;
   parking_capacity: number; parking_available: number;
@@ -50,3 +51,25 @@ export interface Facility {
   connector_types: string[]; status: 'OPEN' | 'CLOSED'; source: 'MOCK';
 }
 export interface FacilitiesSnapshot { generated_at: string; data_source: 'MOCK'; facilities: Facility[] }
+
+export interface ParkingAssignment {
+  recommendation_id: string; vehicle_id: string; facility_id: string; facility_name: string;
+  target_position: Position; requires_charging: boolean; distance_km: number;
+  predicted_arrival_soc_pct: number; score: number;
+}
+export interface BatchRecommendation {
+  batch_recommendation_id: string; target_zone_id: string;
+  requested_count: number; recommended_count: number; unfulfilled_count: number;
+  created_at: string; expires_at: string; explanation: string;
+  assignments: ParkingAssignment[]; assumptions: string[];
+}
+export interface BatchApproval { request_id: string; batch_recommendation_id: string }
+export interface BatchDispatchItem {
+  recommendation_id: string; vehicle_id: string; facility_id: string;
+  dispatch_id: string | null; state: string; error: string | null;
+}
+export interface BatchDispatch {
+  request_id: string; batch_recommendation_id: string; requested_count: number;
+  recommended_count: number; items: BatchDispatchItem[];
+  status: 'APPROVED' | 'PARTIAL' | 'REJECTED' | 'UNKNOWN';
+}

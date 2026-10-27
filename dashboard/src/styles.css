@@ -110,3 +110,9 @@ header{padding:18px}
 
 /* Phase 5B simulated rental visibility. */
 .rented{background:#fff0d4;color:#8c5a14}
+
+/* Phase 5C operator-selected EV count. */
+.quantity-picker{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:15px 0}
+.quantity-picker label{font-weight:600;font-size:12px}
+.quantity-picker input{width:78px;border:1px solid #cad7d6;border-radius:7px;padding:9px;font:inherit;text-align:center}
+.quantity-picker input:focus-visible{outline:3px solid #327dd1}

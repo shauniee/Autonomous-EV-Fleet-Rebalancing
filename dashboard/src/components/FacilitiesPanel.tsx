@@ -6,7 +6,7 @@ export function FacilitiesPanel({ facilities, selectedZone, error }: {
   const visible = selectedZone ? facilities.filter(site => site.zone_id === selectedZone) : [];
   return <section className="panel" aria-label="Mock parking and charging facilities">
     <div className="section-title"><h2>Parking & charging facilities</h2><span className="mock-tag">SIMULATED · NOT RESERVABLE</span></div>
-    <p className="muted">Fictional facility positions and capacities, for developing future destination selection. The current EV recommendation does not use these spaces.</p>
+    <p className="muted">Fictional facility positions and capacities, for developing future destination selection. The single-EV recommendation remains zone-based. Bulk recommendations use these mock spaces and check capacity again on approval.</p>
     {error && <p className="warning" role="status">Facilities service unavailable. {facilities.length ? 'Last known mock data shown.' : 'No mock locations loaded.'}</p>}
     {!selectedZone && <p className="empty">Select a zone above to inspect its simulated parking and charging facilities. {facilities.length} mock map markers available.</p>}
     {selectedZone && !visible.length && <p className="empty">No mock facilities available for this zone.</p>}
