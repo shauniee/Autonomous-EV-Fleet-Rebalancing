@@ -38,3 +38,20 @@ class FacilitiesSnapshot(Model):
     generated_at: AwareDatetime
     data_source: Literal["MOCK"] = "MOCK"
     facilities: list[Facility]
+
+from uuid import UUID
+
+class ParkingHoldRequest(Model):
+    dispatch_id: UUID
+    vehicle_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    expected_zone_id: str
+    expected_position: Position
+    requires_charging: bool = False
+
+class ParkingHold(Model):
+    dispatch_id: UUID
+    vehicle_id: str
+    facility_id: str
+    requires_charging: bool
+    charging_allocated: bool
+    status: Literal["RESERVED", "OCCUPIED", "RELEASED"]

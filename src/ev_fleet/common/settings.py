@@ -14,6 +14,7 @@ class Settings(Model):
     charging_max_age_seconds: float = Field(default=3600, gt=0)
     fleet_url: str = "http://localhost:8001"
     demand_url: str = "http://localhost:8002"
+    facilities_url: str = "http://localhost:8005"
 
     @model_validator(mode="after")
     def thresholds(self):
