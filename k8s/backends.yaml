@@ -275,4 +275,73 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
-
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: facilities
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: facilities
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: facilities
+        app.kubernetes.io/component: backend
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: facilities
+          image: csc3104/ev-fleet-backend:k8s-local
+          imagePullPolicy: Never
+          command: ["uvicorn"]
+          args: ["ev_fleet.facilities.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+          envFrom:
+            - configMapRef:
+                name: ev-fleet-config
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

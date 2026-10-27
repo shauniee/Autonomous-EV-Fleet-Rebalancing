@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, model_validator
 from .common import Model, Observation, Position
 from .dispatch import VehicleClaim
+from .rentals import RentalRecord
 
 
 class Availability(str, Enum):
@@ -48,6 +49,7 @@ class VehicleState(VehicleRegistration):
     stale: bool
     connectivity: Literal["ONLINE", "OFFLINE"]
     active_claim: VehicleClaim | None = None
+    active_rental: RentalRecord | None = None
     effective_availability: Availability = Availability.UNAVAILABLE
     current_zone_id: str | None = None
     effective_relocation_state: RelocationState = RelocationState.IDLE

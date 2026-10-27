@@ -11,7 +11,7 @@ traffic, road-routing, or charging-station data.
 
 ## What the project demonstrates
 
-- Four independently running FastAPI services communicating over HTTP.
+- Five independently running FastAPI services communicating over HTTP, including the mock Facilities Service.
 - Simulated EV processes that register and continuously publish ordered telemetry.
 - Six representative Singapore zones: Jurong East, Woodlands, Bishan, Punggol,
   Tampines, and CBD.
@@ -34,6 +34,7 @@ Each service owns a separate part of the simulation:
 | Demand Service | Zone demand, charging observations, heat-map composition, and optional demand simulation | 8002 |
 | Rebalancing Service | Eligibility checks, scoring, ranking, and short-lived recommendations | 8003 |
 | Dispatch Service | Approval, claim coordination, commands, lifecycle events, and reconciliation | 8004 |
+| Facilities Service | Simulated parking, chargers and capacity observations | 8005 |
 | EV simulators | Simulated physical position, SOC, command polling, and movement | None |
 | Dashboard | Operator view, recommendation review, and explicit approval | 8080 |
 
@@ -65,12 +66,12 @@ separate Dispatch approval operation can start a relocation.
 - Docker Desktop with Docker Compose
 - PowerShell
 
-From the repository root, start all four services, two moving EV simulators, and
+From the repository root, start all five services, two moving EV simulators, and
 the dashboard:
 
 ```powershell
 docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
 ```
 
 Check that the containers are healthy:
@@ -156,6 +157,7 @@ Run these services in separate PowerShell terminals:
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.demand.app:app --port 8002 --workers 1
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.rebalancing.app:app --port 8003 --workers 1
 .\.venv\Scripts\python.exe -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
+.\\.venv\\Scripts\\python.exe -m uvicorn ev_fleet.facilities.app:app --port 8005 --workers 1
 ```
 
 Run two moving EVs in two more terminals:
@@ -174,7 +176,7 @@ npm.cmd run dev
 ```
 
 Open <http://127.0.0.1:5173>. Vite proxies browser API requests to ports
-8001-8004, so backend CORS changes are not required.
+8001-8005, so backend CORS changes are not required.
 
 ### Local Kubernetes
 
@@ -195,7 +197,7 @@ optional and disabled by default. Enable it before starting Compose with:
 ```powershell
 $env:DEMAND_SIMULATION_ENABLED = 'true'
 docker compose --profile relocation up --build -d --wait `
-  fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+  fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
 ```
 
 Compose reads `.env` automatically. Native Python processes do not; set their
@@ -283,6 +285,7 @@ src/ev_fleet/demand/       Demand API, simulation, and heat-map composition
 src/ev_fleet/rebalancing/  Eligibility, strategies, ranking, and recommendations
 src/ev_fleet/dispatch/     Approval and relocation coordination
 src/ev_fleet/simulator/    Stationary and moving simulated EV processes
+src/ev_fleet/facilities/   Read-only mock parking/charging catalogue
 dashboard/                 React dashboard, Nginx proxy, and frontend tests
 k8s/                       Local Kubernetes resources
 tests/                     Python unit and integration tests
@@ -317,3 +320,54 @@ results/                    Preserved Phase 4 evaluation output
 - [Dashboard behaviour](docs/phase3b-dashboard.md)
 - [Local Kubernetes deployment](docs/kubernetes-local.md)
 - [Implementation history](docs/implementation-plan.md)
+
+## Phase 5A: simulated parking and charging catalogue
+
+A separate simulated Facilities Service now provides 15 clearly labelled MOCK
+parking/charging locations across the six simulated zones. The dispatcher map
+shows their pins and per-zone capacities, independently of Fleet/Demand health.
+The legacy single-EV ranking remains zone-based; the Phase 5C batch pathway now
+uses mock parking capacity, but must be treated as an in-memory simulation. Mock charger
+bays are included in (not added to) reported parking capacity. Docker Compose
+and the local Kubernetes manifests include the new Facilities Service.
+
+See [Phase 5A guide](docs/phase5a-mock-facilities.md) for endpoints, scope,
+verification instructions and the planned rental / multi-EV / parking allocation
+extensions. Historical Phase 4 evidence remains unchanged.
+
+## Phase 5B: simulated free-floating rentals
+
+Fleet now tracks simulated rental start and confirmed return events via
+version-checked, idempotent HTTP endpoints. A rented EV cannot be ranked or
+claimed for immediate relocation, even if regular vehicle telemetry reports
+AVAILABLE. The return position and SOC are taken from fresh telemetry that
+arrived **after** rental start, so the customer may end at any position inside
+the simulated operating envelope. Confirmed rental status and expected return
+time appear in the Fleet dashboard and EV map. Rental state is in memory and
+does not survive restarts. There is **no pre-dispatch, parking allocation or
+automatic rental simulator** yet. For API examples and tests, see
+[Phase 5B guide](docs/phase5b-rental-lifecycle.md).
+
+
+## Phase 5C: multi-EV parking-aware allocation
+
+The dispatcher can request **1–20 EVs** for any selected zone using the
+parking-aware workflow. The backend ranks eligible EV–facility pairs with a
+deterministic greedy heuristic (existing 85% energy-aware score + 15% parking
+availability ratio), respects mock parking capacity and charging needs, and
+proposes partial fulfilment when insufficient vehicles/spaces exist.
+
+Batch recommendations do not hold vehicles or parking places. Explicit batch
+approval revalidates capacity and EV eligibility. The Facilities Service
+atomically holds mock parking slots before Fleet vehicle claims; completed
+arrivals mark slots occupied. Child dispatch outcomes are reported individually;
+the existing single-EV path remains available.
+
+**Not production-ready:** all reservations, rentals, batch state and mock
+occupancy remain process-local. Single replicas remain mandatory until durable
+PostgreSQL transactions and cross-service reconciliation are implemented.
+No rental-driving simulator, real parking reservation, charging provider, or
+live data integration is included.
+
+See [Phase 5C guide](docs/phase5c-bulk-parking.md) for API usage,
+assumptions, test commands and safety limitations.

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import type { Vehicle, Zone } from '../api/contracts';
+import type { Facility, Vehicle, Zone } from '../api/contracts';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 
-export function SingaporeMap({ zones, vehicles, selected, onSelect }: {
-  zones: Zone[]; vehicles: Vehicle[]; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSelect }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; selected: string; onSelect: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -42,15 +42,24 @@ export function SingaporeMap({ zones, vehicles, selected, onSelect }: {
         fillColor: colours[zone.hotspot_severity], fillOpacity: .65, weight: selected === zone.zone_id ? 4 : 2,
       }).bindTooltip(label).on('click', () => onSelect(zone.zone_id)).addTo(layer);
     }
+    for (const facility of facilities) {
+      const label = document.createElement('span');
+      label.textContent = `${facility.name} · MOCK · ${facility.status} · parking ${facility.parking_available}/${facility.parking_capacity} · charging ${facility.charging_available}/${facility.charging_bays}`;
+      const hasChargers = facility.charging_bays > 0;
+      const markerColour = facility.status === 'CLOSED' ? '#76838a' : hasChargers ? '#a96817' : '#287d83';
+      L.circleMarker([facility.position.latitude, facility.position.longitude], {
+        radius: 6, color: '#fff', weight: 2, fillColor: markerColour, fillOpacity: 1,
+      }).bindTooltip(label).addTo(layer);
+    }
     for (const vehicle of vehicles) {
       if (!vehicle.telemetry) continue;
       const label = document.createElement('span');
-      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}`;
+      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
       L.circleMarker([vehicle.telemetry.position.latitude, vehicle.telemetry.position.longitude], {
-        radius: 6, color: '#fff', weight: 2, fillColor: vehicle.stale ? '#76838a' : '#163c63', fillOpacity: 1,
+        radius: 6, color: '#fff', weight: 2, fillColor: vehicle.stale ? '#76838a' : vehicle.active_rental ? '#ba791d' : '#163c63', fillOpacity: 1,
       }).bindTooltip(label).addTo(layer);
     }
     return () => { layer.remove(); };
-  }, [zones, vehicles, selected, onSelect]);
-  return <><div ref={element} className="map" aria-label="Singapore zones and fleet map"/>{tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}</>;
+  }, [zones, vehicles, facilities, selected, onSelect]);
+  return <><div ref={element} className="map" aria-label="Singapore zones, fleet, and mock parking or charging sites map"/>{tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}</>;
 }

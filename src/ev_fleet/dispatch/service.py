@@ -1,13 +1,16 @@
 import asyncio
 import logging
-from uuid import uuid4
+from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings
 from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, VehicleClaim
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
-from ev_fleet.contracts.recommendations import Recommendation
+from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
+from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
+from ev_fleet.contracts.dispatch import DispatchApproval
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchStore
@@ -22,6 +25,9 @@ class DispatchService:
         self.settings = settings or DispatchSettings.from_env()
         self.clock = clock or Clock()
         self.store = DispatchStore(self.clock)
+        self.batch_lock = asyncio.Lock()
+        self.batches = {}
+        self.batch_recommendations = {}
 
     def transition(self, record, state, reason=None):
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
@@ -49,19 +55,45 @@ class DispatchService:
         if vehicle is None:
             raise HTTPException(409, "VEHICLE_NOT_FOUND")
         policy = Settings(**recommendation.policy_settings)
-        assessment = assess(vehicle.model_dump(mode="json"), target.model_dump(mode="json"), policy, self.clock.now())
+        parking = None
+        destination = target.position
+        assessed_target = target.model_dump(mode="json")
+        if recommendation.parking_facility_id:
+            parking = await request_json(self.client, "GET",
+                f"{self.settings.facilities_url}/api/v1/facilities/{recommendation.parking_facility_id}",
+                model=Facility)
+            if (parking.zone_id != target.zone_id or parking.status != "OPEN"
+                    or parking.parking_available <= 0 or parking.source != "MOCK"
+                    or parking.position != recommendation.target_position):
+                raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
+            destination = parking.position
+            assessed_target["position"] = parking.position.model_dump(mode="json")
+            assessed_target["charging"] = {
+                "observed_at": self.clock.now().isoformat(),
+                "available_slots": parking.charging_available}
+        assessment = assess(vehicle.model_dump(mode="json"), assessed_target, policy, self.clock.now())
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
+        if parking:
+            requires_charge = (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+                               or recommendation.requires_charging)
+            if requires_charge and parking.charging_available <= 0:
+                raise HTTPException(409, "CHARGING_FULL")
+            record.data["parking_facility_id"] = parking.facility_id
+            record.parking_request = ParkingHoldRequest(
+                dispatch_id=record.data["dispatch_id"], vehicle_id=vehicle.vehicle_id,
+                expected_zone_id=target.zone_id, expected_position=parking.position,
+                requires_charging=requires_charge).model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
             expected_version=vehicle.state_version, target_zone_id=target.zone_id,
-            target_position=target.position, approve_before=recommendation.expires_at,
+            target_position=destination, approve_before=recommendation.expires_at,
             min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
             route_factor=max(policy.route_factor, self.settings.route_factor),
             energy_margin_factor=max(policy.energy_margin_factor, self.settings.energy_margin_factor))
         command = RelocationCommand(dispatch_id=record.data["dispatch_id"], command_id=command_id,
             vehicle_id=vehicle.vehicle_id, fleet_instance_id=fleet.instance_id,
-            target_zone_id=target.zone_id, target_position=target.position, issued_at=self.clock.now(),
+            target_zone_id=target.zone_id, target_position=destination, issued_at=self.clock.now(),
             min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
             energy_margin_factor=claim.energy_margin_factor)
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
@@ -70,6 +102,15 @@ class DispatchService:
         record.claim_request = claim.model_dump(mode="json")
 
     async def acquire(self, record):
+        if record.parking_request:
+            hold = await request_json(self.client, "POST",
+                f"{self.settings.facilities_url}/api/v1/facilities/{record.data['parking_facility_id']}/holds",
+                record.parking_request, model=ParkingHold)
+            if (str(hold.dispatch_id) != record.data["dispatch_id"] or
+                    hold.vehicle_id != record.data["vehicle_id"] or
+                    hold.facility_id != record.data["parking_facility_id"] or hold.status != "RESERVED"):
+                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+            record.data["parking_status"] = hold.status
         receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
         self.check_receipt(record, receipt)
         record.claimed = True
@@ -79,6 +120,7 @@ class DispatchService:
         record.data["claim_held"] = receipt.status == "ACTIVE"
         if receipt.status == "RELEASED":
             self.finish(record, receipt.outcome)
+            await self.sync_parking(record)
         else:
             self.transition(record, "PENDING")
 
@@ -96,6 +138,28 @@ class DispatchService:
         self.transition(record, "SUCCEEDED" if outcome == "ARRIVED" else "REJECTED",
                         None if outcome == "ARRIVED" else "EV_REJECTED_COMMAND")
 
+    async def sync_parking(self, record):
+        """Complete on verified arrival; release only after a known released claim."""
+        if record.data["parking_status"] != "RESERVED" or record.data["claim_held"] is not False:
+            return
+        state = record.data["state"]
+        if state not in TERMINAL:
+            return
+        action = "complete" if state == "SUCCEEDED" else "release"
+        try:
+            receipt = await request_json(self.client, "POST",
+                f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/{action}",
+                model=ParkingHold)
+            wanted = "OCCUPIED" if action == "complete" else "RELEASED"
+            if (str(receipt.dispatch_id) != record.data["dispatch_id"] or
+                    receipt.facility_id != record.data["parking_facility_id"] or
+                    receipt.status != wanted):
+                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+            record.data["parking_status"] = receipt.status
+        except HTTPException as exc:
+            logging.warning("parking finalisation pending dispatch=%s error=%s",
+                            record.data["dispatch_id"], exc.detail)
+
     async def approve(self, body):
         record = await self.store.begin(body)
         async with record.lock:
@@ -106,6 +170,20 @@ class DispatchService:
                     await self.prepare(record)
                 await self.acquire(record)
             except HTTPException as exc:
+                # Only definite claim failures may free a parking reservation.
+                # Lost responses keep the reservation until reconciliation.
+                if (exc.status_code in (404, 409, 422) and not record.claimed
+                        and record.data["parking_status"] == "RESERVED"):
+                    try:
+                        released = await request_json(self.client, "POST",
+                            f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
+                            model=ParkingHold)
+                        if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
+                            raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
+                        record.data["parking_status"] = "RELEASED"
+                    except HTTPException:
+                        self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
+                        return record.view()
                 self.handle_approval_error(record, exc)
                 if exc.status_code in (404, 409, 422):
                     raise HTTPException(409, exc.detail) from exc
@@ -121,6 +199,7 @@ class DispatchService:
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
         if record.data["state"] in TERMINAL:
+            await self.sync_parking(record)
             return
         if not record.claimed:
             try:
@@ -135,6 +214,7 @@ class DispatchService:
             self.check_receipt(record, receipt)
             if receipt.status == "RELEASED":
                 self.finish(record, receipt.outcome)
+                await self.sync_parking(record)
                 return
             record.data["claim_held"] = True
             vehicle = await request_json(self.client, "GET",
@@ -177,6 +257,7 @@ class DispatchService:
                 if receipt.status != "RELEASED" or receipt.outcome != outcome:
                     raise HTTPException(503, "RELEASE_NOT_CONFIRMED")
                 self.finish(record, outcome)
+                await self.sync_parking(record)
                 return
             if record.claim_tick is not None and record.data["acknowledged_at"] is None:
                 if self.clock.monotonic() - record.claim_tick >= self.settings.ack_timeout_seconds:
@@ -279,10 +360,69 @@ class DispatchService:
                 self.transition(record, "IN_PROGRESS")
             return record.view()
 
+    def batch_view(self, data):
+        items = list(data["items"])
+        approved = sum(item["state"] not in ("REJECTED", "UNKNOWN") for item in items)
+        unknown = sum(item["state"] == "UNKNOWN" for item in items)
+        status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
+                  else "PARTIAL" if approved else "REJECTED")
+        return {**data, "status": status}
+
+    async def approve_batch(self, body):
+        key = str(body.request_id)
+        async with self.batch_lock:
+            data = self.batches.get(key)
+            if data is not None and data["batch_recommendation_id"] != str(body.batch_recommendation_id):
+                raise HTTPException(409, "BATCH_REQUEST_ID_CONFLICT")
+            if data is None:
+                rec = await request_json(self.client, "GET",
+                    f"{self.settings.rebalancing_url}/api/v1/batch-recommendations/{body.batch_recommendation_id}",
+                    model=BatchRecommendation)
+                if rec.batch_recommendation_id != body.batch_recommendation_id:
+                    raise HTTPException(503, "BATCH_IDENTITY_MISMATCH")
+                if rec.expires_at <= self.clock.now():
+                    raise HTTPException(409, "BATCH_EXPIRED")
+                if not rec.assignments:
+                    raise HTTPException(409, "NO_BATCH_ASSIGNMENTS")
+                existing = self.batch_recommendations.get(str(body.batch_recommendation_id))
+                if existing is not None and existing != key:
+                    raise HTTPException(409, "BATCH_ALREADY_APPROVED")
+                data = {"request_id": key, "batch_recommendation_id": str(body.batch_recommendation_id),
+                        "requested_count": rec.requested_count,
+                        "recommended_count": rec.recommended_count,
+                        "items": [{"recommendation_id": str(a.recommendation_id),
+                                   "vehicle_id": a.vehicle_id, "facility_id": a.facility_id,
+                                   "dispatch_id": None, "state": "PENDING", "error": None}
+                                  for a in rec.assignments]}
+                self.batches[key] = data
+                self.batch_recommendations[str(body.batch_recommendation_id)] = key
+            for item in data["items"]:
+                if item["state"] not in ("PENDING", "UNKNOWN"):
+                    continue
+                # Stable child idempotency key across HTTP retries.
+                child_id = uuid5(body.request_id, item["recommendation_id"])
+                try:
+                    result = await self.approve(DispatchApproval(
+                        request_id=child_id, recommendation_id=item["recommendation_id"]))
+                    item["dispatch_id"] = result["dispatch_id"]
+                    item["state"] = result["state"]
+                    item["error"] = result.get("failure_reason")
+                except HTTPException as exc:
+                    item["state"] = "REJECTED" if exc.status_code in (404, 409, 422) else "UNKNOWN"
+                    item["error"] = str(exc.detail)
+            return self.batch_view(data)
+
+    async def get_batch(self, request_id):
+        data = self.batches.get(str(request_id))
+        if data is None:
+            raise HTTPException(404, "BATCH_NOT_FOUND")
+        return self.batch_view(data)
+
     async def reconcile_loop(self):
         while True:
             for record in list(self.store.records.values()):
-                if record.lock.locked() or record.data["state"] in TERMINAL:
+                if record.lock.locked() or (record.data["state"] in TERMINAL
+                    and record.data["parking_status"] != "RESERVED"):
                     continue
                 try:
                     async with record.lock:

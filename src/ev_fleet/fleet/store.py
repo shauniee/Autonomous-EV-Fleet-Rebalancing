@@ -1,5 +1,6 @@
 import asyncio
 from uuid import uuid4
+from datetime import timedelta
 from copy import deepcopy
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
@@ -26,7 +27,9 @@ class FleetStore:
             record = {"registration": registration, "telemetry": None,
                       "session_id": None, "session_request_id": None,
                       "retired_requests": set(), "state_version": 1,
-                      "active_claim": None, "claims": {}, "current_zone_id": None}
+                      "active_claim": None, "claims": {}, "current_zone_id": None,
+                      "active_rental": None, "rentals": {},
+                      "rental_start_requests": {}, "rental_return_requests": {}}
             self.vehicles[key] = record
             self.version += 1
             return self.view(record)
@@ -68,9 +71,12 @@ class FleetStore:
             age = (now - update.observed_at).total_seconds()
             if age < -5 or age >= self.settings.stale_seconds:
                 raise HTTPException(422, "OBSERVATION_TIME_INVALID")
+            # Reject impossible relocation telemetry BEFORE mutating the vehicle record.
+            if record["active_rental"] is not None and (update.relocation_state != "IDLE" or update.active_dispatch_id is not None):
+                raise HTTPException(409, "RENTED_RELOCATION_CONFLICT")
             record.update(telemetry=update, received_at=now,
                           received_tick=self.clock.monotonic(), initial_age=max(0, age))
-            if update.relocation_state == "RELOCATING":
+            if update.relocation_state == "RELOCATING" or record["active_rental"] is not None:
                 record["current_zone_id"] = None
             record["state_version"] += 1
             self.version += 1
@@ -88,15 +94,110 @@ class FleetStore:
                 "received_at": record["received_at"].isoformat() if telemetry else None,
                 "telemetry_age_seconds": age, "stale": stale,
                 "active_claim": deepcopy(record["active_claim"]),
+                "active_rental": deepcopy(record["active_rental"]),
                 "current_zone_id": record["current_zone_id"],
                 "effective_relocation_state": ("DISPATCHED" if record["active_claim"] and (
                     not telemetry or telemetry.relocation_state == "IDLE") else
                     telemetry.relocation_state.value if telemetry else "IDLE"),
                 "effective_availability": "AVAILABLE" if (
-                    not stale and not record["active_claim"] and telemetry
+                    not stale and not record["active_claim"] and record["active_rental"] is None and telemetry
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
                     and telemetry.active_dispatch_id is None) else "UNAVAILABLE",
                 "connectivity": "OFFLINE" if age is None or age >= self.settings.offline_seconds else "ONLINE"}
+
+    async def start_rental(self, vehicle_id, body):
+        """Start a simulated free-floating rental. A rental blocks both ranking and claims."""
+        key = str(body.rental_id)
+        async with self.lock:
+            record = self.record(vehicle_id)
+            previous = record["rentals"].get(key)
+            if previous:
+                if previous["start_request"] != body:
+                    raise HTTPException(409, "RENTAL_ID_CONFLICT")
+                return deepcopy(previous["start_receipt"])
+            if str(body.request_id) in record["rental_start_requests"]:
+                raise HTTPException(409, "RENTAL_REQUEST_ID_CONFLICT")
+            if record["active_rental"] is not None:
+                raise HTTPException(409, "RENTAL_ALREADY_ACTIVE")
+            if record["state_version"] != body.expected_version:
+                raise HTTPException(409, "VEHICLE_VERSION_CONFLICT")
+            if self.view(record)["effective_availability"] != "AVAILABLE":
+                raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE")
+            now = self.clock.now()
+            if body.expected_end_at <= now or body.expected_end_at > now + timedelta(days=30):
+                raise HTTPException(422, "RENTAL_END_TIME_INVALID")
+            telemetry = record["telemetry"]
+            data = {"rental_id": key, "status": "RENTED",
+                    "expected_end_at": body.expected_end_at.isoformat(),
+                    "started_at": now.isoformat(),
+                    "start_position": telemetry.position.model_dump(mode="json"),
+                    "start_soc_pct": telemetry.soc_pct,
+                    "returned_at": None, "return_position": None,
+                    "return_soc_pct": None, "return_observed_at": None}
+            record["rentals"][key] = {
+                "start_request": body,
+                "start_receipt": deepcopy(data),
+                "data": data,
+                "start_session_id": str(telemetry.session_id),
+                "start_sequence": telemetry.sequence,
+                "return_request": None,
+                "return_receipt": None,
+            }
+            record["active_rental"] = deepcopy(data)
+            record["rental_start_requests"][str(body.request_id)] = key
+            record["current_zone_id"] = None  # A free-floating customer controls the return position.
+            record["state_version"] += 1
+            self.version += 1
+            return deepcopy(data)
+
+    async def return_rental(self, vehicle_id, rental_id, body):
+        """Confirm actual return using new, fresh vehicle telemetry, not a guessed destination."""
+        key = str(rental_id)
+        async with self.lock:
+            record = self.record(vehicle_id)
+            entry = record["rentals"].get(key)
+            if entry is None:
+                raise HTTPException(404, "RENTAL_NOT_FOUND")
+            if entry["return_request"] is not None:
+                if entry["return_request"] != body:
+                    raise HTTPException(409, "RENTAL_RETURN_CONFLICT")
+                return deepcopy(entry["return_receipt"])
+            if str(body.request_id) in record["rental_return_requests"]:
+                raise HTTPException(409, "RENTAL_RETURN_REQUEST_ID_CONFLICT")
+            if record["active_rental"] is None or record["active_rental"]["rental_id"] != key:
+                raise HTTPException(409, "RENTAL_NOT_ACTIVE")
+            if record["state_version"] != body.expected_version:
+                raise HTTPException(409, "VEHICLE_VERSION_CONFLICT")
+            state = self.view(record)
+            telemetry = record["telemetry"]
+            if state["stale"] or state["connectivity"] != "ONLINE" or not telemetry:
+                raise HTTPException(409, "RETURN_TELEMETRY_STALE")
+            if (str(telemetry.session_id) == entry["start_session_id"]
+                    and telemetry.sequence <= entry["start_sequence"]):
+                raise HTTPException(409, "RETURN_TELEMETRY_REQUIRED")
+            if telemetry.relocation_state != "IDLE" or telemetry.active_dispatch_id or record["active_claim"]:
+                raise HTTPException(409, "VEHICLE_BUSY")
+            data = entry["data"]
+            data.update(status="RETURNED",
+                        returned_at=self.clock.now().isoformat(),
+                        return_position=telemetry.position.model_dump(mode="json"),
+                        return_soc_pct=telemetry.soc_pct,
+                        return_observed_at=telemetry.observed_at.isoformat())
+            entry["return_request"] = body
+            entry["return_receipt"] = deepcopy(data)
+            record["rental_return_requests"][str(body.request_id)] = key
+            record["active_rental"] = None
+            record["current_zone_id"] = None
+            record["state_version"] += 1
+            self.version += 1
+            return deepcopy(data)
+
+    async def get_rental(self, vehicle_id, rental_id):
+        async with self.lock:
+            entry = self.record(vehicle_id)["rentals"].get(str(rental_id))
+            if not entry:
+                raise HTTPException(404, "RENTAL_NOT_FOUND")
+            return deepcopy(entry["data"])
 
     async def claim(self, vehicle_id, dispatch_id, body):
         key = str(dispatch_id)

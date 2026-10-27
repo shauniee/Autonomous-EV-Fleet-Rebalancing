@@ -98,3 +98,21 @@ header{padding:18px}
 .dispatch-grid{grid-template-columns:1fr}
 }
 
+
+/* Phase 5A read-only mock facility catalogue. */
+.mock-tag{display:inline-block;border-radius:5px;padding:3px 8px;background:#fff0d4;color:#8c5a14;font-size:10px;font-weight:750;letter-spacing:.4px;white-space:nowrap}
+.facility-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.facility-card{border:1px solid #dce7e4;border-radius:8px;padding:15px;min-width:0}
+.facility-card .section-title{align-items:flex-start;margin-bottom:7px}
+.facility-card h3{font-size:14px}
+.facility-card .candidate-metrics{margin:8px 0}
+.facility-card .muted{overflow-wrap:anywhere}
+
+/* Phase 5B simulated rental visibility. */
+.rented{background:#fff0d4;color:#8c5a14}
+
+/* Phase 5C operator-selected EV count. */
+.quantity-picker{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:15px 0}
+.quantity-picker label{font-weight:600;font-size:12px}
+.quantity-picker input{width:78px;border:1px solid #cad7d6;border-radius:7px;padding:9px;font:inherit;text-align:center}
+.quantity-picker input:focus-visible{outline:3px solid #327dd1}

@@ -10,6 +10,7 @@ class DispatchRecord:
     data: dict
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     claim_request: dict | None = None
+    parking_request: dict | None = None
     claimed: bool = False
     ack: dict | None = None
     events: dict = field(default_factory=dict)
@@ -50,7 +51,8 @@ class DispatchStore:
                 "updated_at": self.clock.now().isoformat(), "acknowledged_at": None,
                 "completed_at": None, "last_contact_at": None, "delivery_attempts": 0,
                 "distance_travelled_km": 0, "arrival_soc_pct": None, "failure_reason": None,
-                "claim_held": False})
+                "claim_held": False, "parking_facility_id": None,
+                "parking_status": None})
             self.records[dispatch_id] = record
             self.requests[request_id] = dispatch_id
             self.recommendations[recommendation_id] = dispatch_id

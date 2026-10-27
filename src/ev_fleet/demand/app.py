@@ -1,7 +1,8 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 import httpx
-from fastapi import Query
+from fastapi import Query, Response
+from ev_fleet.common.dashboard_cache import DashboardCache
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.demand import Zone, ZoneState, DemandUpdate, ChargingUpdate
 from .store import DemandStore, seed
@@ -12,12 +13,14 @@ from .aggregation import compose_heatmap
 from ev_fleet.contracts.heatmap import HeatMapResponse, DemandSimulationStatus
 
 
-def create_app(store=None, seed_zones=True, settings=None, client=None):
+def create_app(store=None, seed_zones=True, settings=None, client=None, cache=None):
     app = base_app("Singapore Demand Service")
     config = settings or DemandSettings.from_env()
     state = store or DemandStore(manual_hold_seconds=config.manual_hold_seconds)
     state.manual_hold_seconds = config.manual_hold_seconds
     app.state.store = state
+    display_cache = cache if cache is not None else DashboardCache.from_env('demand', state.instance_id, 1)
+    app.state.dashboard_cache = display_cache
     simulator = DemandSimulator(state, config)
     app.state.simulator = simulator
     app.state.settings = config
@@ -35,6 +38,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None):
             try:
                 yield
             finally:
+                await display_cache.aclose()
                 if task:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
@@ -75,6 +79,13 @@ def create_app(store=None, seed_zones=True, settings=None, client=None):
         local = await state.composition_snapshot()
         fleet, error = await fleet_snapshot(app.state.client, config)
         return compose_heatmap(local, fleet, error, config, state.clock.now())
+
+    @app.get("/api/v1/dashboard/heat-map", response_model=HeatMapResponse)
+    async def dashboard_heat_map(response: Response):
+        result, status = await display_cache.get_or_compute(
+            f"heat-map:{state.version}", heat_map_view, HeatMapResponse)
+        response.headers["X-Dashboard-Cache"] = status
+        return result
 
     @app.get("/api/v1/heat-map", response_model=HeatMapResponse)
     async def heat_map():

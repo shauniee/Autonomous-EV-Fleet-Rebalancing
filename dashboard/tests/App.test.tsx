@@ -119,4 +119,93 @@ describe('dispatcher dashboard', () => {
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual(bodies[1]);
   });
+  it('shows simulated parking/charger capacity for the selected zone without changing dispatch controls', async () => {
+    const site = {
+      facility_id: 'mock-cbd-01', name: 'CBD simulated parking 1', zone_id: 'cbd',
+      position: { latitude: 1.2842, longitude: 103.8532 },
+      parking_capacity: 90, parking_available: 12,
+      charging_bays: 12, charging_available: 6, connector_types: ['CCS2'],
+      status: 'OPEN', source: 'MOCK',
+    };
+    server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    const facility = await screen.findByTestId('facility-mock-cbd-01');
+    expect(facility).toHaveTextContent('CBD simulated parking 1');
+    expect(facility).toHaveTextContent('12 / 90');
+    expect(facility).toHaveTextContent('6 / 12');
+    expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
+  });
+  it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
+    server({ '/api/facilities/facilities': new Error('Facilities down') });
+    render(<App/>);
+    expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
+    expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
+  });
+  it('marks rented EVs and expected end times from Fleet without breaking zone selection', async () => {
+    const snapshot = makeFleet();
+    snapshot.vehicles[0].effective_availability = 'UNAVAILABLE';
+    snapshot.vehicles[0].active_rental = {
+      rental_id: 'rental-demo', status: 'RENTED', started_at: new Date().toISOString(),
+      expected_end_at: new Date(Date.now() + 3600000).toISOString(),
+      return_position: null, return_soc_pct: null,
+    };
+    server({ '/api/fleet/vehicles': snapshot });
+    render(<App/>);
+    const row = await screen.findByTestId('vehicle-ev-01');
+    expect(row).toHaveTextContent('RENTED');
+    expect(row).toHaveTextContent('Expected return');
+    expect(row).toHaveTextContent('UNAVAILABLE');
+    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
+  });
+
+  it('previews bulk parking-aware recommendations and requires explicit batch approval', async () => {
+    const assignments = [{
+      recommendation_id: 'rec-parking-1', vehicle_id: 'ev-01',
+      facility_id: 'mock-cbd-01', facility_name: 'CBD simulated parking 1',
+      target_position: { latitude: 1.2842, longitude: 103.8532 },
+      requires_charging: false, distance_km: 8,
+      predicted_arrival_soc_pct: 85, score: .8,
+    }];
+    const batch = {
+      batch_recommendation_id: 'batch-recommendation', target_zone_id: 'cbd',
+      requested_count: 3, recommended_count: 1, unfulfilled_count: 2,
+      created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30000).toISOString(),
+      explanation: 'Proposed one parking destination', assumptions: ['MOCK'],
+      assignments,
+    };
+    const outcome = {
+      request_id: 'req-1', batch_recommendation_id: batch.batch_recommendation_id,
+      requested_count: 3, recommended_count: 1, status: 'APPROVED',
+      items: [{ recommendation_id: 'rec-parking-1', vehicle_id: 'ev-01',
+        facility_id: 'mock-cbd-01', dispatch_id: 'dispatch-11', state: 'PENDING', error: null }],
+    };
+    const fetch = server({
+      '/api/rebalancing/batch-recommendations': batch,
+      '/api/dispatch/batches': outcome,
+      '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
+    });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.change(screen.getByLabelText('Number of EVs to dispatch'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs & parking' }));
+    expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 3 EVs recommended');
+    expect(screen.getByTestId('batch-recommendation')).toHaveTextContent('CBD simulated parking 1');
+    expect(fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/dispatch/batches' && init?.method === 'POST')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Review batch dispatch' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Confirm 1 EV relocation');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
+    const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(result).toHaveTextContent('APPROVED');
+    const submissions = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/dispatch/batches' && init?.method === 'POST');
+    expect(submissions).toHaveLength(1);
+    expect(JSON.parse(String(submissions[0][1]!.body))).toHaveProperty('batch_recommendation_id', 'batch-recommendation');
+  });
+
 });

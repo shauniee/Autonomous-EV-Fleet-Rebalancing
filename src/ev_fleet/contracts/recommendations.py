@@ -1,6 +1,6 @@
 from uuid import UUID
 from pydantic import AwareDatetime, Field
-from .common import Model
+from .common import Model, Position
 from .demand import ZoneState
 
 
@@ -39,8 +39,39 @@ class Recommendation(Model):
     target: ZoneState
     fleet_snapshot: SnapshotReference
     selected_vehicle_id: str | None
+    parking_facility_id: str | None = None
+    target_position: Position | None = None
+    requires_charging: bool = False
     ranked_candidates: list[CandidateAssessment]
     excluded_candidates: list[CandidateAssessment]
     decision_latency_ms: float = Field(ge=0)
+    explanation: str
+    assumptions: list[str]
+
+class BatchRecommendationRequest(RecommendationRequest):
+    quantity: int = Field(ge=1, le=20)
+
+
+class ParkingAssignment(Model):
+    recommendation_id: UUID
+    vehicle_id: str
+    facility_id: str
+    facility_name: str
+    target_position: Position
+    requires_charging: bool
+    distance_km: float = Field(ge=0)
+    predicted_arrival_soc_pct: float
+    score: float = Field(ge=0, le=1)
+
+
+class BatchRecommendation(Model):
+    batch_recommendation_id: UUID
+    target_zone_id: str
+    requested_count: int = Field(ge=1, le=20)
+    recommended_count: int = Field(ge=0, le=20)
+    unfulfilled_count: int = Field(ge=0, le=20)
+    created_at: AwareDatetime
+    expires_at: AwareDatetime
+    assignments: list[ParkingAssignment]
     explanation: str
     assumptions: list[str]
