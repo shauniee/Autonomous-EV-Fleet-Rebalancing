@@ -4,8 +4,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .observations import lifespan, router
 
-app = FastAPI(title="EV Simulation Probe", version="0.1.0")
+app = FastAPI(title="EV Simulation Probe", version="0.1.0", lifespan=lifespan)
+app.include_router(router)
 frontend = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 if (frontend / "assets").is_dir():
