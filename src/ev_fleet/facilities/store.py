@@ -1,5 +1,6 @@
 """Single-process mock parking/charging allocation registry (not durable)."""
 import asyncio
+from uuid import uuid4
 from copy import deepcopy
 from fastapi import HTTPException
 from ev_fleet.contracts.facilities import Facility
@@ -10,6 +11,8 @@ class FacilitiesStore:
     def __init__(self):
         self.lock = asyncio.Lock()
         self.holds = {}
+        self.instance_id = str(uuid4())
+        self.version = 0
 
     def effective(self, facility):
         claims = [h for h in self.holds.values() if h["facility_id"] == facility.facility_id
@@ -61,6 +64,7 @@ class FacilitiesStore:
             receipt = {"dispatch_id": key, "vehicle_id": body.vehicle_id,
                        "facility_id": facility_id, "requires_charging": body.requires_charging,
                        "charging_allocated": charging, "status": "RESERVED"}
+            self.version += 1
             self.holds[key] = {"facility_id": facility_id, "request": body,
                                "receipt": receipt, "charging_allocated": charging,
                                "status": "RESERVED"}
@@ -77,6 +81,7 @@ class FacilitiesStore:
                 raise HTTPException(409, "PARKING_HOLD_TERMINAL")
             entry["status"] = status
             entry["receipt"]["status"] = status
+            self.version += 1
             return deepcopy(entry["receipt"])
 
     async def get_hold(self, dispatch_id):

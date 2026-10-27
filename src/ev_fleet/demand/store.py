@@ -23,6 +23,7 @@ class DemandStore:
         self.lock = asyncio.Lock()
         self.zones = {}
         self.instance_id = str(uuid4())
+        self.version = 0
         self.manual_hold_seconds = manual_hold_seconds
 
     def record(self, zone_id):
@@ -38,6 +39,7 @@ class DemandStore:
                       "charging_version": 0, "demand": None, "charging": None,
                       "demand_source": "UNKNOWN", "hold_tick": None, "hold_until": None}
             self.zones[zone.zone_id] = record
+            self.version += 1
             return self.view(record)
 
     def view(self, record):
@@ -64,6 +66,7 @@ class DemandStore:
                 record["hold_until"] = self.clock.now() + timedelta(seconds=self.manual_hold_seconds)
             record[version_key] += 1
             record["version"] += 1
+            self.version += 1
             return self.view(record)
 
     async def get(self, zone_id):
@@ -107,6 +110,7 @@ class DemandStore:
                 record["demand_version"] += 1
                 record["version"] += 1
                 changed += 1
+            self.version += int(changed > 0)
             simulator.tick_count += 1
             simulator.last_tick_at = now
             return changed

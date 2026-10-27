@@ -1,4 +1,6 @@
 from ev_fleet.common.logging import base_app
+from ev_fleet.common.dashboard_cache import DashboardCache
+from fastapi import Response
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, SessionRequest, VehicleState, FleetSnapshot
 from .store import FleetStore
 from uuid import UUID
@@ -6,10 +8,12 @@ from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
 
 
-def create_app(store=None):
+def create_app(store=None, cache=None):
     app = base_app("Fleet State Service")
     state = store or FleetStore()
     app.state.store = state
+    display_cache = cache if cache is not None else DashboardCache.from_env('fleet', state.instance_id, 1)
+    app.state.dashboard_cache = display_cache
 
     @app.post("/api/v1/vehicles", status_code=201, response_model=VehicleState)
     async def register(body: VehicleRegistration):
@@ -18,6 +22,13 @@ def create_app(store=None):
     @app.get("/api/v1/vehicles", response_model=FleetSnapshot)
     async def vehicles():
         return await state.snapshot()
+
+    @app.get("/api/v1/dashboard/vehicles", response_model=FleetSnapshot)
+    async def dashboard_vehicles(response: Response):
+        result, status = await display_cache.get_or_compute(
+            f"vehicles:{state.version}", state.snapshot, FleetSnapshot)
+        response.headers["X-Dashboard-Cache"] = status
+        return result
 
     @app.get("/api/v1/vehicles/{vehicle_id}", response_model=VehicleState)
     async def vehicle(vehicle_id: str):
@@ -54,6 +65,10 @@ def create_app(store=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/claims/{dispatch_id}/release", response_model=VehicleClaim)
     async def release(vehicle_id: str, dispatch_id: UUID, body: ClaimRelease):
         return await state.release(vehicle_id, dispatch_id, body)
+
+    @app.on_event("shutdown")
+    async def stop_display_cache():
+        await display_cache.aclose()
 
     return app
 
