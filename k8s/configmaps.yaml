@@ -6,6 +6,7 @@ data:
   FLEET_URL: http://fleet:8000
   DEMAND_URL: http://demand:8000
   REBALANCING_URL: http://rebalancing:8000
+  FACILITIES_URL: http://facilities:8000
   TELEMETRY_INTERVAL_SECONDS: "5"
   STALE_SECONDS: "15"
   OFFLINE_SECONDS: "30"

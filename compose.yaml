@@ -52,6 +52,7 @@ services:
     environment:
       FLEET_URL: http://fleet:8000
       DEMAND_URL: http://demand:8000
+      FACILITIES_URL: http://facilities:8000
       STALE_SECONDS: ${STALE_SECONDS:-15}
       OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
       MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
@@ -88,6 +89,7 @@ services:
     environment:
       FLEET_URL: http://fleet:8000
       DEMAND_URL: http://demand:8000
+      FACILITIES_URL: http://facilities:8000
       REBALANCING_URL: http://rebalancing:8000
       STALE_SECONDS: ${STALE_SECONDS:-15}
       OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
