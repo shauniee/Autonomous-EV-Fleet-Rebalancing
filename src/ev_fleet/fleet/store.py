@@ -28,7 +28,8 @@ class FleetStore:
                       "session_id": None, "session_request_id": None,
                       "retired_requests": set(), "state_version": 1,
                       "active_claim": None, "claims": {}, "current_zone_id": None,
-                      "active_rental": None, "rentals": {}}
+                      "active_rental": None, "rentals": {},
+                      "rental_start_requests": {}, "rental_return_requests": {}}
             self.vehicles[key] = record
             self.version += 1
             return self.view(record)
@@ -114,6 +115,8 @@ class FleetStore:
                 if previous["start_request"] != body:
                     raise HTTPException(409, "RENTAL_ID_CONFLICT")
                 return deepcopy(previous["start_receipt"])
+            if str(body.request_id) in record["rental_start_requests"]:
+                raise HTTPException(409, "RENTAL_REQUEST_ID_CONFLICT")
             if record["active_rental"] is not None:
                 raise HTTPException(409, "RENTAL_ALREADY_ACTIVE")
             if record["state_version"] != body.expected_version:
@@ -141,6 +144,7 @@ class FleetStore:
                 "return_receipt": None,
             }
             record["active_rental"] = deepcopy(data)
+            record["rental_start_requests"][str(body.request_id)] = key
             record["current_zone_id"] = None  # A free-floating customer controls the return position.
             record["state_version"] += 1
             self.version += 1
@@ -158,6 +162,8 @@ class FleetStore:
                 if entry["return_request"] != body:
                     raise HTTPException(409, "RENTAL_RETURN_CONFLICT")
                 return deepcopy(entry["return_receipt"])
+            if str(body.request_id) in record["rental_return_requests"]:
+                raise HTTPException(409, "RENTAL_RETURN_REQUEST_ID_CONFLICT")
             if record["active_rental"] is None or record["active_rental"]["rental_id"] != key:
                 raise HTTPException(409, "RENTAL_NOT_ACTIVE")
             if record["state_version"] != body.expected_version:
@@ -179,6 +185,7 @@ class FleetStore:
                         return_observed_at=telemetry.observed_at.isoformat())
             entry["return_request"] = body
             entry["return_receipt"] = deepcopy(data)
+            record["rental_return_requests"][str(body.request_id)] = key
             record["active_rental"] = None
             record["current_zone_id"] = None
             record["state_version"] += 1
