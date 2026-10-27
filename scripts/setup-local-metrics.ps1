@@ -25,21 +25,21 @@ if ($AllowInsecureKubeletTls) {
     $deployment = $raw | ConvertFrom-Json
     $matching = @($deployment.spec.template.spec.containers | Where-Object { $_.name -eq "metrics-server" })
     if ($matching.Count -ne 1) { throw "Metrics Server container not found." }
-    $args = @($matching[0].args)
-    if ($args -notcontains "--kubelet-insecure-tls") {
+    $currentArgs = @($matching[0].args)
+    if ($currentArgs -notcontains "--kubelet-insecure-tls") {
         Write-Warning "Local testing only: bypassing Metrics Server kubelet TLS verification."
         $patch = @{
             spec = @{
                 template = @{
                     spec = @{
-                        containers = @(@{ name = "metrics-server"; args = @($args + "--kubelet-insecure-tls") })
+                        containers = @(@{ name = "metrics-server"; args = @($currentArgs + "--kubelet-insecure-tls") })
                     }
                 }
             }
         } | ConvertTo-Json -Depth 12 -Compress
         $patchFile = Join-Path ([IO.Path]::GetTempPath()) ("ev-metrics-" + [guid]::NewGuid().ToString("N") + ".json")
         try {
-            [IO.File]::WriteAllText($patchFile, $patch, (New-Object Text.UTF8Encoding($false)))
+            [IO.File]::WriteAllText($patchFile, $patch, ([System.Text.UTF8Encoding]::new($false)))
             & kubectl -n kube-system patch deployment metrics-server --type=strategic --patch-file $patchFile
             if ($LASTEXITCODE -ne 0) { throw "Metrics Server patch failed." }
         } finally { Remove-Item $patchFile -ErrorAction SilentlyContinue }
