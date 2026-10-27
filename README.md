@@ -371,3 +371,16 @@ live data integration is included.
 
 See [Phase 5C guide](docs/phase5c-bulk-parking.md) for API usage,
 assumptions, test commands and safety limitations.
+
+## Optional Redis dashboard caching
+
+Three **read-only** dashboard endpoints can now use an ephemeral Redis
+cache: fleet positions (1 second), demand heat-map (1 second) and mock
+parking/charger data (2 seconds). All decision-making and mutations
+continue through authoritative service APIs, not Redis. The dashboard
+remains usable when Redis is off or unavailable.
+
+Run the relocation profile with `redis` included, or leave Redis out
+for fail-open uncached operation. See the
+[Redis cache guide](docs/redis-dashboard-cache.md) for startup commands,
+cache HIT/MISS/BYPASS headers, safety boundaries and evaluation approach.

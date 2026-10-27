@@ -270,3 +270,12 @@ docker --context desktop-linux image rm `
   csc3104/ev-fleet-backend:k8s-local `
   csc3104/ev-fleet-dashboard:k8s-local
 ```
+
+## Optional Redis read cache
+
+`k8s/redis.yaml` adds a single, ephemeral Redis Deployment and internal
+ClusterIP Service. The Fleet, Demand and Facilities dashboards use this
+cache when it is reachable. The original operational APIs bypass Redis;
+Kubernetes state-owning workloads must remain single-replica. Redis is
+not persistent and its loss does not prevent dashboard requests.
+See [Redis cache guide](redis-dashboard-cache.md).

@@ -1,4 +1,4 @@
-name: Phase 5C checks
+name: Fleet regression and Redis dashboard cache
 
 on:
   push:
@@ -43,7 +43,7 @@ jobs:
       - name: Build and start live Compose demonstration
         run: |
           docker compose --profile relocation up --build -d --wait \
-            fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
+            redis fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
       - name: Verify live parking-aware batch approval
         run: |
           python - <<'PY'
@@ -85,6 +85,27 @@ jobs:
           assert approval['status'] == 'APPROVED', approval
           assert len(approval['items']) == 2, approval
           print('Compose live batch smoke: 2 mock parking-aware EV dispatches approved')
+
+          # Dedicated dashboard endpoint uses Redis; operational endpoint does not.
+          def cache_call(path):
+              with urllib.request.urlopen(origin + path, timeout=8) as response:
+                  return response.headers['X-Dashboard-Cache'], json.load(response)
+          first, facilities1 = cache_call('/api/facilities/dashboard/facilities')
+          second, facilities2 = cache_call('/api/facilities/dashboard/facilities')
+          assert first in ('MISS', 'HIT'), first
+          assert second == 'HIT', second
+          assert facilities1 == facilities2
+          assert len(facilities2['facilities']) == 15
+          print('Redis cache: warmed facilities snapshot is a HIT')
+
+          # Redis downtime cannot prevent dashboard requests.
+          import subprocess
+          subprocess.run(['docker', 'compose', '--profile', 'relocation',
+                          'stop', 'redis'], check=True)
+          status, fallback = cache_call('/api/facilities/dashboard/facilities')
+          assert status == 'BYPASS', status
+          assert len(fallback['facilities']) == 15
+          print('Redis unavailable: dashboard request safely bypassed cache')
           PY
       - name: Container status and recent logs
         if: always()
