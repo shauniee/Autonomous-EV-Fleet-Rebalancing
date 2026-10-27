@@ -1,0 +1,13 @@
+# Overlay for the root compose.yaml; paths are relative to that first file.
+services:
+  simulation-console:
+    build:
+      context: ./simulation-console
+    ports:
+      - "127.0.0.1:${PROBE_PORT:-8090}:8090"
+    environment:
+      FLEET_URL: http://fleet:8000
+      DEMAND_URL: http://demand:8000
+      REBALANCING_URL: http://rebalancing:8000
+      DISPATCH_URL: http://dispatch:8000
+    init: true
