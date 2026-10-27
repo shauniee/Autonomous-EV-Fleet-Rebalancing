@@ -230,7 +230,8 @@ class FleetStore:
                        "target_zone_id": body.target_zone_id,
                        "target_position": body.target_position.model_dump(),
                        "origin": telemetry.position.model_dump(),
-                       "acquired_at": self.clock.now().isoformat(), "status": "ACTIVE",
+                       "acquired_at": self.clock.now().isoformat(), "arrival_soc_pct": None,
+                       "status": "ACTIVE",
                        "outcome": None, "released_at": None}
             record["claims"][key] = {"request": body, "receipt": receipt}
             record["active_claim"] = receipt
@@ -268,7 +269,9 @@ class FleetStore:
             if telemetry.relocation_state != required_state or distance_km(telemetry.position.model_dump(), target) > tolerance:
                 raise HTTPException(409, "COMPLETION_NOT_CONFIRMED")
             # A confirmed physical arrival may have low SOC: record it, don't fabricate availability.
-            receipt.update(status="RELEASED", outcome=body.outcome, released_at=self.clock.now().isoformat())
+            receipt.update(status="RELEASED", outcome=body.outcome,
+                           arrival_soc_pct=telemetry.soc_pct if body.outcome == "ARRIVED" else None,
+                           released_at=self.clock.now().isoformat())
             record["active_claim"] = None
             if body.outcome == "ARRIVED":
                 record["current_zone_id"] = receipt["target_zone_id"]

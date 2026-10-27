@@ -3,7 +3,7 @@
 ## Purpose and isolation
 
 Redis is **not** a database, an allocation ledger, a message bus, or the source of
-truth for Fleet, Demand or Facilities. Only three read-only dashboard endpoints
+truth for Fleet, Demand or Facilities. Three read-only dashboard endpoints are available
 use Redis cache-aside with bounded expiries; all ranking, approvals, rental
 changes, vehicle and parking claims, and dispatch reconciliation use original
 authoritative APIs.
@@ -93,3 +93,20 @@ cached dashboard counterpart, with observed HIT/MISS/BYPASS distribution.
 The CI Compose smoke job prints a smaller 30-pair sample while Redis runs.
 Results are environment-dependent and not research conclusions. Measure
 multiple trials and steady state before claiming improvements.
+
+## Default selection based on preliminary observations
+
+The React dashboard uses **the 1-second cached demand heat-map**. It reads the
+original authoritative Fleet and Facilities GET endpoints by default. Optional
+Redis-backed Fleet and Facilities dashboard endpoints remain available for
+future multi-operator load testing.
+
+In a single 30-pair CI smoke run, heat-map HTTP median was 3.67 ms uncached
+versus 1.86 ms cached; Fleet and Facilities had small increases. These are
+**development smoke timings, not robust benchmarks or production guarantees**.
+See the CLI benchmark tool and repeat under load before changing defaults.
+
+An intermittent pre-existing arrival-SOC reporting race was also exposed by
+concurrent CI runs. The verified Fleet release receipt now carries confirmed
+arrival SOC; Dispatch copies it into final status on release/reconciliation,
+rather than relying on which service first observed the arrival telemetry.

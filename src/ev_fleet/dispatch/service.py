@@ -119,7 +119,7 @@ class DispatchService:
             record.claim_tick = self.clock.monotonic() - elapsed
         record.data["claim_held"] = receipt.status == "ACTIVE"
         if receipt.status == "RELEASED":
-            self.finish(record, receipt.outcome)
+            self.finish(record, receipt.outcome, receipt.arrival_soc_pct)
             await self.sync_parking(record)
         else:
             self.transition(record, "PENDING")
@@ -132,8 +132,10 @@ class DispatchService:
             receipt.vehicle_id != record.data["vehicle_id"]):
             raise HTTPException(503, "CLAIM_IDENTITY_MISMATCH")
 
-    def finish(self, record, outcome):
+    def finish(self, record, outcome, arrival_soc_pct=None):
         record.data["claim_held"] = False
+        if outcome == "ARRIVED" and arrival_soc_pct is not None:
+            record.data["arrival_soc_pct"] = arrival_soc_pct
         record.data["completed_at"] = self.clock.now().isoformat()
         self.transition(record, "SUCCEEDED" if outcome == "ARRIVED" else "REJECTED",
                         None if outcome == "ARRIVED" else "EV_REJECTED_COMMAND")
@@ -213,7 +215,7 @@ class DispatchService:
             receipt = await request_json(self.client, "GET", self.claim_url(record), model=VehicleClaim)
             self.check_receipt(record, receipt)
             if receipt.status == "RELEASED":
-                self.finish(record, receipt.outcome)
+                self.finish(record, receipt.outcome, receipt.arrival_soc_pct)
                 await self.sync_parking(record)
                 return
             record.data["claim_held"] = True
@@ -256,7 +258,7 @@ class DispatchService:
                 self.check_receipt(record, receipt)
                 if receipt.status != "RELEASED" or receipt.outcome != outcome:
                     raise HTTPException(503, "RELEASE_NOT_CONFIRMED")
-                self.finish(record, outcome)
+                self.finish(record, outcome, receipt.arrival_soc_pct)
                 await self.sync_parking(record)
                 return
             if record.claim_tick is not None and record.data["acknowledged_at"] is None:

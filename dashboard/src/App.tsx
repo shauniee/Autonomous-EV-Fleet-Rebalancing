@@ -24,9 +24,9 @@ function readPendingBatch(): BatchApproval | null {
 }
 export default function App() {
   const heat = usePolling<HeatMap>('/api/demand/dashboard/heat-map');
-  const fleet = usePolling<Fleet>('/api/fleet/dashboard/vehicles');
+  const fleet = usePolling<Fleet>('/api/fleet/vehicles');
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
-  const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/dashboard/facilities', 10000);
+  const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const [selected, setSelected] = useState('');
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [quantity, setQuantity] = useState(1);

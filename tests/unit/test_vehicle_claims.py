@@ -44,6 +44,7 @@ def test_arrival_release_requires_matching_fresh_position(clock):
             await cluster.telemetry(state="ARRIVED", dispatch_id=dispatch["dispatch_id"], position=dispatch["command"]["target_position"])
             released = await cluster.fleet.release("ev-1", dispatch["dispatch_id"], release)
             assert released == await cluster.fleet.release("ev-1", dispatch["dispatch_id"], release)
+            assert released["arrival_soc_pct"] == 80
             state = await cluster.fleet.get("ev-1")
             assert state["current_zone_id"] == "cbd" and state["active_claim"] is None
             assert state["effective_availability"] == "UNAVAILABLE"

@@ -43,6 +43,7 @@ class VehicleClaim(Model):
     target_position: Position
     origin: Position
     acquired_at: AwareDatetime
+    arrival_soc_pct: float | None = Field(default=None, ge=0, le=100)
     status: Literal["ACTIVE", "RELEASED"] = "ACTIVE"
     outcome: Literal["ARRIVED", "REJECTED"] | None = None
     released_at: AwareDatetime | None = None
