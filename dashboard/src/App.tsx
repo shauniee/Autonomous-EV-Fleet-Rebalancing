@@ -82,12 +82,12 @@ export default function App() {
     && now - Date.parse(facilities.updatedAt) < 30000;
   const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0;
   const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
-  async function recommend() {
+  async function recommend(legacy = false) {
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;
     setRecommending(true); setRecommendation(null); setBatch(null); setBatchResult(null); setError(''); setNotice('');
     try {
-      if (quantity === 1) {
+      if (legacy) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
           method: 'POST', body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
         });
@@ -174,7 +174,8 @@ export default function App() {
           const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
           setQuantity(value); setRecommendation(null); setBatch(null); setBatchResult(null);
         }}/></div>
-        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || (quantity > 1 && !facilitiesFresh)} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs & parking`}</button><p className="muted">A recommendation does not move an EV.</p></> : <div className="empty"><div className="empty-icon">↗</div><h2>Where is an EV needed?</h2><p>Select a zone on the map or from the list to review its demand and request a recommendation.</p></div>}
+        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || !facilitiesFresh} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : `Recommend ${quantity} EV${quantity === 1 ? '' : 's'} & parking`}</button>
+        {quantity === 1 && <button disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh} onClick={() => void recommend(true)}>Recommend EV</button>}<p className="muted">A recommendation does not move an EV.</p></> : <div className="empty"><div className="empty-icon">↗</div><h2>Where is an EV needed?</h2><p>Select a zone on the map or from the list to review its demand and request a recommendation.</p></div>}
         {zone && !fresh && <p className="warning">Fresh demand and fleet data are required to request or approve a recommendation.</p>}
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
