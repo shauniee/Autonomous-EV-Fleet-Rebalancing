@@ -145,4 +145,22 @@ describe('dispatcher dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
+  it('marks rented EVs and expected end times from Fleet without breaking zone selection', async () => {
+    const snapshot = makeFleet();
+    snapshot.vehicles[0].effective_availability = 'UNAVAILABLE';
+    snapshot.vehicles[0].active_rental = {
+      rental_id: 'rental-demo', status: 'RENTED', started_at: new Date().toISOString(),
+      expected_end_at: new Date(Date.now() + 3600000).toISOString(),
+      return_position: null, return_soc_pct: null,
+    };
+    server({ '/api/fleet/vehicles': snapshot });
+    render(<App/>);
+    const row = await screen.findByTestId('vehicle-ev-01');
+    expect(row).toHaveTextContent('RENTED');
+    expect(row).toHaveTextContent('Expected return');
+    expect(row).toHaveTextContent('UNAVAILABLE');
+    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
+  });
+
 });

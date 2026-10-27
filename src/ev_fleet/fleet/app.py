@@ -3,6 +3,7 @@ from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, Se
 from .store import FleetStore
 from uuid import UUID
 from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
+from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
 
 
 def create_app(store=None):
@@ -29,6 +30,18 @@ def create_app(store=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/telemetry")
     async def telemetry(vehicle_id: str, body: TelemetryUpdate):
         return await state.telemetry(vehicle_id, body)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/rentals", status_code=201, response_model=RentalRecord)
+    async def start_rental(vehicle_id: str, body: RentalStart):
+        return await state.start_rental(vehicle_id, body)
+
+    @app.get("/api/v1/vehicles/{vehicle_id}/rentals/{rental_id}", response_model=RentalRecord)
+    async def get_rental(vehicle_id: str, rental_id: UUID):
+        return await state.get_rental(vehicle_id, rental_id)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/rentals/{rental_id}/return", response_model=RentalRecord)
+    async def return_rental(vehicle_id: str, rental_id: UUID, body: RentalReturn):
+        return await state.return_rental(vehicle_id, rental_id, body)
 
     @app.put("/api/v1/vehicles/{vehicle_id}/claims/{dispatch_id}", response_model=VehicleClaim)
     async def claim(vehicle_id: str, dispatch_id: UUID, body: ClaimRequest):

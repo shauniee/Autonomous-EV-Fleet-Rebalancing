@@ -107,3 +107,6 @@ header{padding:18px}
 .facility-card h3{font-size:14px}
 .facility-card .candidate-metrics{margin:8px 0}
 .facility-card .muted{overflow-wrap:anywhere}
+
+/* Phase 5B simulated rental visibility. */
+.rented{background:#fff0d4;color:#8c5a14}

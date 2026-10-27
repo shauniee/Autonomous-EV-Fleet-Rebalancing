@@ -54,9 +54,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
     for (const vehicle of vehicles) {
       if (!vehicle.telemetry) continue;
       const label = document.createElement('span');
-      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}`;
+      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
       L.circleMarker([vehicle.telemetry.position.latitude, vehicle.telemetry.position.longitude], {
-        radius: 6, color: '#fff', weight: 2, fillColor: vehicle.stale ? '#76838a' : '#163c63', fillOpacity: 1,
+        radius: 6, color: '#fff', weight: 2, fillColor: vehicle.stale ? '#76838a' : vehicle.active_rental ? '#ba791d' : '#163c63', fillOpacity: 1,
       }).bindTooltip(label).addTo(layer);
     }
     return () => { layer.remove(); };

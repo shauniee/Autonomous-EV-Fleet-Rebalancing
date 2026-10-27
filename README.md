@@ -331,3 +331,16 @@ and the local Kubernetes manifests include the new Facilities Service.
 See [Phase 5A guide](docs/phase5a-mock-facilities.md) for endpoints, scope,
 verification instructions and the planned rental / multi-EV / parking allocation
 extensions. Historical Phase 4 evidence remains unchanged.
+
+## Phase 5B: simulated free-floating rentals
+
+Fleet now tracks simulated rental start and confirmed return events via
+version-checked, idempotent HTTP endpoints. A rented EV cannot be ranked or
+claimed for immediate relocation, even if regular vehicle telemetry reports
+AVAILABLE. The return position and SOC are taken from fresh telemetry that
+arrived **after** rental start, so the customer may end at any position inside
+the simulated operating envelope. Confirmed rental status and expected return
+time appear in the Fleet dashboard and EV map. Rental state is in memory and
+does not survive restarts. There is **no pre-dispatch, parking allocation or
+automatic rental simulator** yet. For API examples and tests, see
+[Phase 5B guide](docs/phase5b-rental-lifecycle.md).
