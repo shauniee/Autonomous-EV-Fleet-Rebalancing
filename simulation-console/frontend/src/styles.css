@@ -1,0 +1,139 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #193b30;
+  background: #f3f6f4;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 960px;
+  margin: 40px auto;
+  padding: 32px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+h1 {
+  font-size: clamp(28px, 6vw, 40px);
+  margin: 12px 0;
+}
+.description {
+  color: #52695e;
+  line-height: 1.6;
+}
+
+.health {
+  margin-top: 28px;
+  padding: 16px;
+  border: 1px solid #ccdcd1;
+  border-radius: 8px;
+  background: white;
+}
+
+section {
+  margin-top: 28px;
+  padding: 20px;
+  border: 1px solid #ccdcd1;
+  border-radius: 8px;
+  background: white;
+}
+h2 {
+  font-size: 20px;
+  margin-top: 0;
+}
+.services,
+.zones {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+.service,
+.zone {
+  padding: 12px;
+  background: #f3f6f4;
+  border-radius: 6px;
+}
+.service > strong {
+  text-transform: capitalize;
+}
+small {
+  display: block;
+  color: #52695e;
+  line-height: 1.6;
+}
+.timestamp {
+  font-size: 13px;
+  color: #52695e;
+}
+.warning {
+  padding: 14px;
+  background: #fff0dd;
+  color: #81571f;
+  border-radius: 6px;
+}
+.success {
+  padding: 14px;
+  background: #e6f3ea;
+  color: #245b3b;
+  border-radius: 6px;
+}
+.demand-form {
+  max-width: 400px;
+}
+.demand-form label {
+  display: block;
+  margin: 16px 0;
+}
+.demand-form input,
+.demand-form select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  margin-top: 6px;
+  border: 1px solid #ccdcd1;
+  border-radius: 6px;
+  font: inherit;
+}
+.demand-form button {
+  padding: 10px 16px;
+  background: #193b30;
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.demand-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+th,
+td {
+  padding: 12px 8px;
+  border-bottom: 1px solid #e2e9e5;
+  white-space: nowrap;
+}
+@media (max-width: 540px) {
+  main {
+    padding: 16px;
+    margin: 20px auto;
+  }
+  section {
+    padding: 14px;
+  }
+}
