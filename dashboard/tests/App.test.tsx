@@ -135,7 +135,7 @@ describe('dispatcher dashboard', () => {
     expect(facility).toHaveTextContent('12 / 90');
     expect(facility).toHaveTextContent('6 / 12');
     expect(screen.getByText(/current EV recommendation does not use these spaces/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
     server({ '/api/facilities/facilities': new Error('Facilities down') });
@@ -143,6 +143,6 @@ describe('dispatcher dashboard', () => {
     expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
     expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
-    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
 });
