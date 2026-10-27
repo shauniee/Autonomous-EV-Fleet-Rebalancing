@@ -81,6 +81,24 @@ the checked-in dependency lock, deploys PostgreSQL, Redis, every backend, both
 dashboards and all 20 EV simulators, waits for readiness, and opens both local
 port-forward tunnels. Keep that PowerShell window open.
 
+### Optional HPA for the Dashboard
+
+The Kubernetes manifests include Dashboard CPU autoscaling (1–3 replicas,
+60% CPU target), but a fresh cluster also needs Metrics Server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\start-kubernetes.ps1 `
+  -SetupMetricsServer -AllowInsecureLocalKubeletTls
+```
+
+The `-AllowInsecureLocalKubeletTls` workaround bypasses kubelet certificate
+verification **only for local Docker Desktop testing**; never enable it for
+production. Omit it when using valid kubelet certificates. Without the
+optional setup switch, the usual startup continues to work, but HPA will
+need an existing healthy Metrics API. Other state-owning services remain
+single-replica for correctness. Details:
+[Dashboard HPA and Metrics Server](docs/kubernetes-local.md#dashboard-horizontal-pod-autoscaler-hpa).
+
 Open both Kubernetes interfaces:
 
 - Simulation console (simulation dashboard): <http://127.0.0.1:8090>

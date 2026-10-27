@@ -40,6 +40,59 @@ docker context show
 docker version
 ```
 
+## Dashboard Horizontal Pod Autoscaler (HPA)
+
+The repository includes `k8s/hpa-dashboard.yaml` through `k8s/kustomization.yaml`.
+It scales **only** the stateless operator Dashboard (1–3 replicas, CPU target
+60% of its existing 10m CPU request). Stateful Fleet, Demand, Facilities,
+Rebalancing, Dispatch and moving EV services remain single-replica; adding
+replicas to them could duplicate commands or cause state divergence.
+
+A fresh Docker Desktop kubeadm cluster needs Metrics Server for CPU-based
+HPA. To install the pinned upstream Metrics Server v0.9.0 automatically and
+enable the **explicit local-only** kubelet certificate workaround, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\start-kubernetes.ps1 `
+  -SetupMetricsServer -AllowInsecureLocalKubeletTls
+```
+
+For an already-deployed cluster (without rebuilding application images):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\setup-local-metrics.ps1 `
+  -AllowInsecureKubeletTls
+kubectl apply -k .\\k8s
+```
+
+The installer preserves an existing Metrics Server version and installs
+v0.9.0 only if missing. It requires GitHub access to download the release.
+`-AllowInsecureLocalKubeletTls` and `-AllowInsecureKubeletTls` explicitly
+add `--kubelet-insecure-tls`: this disables kubelet TLS certificate
+verification to work around the Docker Desktop node certificate missing
+IP SANs. **Never use this workaround on production or shared clusters.**
+With valid kubelet certificates, omit that flag. The script refuses any
+Kubernetes context other than `docker-desktop`.
+
+Verify metrics, HPA and replicas with:
+
+```powershell
+kubectl get apiservice v1beta1.metrics.k8s.io
+kubectl top pods -n ev-fleet
+kubectl get hpa dashboard -n ev-fleet
+kubectl describe hpa dashboard -n ev-fleet
+kubectl get deployment dashboard -n ev-fleet
+```
+
+An HPA present in the cluster is not evidence of actual scaling. The
+Dashboard normally uses very little CPU, so it may remain at one Pod.
+Demonstrate scaling separately under safe, controlled **read-only**
+Dashboard requests while watching HPA metrics and Pod counts. Avoid load
+tests against live Dispatch, Fleet mutations or the EV simulators.
+The single-node Docker Desktop cluster cannot survive host-level failure.
+If metrics are unavailable, inspect `kubectl -n kube-system logs
+deployment/metrics-server --tail=50`.
+
 ## Build local images
 
 The kubeadm provisioner can use images in Docker Desktop's local image store.
@@ -91,9 +144,9 @@ kubectl -n ev-fleet get statefulsets
 kubectl -n ev-fleet get endpointslices
 ```
 
-There should be ten `1/1` Deployments, a `1/1` PostgreSQL StatefulSet, one
+At baseline there should be ten `1/1` Deployments, a `1/1` PostgreSQL StatefulSet, one
 `18/18` EV StatefulSet, 29 running Pods, nine `ClusterIP` Services, and one
-headless identity Service. The Fleet has
+headless identity Service. With HPA active, Dashboard may scale to three Pods. The Fleet has
 20 moving EV simulators: `ev-moving-01`, `ev-moving-02`, and the stable StatefulSet
 identities `ev-moving-extra-0` through `ev-moving-extra-17`.
 
