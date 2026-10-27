@@ -11,6 +11,8 @@ from ev_fleet.demand.store import DemandStore, seed
 from ev_fleet.demand.app import create_app as demand_app
 from ev_fleet.rebalancing.app import create_app as rebalancing_app
 from ev_fleet.dispatch.app import create_app as dispatch_app
+from ev_fleet.facilities.store import FacilitiesStore
+from ev_fleet.facilities.app import create_app as facilities_app
 
 
 class Cluster:
@@ -18,9 +20,10 @@ class Cluster:
         self.clock = clock
         self.recommendation_ttl = recommendation_ttl
         self.config = DispatchSettings(fleet_url="http://fleet.test", demand_url="http://demand.test",
-                                       rebalancing_url="http://rebalancing.test")
+                                       rebalancing_url="http://rebalancing.test", facilities_url="http://facilities.test")
         self.fleet = FleetStore(self.config, clock)
         self.demand = DemandStore(clock)
+        self.facilities = FacilitiesStore()
         self.failures = []
         self.stack = AsyncExitStack()
         self.sessions = {}
@@ -32,8 +35,10 @@ class Cluster:
         await self.stack.enter_async_context(self.client)
         self.apps = {"fleet.test": fleet_app(self.fleet), "demand.test": demand_app(self.demand),
             "rebalancing.test": rebalancing_app(Settings(fleet_url=self.config.fleet_url,
-                demand_url=self.config.demand_url, recommendation_ttl_seconds=self.recommendation_ttl), self.client, self.clock),
-            "dispatch.test": dispatch_app(self.config, self.client, self.clock, background=False)}
+                demand_url=self.config.demand_url, facilities_url=self.config.facilities_url,
+                recommendation_ttl_seconds=self.recommendation_ttl), self.client, self.clock),
+            "dispatch.test": dispatch_app(self.config, self.client, self.clock, background=False),
+            "facilities.test": facilities_app(self.facilities)}
         self.transports = {host: httpx.ASGITransport(app=app) for host, app in self.apps.items()}
         for app in self.apps.values():
             await self.stack.enter_async_context(app.router.lifespan_context(app))
