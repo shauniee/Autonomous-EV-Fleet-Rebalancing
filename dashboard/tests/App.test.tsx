@@ -9,6 +9,8 @@ function server(overrides: Record<string, unknown> = {}) {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/rebalancing/traffic/conditions': { source: 'DISABLED', status: 'DISABLED',
+      generated_at: new Date().toISOString(), feeds: {}, speeds: [], incidents: [], roadworks: [] },
     '/api/rebalancing/charging-advice': { generated_at: new Date().toISOString(), trigger_soc_pct: 25,
       min_arrival_reserve_pct: 20, vehicles: [], assumptions: [] }, ...overrides,
   };
@@ -328,4 +330,31 @@ describe('dispatcher dashboard', () => {
     expect(await screen.findByText(/BELOW_OPERATIONAL_RESERVE/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Prepare charger route' })).not.toBeInTheDocument();
   });
+  it('shows disabled LTA traffic without implying clear roads', async () => {
+    server(); render(<App/>);
+    const panel = await screen.findByRole('region', { name: 'Traffic conditions and roadworks' });
+    expect(within(panel).getByText(/Live LTA traffic ranking is disabled/)).toBeInTheDocument();
+    expect(within(panel).getByText('DISABLED')).toBeInTheDocument();
+  });
+
+  it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {
+    server({ '/api/rebalancing/traffic/conditions': {
+      source: 'LTA_DATAMALL', status: 'FRESH', generated_at: new Date().toISOString(),
+      feeds: { speeds: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null},
+        incidents: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null},
+        roadworks: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null} },
+      speeds: [{ id:'speed-1', road:'FIRST ROAD', start:{ latitude:1.3,longitude:103.8 },
+        end:{ latitude:1.3,longitude:103.81 }, min_kph:10,max_kph:19 }],
+      incidents: [{ id:'incident-1', type:'ROAD BLOCK',
+        position:{ latitude:1.3,longitude:103.8 }, message:'Synthetic fixture closure' }],
+      roadworks: [{ id:'work-1', road:'FIRST ROAD',
+        start_date:'2020-01-01', end_date:'2099-01-01' }],
+    }});
+    render(<App/>);
+    const panel = await screen.findByRole('region', { name:'Traffic conditions and roadworks' });
+    expect(within(panel).getByText('FRESH')).toBeInTheDocument();
+    expect(within(panel).getByText('Synthetic fixture closure')).toBeInTheDocument();
+    expect(within(panel).getByText('FIRST ROAD')).toBeInTheDocument();
+  });
+
 });
