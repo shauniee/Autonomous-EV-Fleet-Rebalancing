@@ -14,7 +14,8 @@ from .movement import Movement
 class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
-                 speed_kph=30, time_scale=30, client=None, facilities_url=None):
+                 speed_kph=30, time_scale=30, client=None, facilities_url=None,
+                 road_match_initial=True):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
         self.fleet_url, self.dispatch_url, self.vehicle_id = fleet_url, dispatch_url, vehicle_id
@@ -30,6 +31,7 @@ class MovingNode:
         self.initialized = False
         self.ready = asyncio.Event()
         self.facilities_url = facilities_url
+        self.road_match_initial = road_match_initial
         self.parking_verified = not bool(facilities_url)
 
     async def request(self, method, url, body=None):
@@ -50,7 +52,7 @@ class MovingNode:
             # Resume the actual idle position/SOC; never reconstruct a journey.
             self.movement.position = previous["position"]
             self.movement.soc_pct = previous["soc_pct"]
-        if not self.initialized:
+        if not self.initialized and self.road_match_initial:
             # In OneMap mode, place an IDLE simulated EV on a routable road
             # before its first telemetry and before any journey can be claimed.
             # This is a one-time initialisation, not an in-flight teleport.
