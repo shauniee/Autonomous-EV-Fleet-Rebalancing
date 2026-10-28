@@ -330,3 +330,14 @@ automatically dispatch cars. See
 [customer rental simulation](docs/customer-rental-simulation.md) for scenario
 settings, safe reruns, limitations and evaluation guidance.
 
+
+For an **interactive demo where returned customer cars stay online and can be
+relocated**, use the alternative persistent single-replica Deployment instead:
+
+```powershell
+kubectl apply -f .\k8s\simulations\customer-deployment.yaml
+kubectl -n ev-fleet logs -f deployment/customer-rental-demo
+```
+
+Do **not** start the finite Job and Deployment together: they use the same
+six vehicle IDs. See the simulation guide for safe stop/restart instructions.
