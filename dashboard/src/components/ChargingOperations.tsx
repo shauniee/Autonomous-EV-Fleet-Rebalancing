@@ -10,7 +10,8 @@ export function ChargingOperations({ vehicles, onUpdated }: {
   const [staff, setStaff] = useState('Ground Team A');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  const active = tasks.data?.tasks.filter(t => !['COMPLETED', 'CANCELLED'].includes(t.status)) ?? [];
+  const taskDataValid = Array.isArray(tasks.data?.tasks);
+  const active = taskDataValid ? tasks.data!.tasks.filter(t => !['COMPLETED', 'CANCELLED'].includes(t.status)) : [];
   const low = vehicles.filter(v => v.telemetry && v.telemetry.soc_pct <= 30 && !v.stale && v.connectivity === 'ONLINE')
     .sort((a,b) => (a.telemetry?.soc_pct ?? 100) - (b.telemetry?.soc_pct ?? 100));
 
@@ -60,7 +61,7 @@ export function ChargingOperations({ vehicles, onUpdated }: {
         <td>{v.telemetry!.soc_pct.toFixed(1)}%</td>
         <td><strong>{v.telemetry!.soc_pct < 20 ? 'CRITICAL' : 'LOW'}</strong></td>
         <td>{v.active_charging_task ? v.active_charging_task.status
-          : <button disabled={busy || !!tasks.error || !tasks.data || !!v.active_rental || !!v.active_claim || v.effective_relocation_state !== 'IDLE'}
+          : <button disabled={busy || !!tasks.error || !taskDataValid || !!v.active_rental || !!v.active_claim || v.effective_relocation_state !== 'IDLE'}
               onClick={() => void create(v)}>Create charging task</button>}</td>
       </tr>)}</tbody></table></div>
     {!low.length && <p className="muted">No fresh online EV telemetry below the alert threshold.</p>}
