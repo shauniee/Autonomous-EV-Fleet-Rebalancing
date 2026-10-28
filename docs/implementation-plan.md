@@ -8,6 +8,12 @@ default remains SIMULATED. See [setup and limits](onemap-routing.md).
 Live verification awaits a token. Build/static checks passed; tests were not run.
 Scope review removed unused metadata and redundant calculations/documentation.
 
+UI follow-up: selected journey, highlighted road/EV/endpoints, Fit route and
+telemetry-based Follow EV controls, shared progress/directions, and relocation
+card links. Reuses the existing road-following simulator and polling APIs; no new
+backend, dependencies or navigation engine. TypeScript/build and whitespace checks
+passed; tests were not run and `.env` was not accessed. Live verification pending.
+
 ## LTA DataMall integration — 28 October 2026
 
 Frontend follow-up: facility cards use client-side pagination (12 per page),

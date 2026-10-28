@@ -28,6 +28,8 @@ export default function App() {
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const [selected, setSelected] = useState('');
+  const [selectedDispatch, setSelectedDispatch] = useState('');
+  const mapPanel = useRef<HTMLElement>(null);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
@@ -118,6 +120,7 @@ export default function App() {
       const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', body: JSON.stringify(approval) });
       if (!mounted.current) return;
       setPending(null); setRecommendation(null);
+      if (result.command?.route) setSelectedDispatch(result.dispatch_id);
       setNotice(`Dispatch ${result.dispatch_id}: approval recorded. Follow its live backend status below.`);
     } catch (error) {
       if (!mounted.current) return;
@@ -138,6 +141,8 @@ export default function App() {
       const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', body: JSON.stringify(approval) });
       if (!mounted.current) return;
       setBatchResult(result); setBatch(null);
+      const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));
+      if (dispatched?.dispatch_id) setSelectedDispatch(dispatched.dispatch_id);
       if (result.status === 'UNKNOWN') {
         setError('Some batch outcomes are uncertain. Reconcile or retry using the same batch request ID.');
       } else {
@@ -170,12 +175,12 @@ export default function App() {
         catch (e) { setError(message(e)); }
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
-      <div className="workspace"><div className="workspace-main"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
-        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} selected={selected} onSelect={choose}/>
+      <div className="workspace"><div className="workspace-main"><section ref={mapPanel} className="panel map-panel"><div className="section-title"><h2>Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
+        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
-        <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · Approximate simulation coordinates</p>
+        <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · EV markers follow reported telemetry</p>
       </section>
       <section className="panel relocation-request" aria-labelledby="relocation-request-title"><div className="section-title"><h2 id="relocation-request-title">Relocation request</h2><span className="muted">1–20 EVs</span></div>
         {zone ? <><p>How many EVs should be relocated to <strong>{zone.name}</strong>?</p>
@@ -210,7 +215,9 @@ export default function App() {
       </aside></div>
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
-      <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles}/>
+      <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+        setSelectedDispatch(id); mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>
     </main>{confirming && recommendation && <DispatchConfirmation recommendation={recommendation} vehicle={current || undefined} expired={!!approvalBlocked} onClose={() => setConfirming(false)} onApprove={() => void approve()}/>}
     {batchConfirming && batch && <BatchConfirmation batch={batch} expired={batchBlocked} onClose={() => setBatchConfirming(false)} onApprove={() => void approveBatch()}/>}
