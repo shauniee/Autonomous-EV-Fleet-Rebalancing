@@ -48,3 +48,46 @@ def test_customer_trip_safety_and_invalid_movement():
         motion.finish_customer_trip()
     with pytest.raises(ValueError):
         motion.advance(-1, 30)
+
+
+def test_customer_rental_http_lifecycle_and_relocation_exclusion():
+    """Exercise real Fleet rental endpoints with a sole-telemetry-owner EV."""
+    import asyncio
+    import httpx
+    from ev_fleet.fleet.app import create_app
+    from ev_fleet.fleet.store import FleetStore
+    from ev_fleet.simulations.customer import RentalVehicle
+
+    async def exercise():
+        store = FleetStore()
+        await store.start()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(store))) as client:
+            node = RentalVehicle("http://fleet.test", "http://dispatch.test", "customer-ev-test",
+                                 ZONES["punggol"], 85, client=client, tick_seconds=0.01)
+            await node.register()
+            await node.send_telemetry()
+            assert (await store.get("customer-ev-test"))["effective_availability"] == "AVAILABLE"
+            task = asyncio.create_task(node.run_customer_trip("cbd"))
+            for _ in range(200):
+                if node.movement.rental is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert node.movement.rental is not None, "Rental was not accepted"
+            during = await store.get("customer-ev-test")
+            assert during["active_rental"] is not None
+            assert during["effective_availability"] == "UNAVAILABLE"
+            # A second owner must fail closed, without taking this car's session.
+            another = RentalVehicle("http://fleet.test", "http://dispatch.test",
+                                    "customer-ev-test", ZONES["punggol"], 85, client=client)
+            with pytest.raises(RuntimeError, match="unresolved journey"):
+                await another.register()
+            node.movement.advance(100000, 30)
+            assert await asyncio.wait_for(task, timeout=5) == "returned"
+            after = await store.get("customer-ev-test")
+            assert after["active_rental"] is None
+            assert after["effective_availability"] == "AVAILABLE"
+            assert after["telemetry"]["position"] == ZONES["cbd"]
+            assert after["telemetry"]["soc_pct"] < during["telemetry"]["soc_pct"]
+        await store.close()
+
+    asyncio.run(exercise())
