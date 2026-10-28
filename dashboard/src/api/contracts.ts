@@ -18,9 +18,18 @@ export interface HeatMap {
   generated_at: string; demand_snapshot_at: string; fleet_snapshot_at: string | null;
   status: string; issues: string[]; fleet_status: string; zones: Zone[];
 }
+export interface ChargingTask {
+  task_id: string; vehicle_id: string;
+  status: 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  soc_at_creation: number; assigned_staff: string | null;
+  created_at: string; updated_at: string;
+}
 export interface Rental { rental_id: string; status: 'RENTED' | 'RETURNED'; expected_end_at: string; started_at: string; return_position: Position | null; return_soc_pct: number | null; }
 export interface Vehicle {
   active_rental?: Rental | null;
+  active_charging_task?: ChargingTask | null;
+  active_claim?: unknown | null;
+  state_version: number;
   vehicle_id: string; current_zone_id: string | null; stale: boolean; connectivity: string;
   effective_availability: string; effective_relocation_state: string; received_at: string | null;
   telemetry: { position: Position; soc_pct: number; observed_at: string;
