@@ -3,7 +3,6 @@
 The matching is advisory: it does not claim EVs, hold bays, create charging
 tasks or dispatch. Approval goes through the existing batch/dispatch workflow.
 """
-from ev_fleet.common.travel import distance_km
 from ev_fleet.rebalancing.policy import assess
 
 LOW_SOC_ADVICE_PCT = 25.0
