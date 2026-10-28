@@ -10,10 +10,12 @@ import sys
 
 DEFAULTS = {
     "FACILITIES_SOURCE": "MOCK", "LTA_DATAMALL_ACCOUNT_KEY": "",
+    "TRAFFIC_SOURCE": "DISABLED",
     "LTA_PARKING_REFRESH_SECONDS": "60", "LTA_CHARGING_REFRESH_SECONDS": "300",
     "LTA_PARKING_MAX_AGE_SECONDS": "180", "LTA_CHARGING_MAX_AGE_SECONDS": "900",
 }
-ROUTING_DEFAULTS = {"ROUTING_PROVIDER": "SIMULATED", "ONEMAP_ACCESS_TOKEN": ""}
+ROUTING_DEFAULTS = {"ROUTING_PROVIDER": "SIMULATED", "ONEMAP_ACCESS_TOKEN": "",
+                    "OSRM_ROUTING_URL": "", "TRAFFIC_SOURCE": "DISABLED"}
 
 
 def settings(path, defaults=DEFAULTS):
@@ -40,6 +42,8 @@ def settings(path, defaults=DEFAULTS):
     values.update({key: os.environ[key] for key in defaults if key in os.environ})
     if "FACILITIES_SOURCE" in values and values["FACILITIES_SOURCE"] not in ("MOCK", "LTA_DATAMALL"):
         raise ValueError("FACILITIES_SOURCE must be MOCK or LTA_DATAMALL")
+    if values.get("TRAFFIC_SOURCE", "DISABLED") not in ("DISABLED", "LTA_DATAMALL"):
+        raise ValueError("TRAFFIC_SOURCE must be DISABLED or LTA_DATAMALL")
     for key, minimum in (("LTA_PARKING_REFRESH_SECONDS", 60), ("LTA_CHARGING_REFRESH_SECONDS", 300),
                          ("LTA_PARKING_MAX_AGE_SECONDS", 60), ("LTA_CHARGING_MAX_AGE_SECONDS", 300)):
         if key in values and (not values[key].isdigit() or int(values[key]) < minimum):
@@ -60,6 +64,8 @@ if __name__ == "__main__":
         raise SystemExit(str(exc)) from None
     if routing and values["ROUTING_PROVIDER"] == "ONEMAP" and not values["ONEMAP_ACCESS_TOKEN"].strip():
         raise SystemExit("ONEMAP_ACCESS_TOKEN is required when ROUTING_PROVIDER=ONEMAP")
+    if not routing and values["TRAFFIC_SOURCE"] == "LTA_DATAMALL" and not values["LTA_DATAMALL_ACCOUNT_KEY"].strip():
+        raise SystemExit("LTA_DATAMALL_ACCOUNT_KEY is required when TRAFFIC_SOURCE=LTA_DATAMALL")
     if not routing and values["FACILITIES_SOURCE"] == "LTA_DATAMALL" and not values["LTA_DATAMALL_ACCOUNT_KEY"].strip():
         raise SystemExit("LTA_DATAMALL_ACCOUNT_KEY is required when FACILITIES_SOURCE=LTA_DATAMALL")
     if check:
