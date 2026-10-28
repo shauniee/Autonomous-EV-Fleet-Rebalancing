@@ -6,7 +6,7 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
   batch: BatchRecommendation; remaining: number; disabled: boolean; onReview: () => void;
 }) {
   return <div className="recommendation" data-testid="batch-recommendation">
-    <div className="eyebrow">{batch.purpose === 'CHARGE' ? 'Charging destination recommendation' : 'Parking-aware batch recommendation'}</div>
+    <div className="eyebrow">{batch.purpose === 'CHARGE' ? 'Charging destination recommendation' : 'Automatic facility recommendation'}</div>
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
     <p>{batch.explanation}</p>
     {batch.unfulfilled_count > 0 && <p className="warning" role="status">
@@ -14,7 +14,7 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
     <div className="table-scroll"><table aria-label="Batch vehicle-to-parking assignments">
       <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Score</th></tr></thead>
       <tbody>{batch.assignments.map(item => <tr key={item.recommendation_id}>
-        <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ''}</td>
+        <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ' · parking'}</td>
         <td>{number(item.distance_km, ' km')}</td><td>{number(item.predicted_arrival_soc_pct, '%')}</td>
         <td>{number(item.score)}</td>
       </tr>)}</tbody>
@@ -34,7 +34,8 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
     <div className="eyebrow">Explicit dispatcher approval</div>
     <h2 id="batch-title">Confirm {batch.recommended_count} EV {batch.recommended_count === 1 ? 'relocation' : 'relocations'}</h2>
     <p>{batch.target_zone_id.toUpperCase()} · {batch.unfulfilled_count} unfulfilled of {batch.requested_count} requested</p>
-    <ol>{batch.assignments.map(a => <li key={a.recommendation_id}>{a.vehicle_id} → {a.facility_name}</li>)}</ol>
+    <ol>{batch.assignments.map(a => <li key={a.recommendation_id}>{a.vehicle_id} → {a.facility_name} · {a.requires_charging ? 'charging' : 'parking'}</li>)}</ol>
+    {batch.assignments.some(a => a.requires_charging) && <p className="muted">Ground-team cable connection is assumed after arrival. Charging is simulated automatically to 80%; there is no separate plug-in confirmation.</p>}
     <p className="muted">The backend rechecks each vehicle and holds a space within this simulation before claiming that EV. Partial approval is possible. Public parking and charging spaces are not reserved.</p>
     {expired && <p className="warning">Expired or stale data. Request another recommendation.</p>}
     <div className="actions"><button autoFocus onClick={onClose}>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve {batch.recommended_count} {batch.recommended_count === 1 ? 'EV' : 'EVs'}</button></div>

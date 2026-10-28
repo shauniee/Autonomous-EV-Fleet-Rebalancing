@@ -189,8 +189,11 @@ export default function App() {
           <div className="select-wrap"><select className="form-select" id="relocation-purpose" aria-describedby="relocation-purpose-help" value={purpose} disabled={recommending || submitting} onChange={event => {
             setPurpose(event.target.value as 'REBALANCE' | 'CHARGE');
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
-          }}><option value="REBALANCE">Parking / demand rebalancing</option><option value="CHARGE">Charging — replenish to 80%</option></select></div>
-          <p id="relocation-purpose-help" className="muted">{purpose === 'CHARGE' ? 'Prioritise lower-SOC EVs. Simulated charging begins after arrival and finishes at 80%.' : 'Find a parking destination to meet demand in this zone.'}</p>
+          }}><option value="REBALANCE">{facilityWorkflow ? 'Automatic — parking or charging' : 'Parking / demand rebalancing'}</option><option value="CHARGE">Charging only — replenish to 80%</option></select></div>
+          <p id="relocation-purpose-help" className="muted">{purpose === 'CHARGE'
+            ? 'Request a charging destination explicitly. Ground-team cable connection is assumed; simulated charging starts after arrival and stops at 80%.'
+            : facilityWorkflow ? 'Choose a facility automatically for each EV: charging if predicted arrival battery is below 35%, otherwise parking. The EV must still have enough battery to reach it safely.'
+            : 'Find a destination zone to meet demand.'}</p>
           </div><div className="request-field">
           <label htmlFor="relocation-vehicle">Vehicle</label>
           <div className="select-wrap"><select className="form-select" id="relocation-vehicle" aria-describedby="relocation-vehicle-help" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
@@ -216,6 +219,8 @@ export default function App() {
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+        const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
+        if (target && target !== selected) choose(target);
         setSelectedDispatch(id); mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>

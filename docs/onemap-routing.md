@@ -34,6 +34,18 @@ does not silently fall back when a token, API request or route is invalid.
 
 ## Approved journey
 
+With LTA facilities, the default **Automatic — parking or charging** mode chooses
+a facility for each EV in the selected zone. Predicted arrival SOC below 35%
+requires available charging; otherwise ordinary parking is selected. All trips
+must preserve the operational reserve (20% by default). **Charging only** is an
+explicit override. If no eligible EV/facility pair exists, the request remains
+unfulfilled. OneMap road-distance checks on approval may reject an assignment
+if it now needs charging but the proposed facility has no charger capacity.
+
+Ground-team cable connection is assumed: simulated charging starts after verified
+arrival/allocation and stops at 80%. There is no staff plug-in confirmation or
+physical charger control.
+
 1. Select an LTA parking or charging destination through the usual recommendation
    and explicit approval workflow. Candidate ranking remains the existing
    approximate-distance heuristic; this scaffold does not call routing for every pair.
