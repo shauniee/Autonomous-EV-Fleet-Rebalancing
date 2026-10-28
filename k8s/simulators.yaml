@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ev-moving-01
+  labels:
+    app.kubernetes.io/group: simulations
 spec:
   replicas: 1
   strategy:
@@ -81,6 +83,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ev-moving-02
+  labels:
+    app.kubernetes.io/group: simulations
 spec:
   replicas: 1
   strategy:
@@ -160,6 +164,8 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ev-moving-extra
+  labels:
+    app.kubernetes.io/group: simulations
 spec:
   serviceName: ev-moving-extra
   replicas: 18

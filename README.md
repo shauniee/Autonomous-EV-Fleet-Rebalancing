@@ -308,3 +308,25 @@ live data integration is included.
 
 See [Phase 5C guide](docs/phase5c-bulk-parking.md) for API usage,
 assumptions, test commands and safety limitations.
+
+## Optional customer rental experiment
+
+The customer simulation is a **separate, finite Kubernetes Job in the same
+`ev-fleet` namespace**, not another cluster or dashboard. It uses six dedicated
+rental-capable simulated EVs, each with one authoritative telemetry owner.
+Existing EV simulators remain unchanged. The Job exercises existing Fleet
+rental APIs and generates movement, battery consumption and returns; returned
+EVs can subsequently be considered for approved relocations.
+
+Run after the base Kubernetes application is healthy:
+
+```powershell
+kubectl apply -f .\k8s\simulations\customer-job.yaml
+kubectl -n ev-fleet logs -f job/customer-rental-simulation
+```
+
+It is disabled by default and deliberately does not alter Demand or
+automatically dispatch cars. See
+[customer rental simulation](docs/customer-rental-simulation.md) for scenario
+settings, safe reruns, limitations and evaluation guidance.
+
