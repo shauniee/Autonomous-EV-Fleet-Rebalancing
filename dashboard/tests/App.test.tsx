@@ -8,7 +8,9 @@ function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
-    '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(), ...overrides,
+    '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/rebalancing/charging-advice': { generated_at: new Date().toISOString(), trigger_soc_pct: 25,
+      min_arrival_reserve_pct: 20, vehicles: [], assumptions: [] }, ...overrides,
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
@@ -260,5 +262,70 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     expect(await screen.findByText(/LTA parking: MISSING_KEY/)).toBeInTheDocument();
     expect(screen.queryByText('MOCK · NOT REAL PARKING')).not.toBeInTheDocument();
+  });
+
+  it('prepares exact low-SOC charger route without issuing any dispatch before approval', async () => {
+    const fleet = makeFleet(); fleet.vehicles[0].telemetry!.soc_pct = 25;
+    const site = {
+      facility_id: 'mock-bishan-01', name: 'Bishan simulated parking 1', zone_id: 'bishan',
+      position: { latitude: 1.351, longitude: 103.85 }, source: 'MOCK', status: 'OPEN',
+      parking_capacity: 66, parking_available: 14, charging_bays: 6, charging_available: 3,
+      connector_types: ['CCS2'],
+    };
+    const now = new Date().toISOString();
+    const advice = {
+      generated_at: now, trigger_soc_pct: 25, min_arrival_reserve_pct: 20, assumptions: [],
+      vehicles: [{ vehicle_id: 'ev-01', current_soc_pct: 25, status: 'RECOMMENDED', reasons: [],
+        charger: { facility_id: site.facility_id, facility_name: site.name, zone_id: 'bishan',
+          source: 'MOCK', distance_km: .15, energy_required_kwh: .05,
+          predicted_arrival_soc_pct: 24.9, charging_available: 3, charging_power_kw: null } }],
+    };
+    const proposed = {
+      batch_recommendation_id: 'safe-charge-batch', target_zone_id: 'bishan', purpose: 'CHARGE',
+      requested_count: 1, recommended_count: 1, unfulfilled_count: 0,
+      created_at: now, expires_at: new Date(Date.now() + 60000).toISOString(),
+      explanation: 'One feasible charging destination', assumptions: [],
+      assignments: [{ recommendation_id: 'safe-charge', vehicle_id: 'ev-01',
+        facility_id: site.facility_id, facility_name: site.name, target_position: site.position,
+        requires_charging: true, distance_km: .15, predicted_arrival_soc_pct: 24.9, score: .7 }],
+    };
+    const fetch = server({
+      '/api/fleet/vehicles': fleet,
+      '/api/facilities/facilities': { generated_at: now, data_source: 'MOCK', facilities: [site] },
+      '/api/rebalancing/charging-advice': advice,
+      '/api/rebalancing/batch-recommendations': proposed,
+    });
+    render(<App/>);
+    const action = await screen.findByRole('button', { name: 'Prepare charger route' });
+    await waitFor(() => expect(action).toBeEnabled());
+    fireEvent.click(action);
+    expect(screen.getByLabelText('Destination purpose')).toHaveValue('CHARGE');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('ev-01');
+    expect(screen.getByText(/Charging advisory destination:/)).toHaveTextContent('mock-bishan-01');
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
+    expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('Bishan simulated parking 1');
+    const requests = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({
+      target_zone_id: 'bishan', quantity: 1, purpose: 'CHARGE',
+      vehicle_id: 'ev-01', facility_id: 'mock-bishan-01',
+    });
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toBe(false);
+  });
+
+  it('does not offer a charging route when the backend cannot find a safe charger', async () => {
+    const fleet = makeFleet(); fleet.vehicles[0].telemetry!.soc_pct = 19;
+    server({ '/api/fleet/vehicles': fleet,
+      '/api/rebalancing/charging-advice': {
+        generated_at: new Date().toISOString(), trigger_soc_pct: 25, min_arrival_reserve_pct: 20,
+        vehicles: [{ vehicle_id: 'ev-01', current_soc_pct: 19,
+          status: 'INELIGIBLE', reasons: ['BELOW_OPERATIONAL_RESERVE'], charger: null }],
+        assumptions: [],
+      },
+    });
+    render(<App/>);
+    expect(await screen.findByText(/BELOW_OPERATIONAL_RESERVE/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prepare charger route' })).not.toBeInTheDocument();
   });
 });
