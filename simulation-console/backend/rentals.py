@@ -38,7 +38,7 @@ def replica_count(scale, section):
     # Kubernetes Scale API can omit zero-value replica fields from JSON.
     # That means a paused Deployment may have spec={}, status={} instead
     # of explicitly containing "replicas": 0.
-    data = scale.get(section) if isinstance(scale, dict) else None
+    data = scale.get(section, {} if section == "status" else None) if isinstance(scale, dict) else None
     if not isinstance(data, dict):
         raise HTTPException(503, "RENTAL_SCALE_RESPONSE_INVALID")
     count = data.get("replicas", 0)
