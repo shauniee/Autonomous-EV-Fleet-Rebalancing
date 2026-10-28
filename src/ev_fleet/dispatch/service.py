@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
@@ -16,6 +17,8 @@ from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
 from .routing import RoutingSettings, driving_route
+from .traffic_routes import choose_traffic_route
+from ev_fleet.rebalancing.traffic import assess_traffic
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
@@ -33,6 +36,7 @@ class DispatchService:
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.routing = RoutingSettings.from_env()
+        self.traffic_enabled = os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
 
     async def start(self):
         await self.repository.start()
@@ -130,6 +134,14 @@ class DispatchService:
         route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
                                     self.settings.arrival_tolerance_km,
                                     facility=parking is not None) if origin else None
+        if route and self.traffic_enabled:
+            traffic = await request_json(self.client, "GET",
+                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions")
+            # A confirmed, geolocated closure must not be bypassed. Missing
+            # traffic feeds are visible as UNKNOWN, not an all-clear.
+            route = await choose_traffic_route(self.client, route, origin,
+                destination.model_dump(), self.settings.arrival_tolerance_km,
+                traffic, self.clock.now(), facility=parking is not None)
         if route:
             # Physical destination is the road endpoint, NOT the carpark's
             # off-road map coordinate. Fleet keeps the strict 50 m arrival rule.
