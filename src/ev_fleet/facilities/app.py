@@ -1,15 +1,17 @@
+import asyncio
+import httpx
 from fastapi import HTTPException, Response
 from ev_fleet.common.dashboard_cache import DashboardCache
 
 from ev_fleet.common.logging import base_app
-from ev_fleet.contracts.common import utcnow
-from ev_fleet.contracts.facilities import FacilitiesSnapshot, Facility, ParkingHoldRequest, ParkingHold
+from ev_fleet.contracts.facilities import FacilitiesSnapshot, Facility, ParkingHoldRequest, ParkingHold, VehicleParking
 from ev_fleet.demand.store import SINGAPORE_ZONES
 from .store import FacilitiesStore
+from .datamall import DataMallClient, poll_feed
 
 
 def create_app(store=None, cache=None):
-    app = base_app("Mock Parking and Charging Service")
+    app = base_app("Parking and Charging Simulation Service")
     state = store or FacilitiesStore()
     app.state.store = state
     app.state.persistence = state.repository
@@ -21,12 +23,16 @@ def create_app(store=None, cache=None):
     async def facilities(zone_id: str | None = None):
         if zone_id is not None and zone_id not in zone_ids:
             raise HTTPException(404, "ZONE_NOT_FOUND")
-        return FacilitiesSnapshot(generated_at=utcnow(), facilities=await state.snapshot(zone_id))
+        return await state.view(zone_id)
 
     @app.get("/api/v1/dashboard/facilities", response_model=FacilitiesSnapshot)
     async def dashboard_facilities(response: Response):
         async def producer():
-            return FacilitiesSnapshot(generated_at=utcnow(), facilities=await state.snapshot())
+            return await state.view()
+        # Availability expires with wall time, independently of version updates.
+        if state.settings.source == "LTA_DATAMALL":
+            response.headers["X-Dashboard-Cache"] = "BYPASS"
+            return await producer()
         result, status = await display_cache.get_or_compute(
             f"facilities:{state.version}", producer, FacilitiesSnapshot)
         response.headers["X-Dashboard-Cache"] = status
@@ -44,6 +50,10 @@ def create_app(store=None, cache=None):
     async def hold(dispatch_id: str):
         return await state.get_hold(dispatch_id)
 
+    @app.get("/api/v1/vehicles/{vehicle_id}/parking", response_model=VehicleParking)
+    async def vehicle_parking(vehicle_id: str):
+        return await state.vehicle_parking(vehicle_id)
+
     @app.post("/api/v1/holds/{dispatch_id}/complete", response_model=ParkingHold)
     async def complete(dispatch_id: str):
         return await state.change(dispatch_id, "OCCUPIED")
@@ -54,12 +64,24 @@ def create_app(store=None, cache=None):
 
     @app.on_event("shutdown")
     async def stop_display_cache():
+        for task in getattr(app.state, "feed_tasks", []):
+            task.cancel()
+        await asyncio.gather(*getattr(app.state, "feed_tasks", []), return_exceptions=True)
+        if getattr(app.state, "datamall_client", None):
+            await app.state.datamall_client.aclose()
         await display_cache.aclose()
         await state.close()
 
     @app.on_event("startup")
     async def restore_state():
         await state.start()
+        app.state.feed_tasks = []
+        if state.settings.source == "LTA_DATAMALL" and state.settings.account_key.get_secret_value():
+            client = httpx.AsyncClient()
+            app.state.datamall_client = client
+            provider = DataMallClient(client, state.settings.account_key)
+            app.state.feed_tasks = [asyncio.create_task(poll_feed(state, provider, name))
+                                    for name in ("parking", "charging")]
 
     return app
 

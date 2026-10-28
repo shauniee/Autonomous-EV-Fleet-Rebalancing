@@ -81,6 +81,13 @@ services:
     profiles: [relocation]
     command: ["uvicorn", "ev_fleet.facilities.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${FACILITIES_PORT:-8005}:8000"]
+    environment:
+      FACILITIES_SOURCE: ${FACILITIES_SOURCE:-MOCK}
+      LTA_DATAMALL_ACCOUNT_KEY: ${LTA_DATAMALL_ACCOUNT_KEY:-}
+      LTA_PARKING_REFRESH_SECONDS: ${LTA_PARKING_REFRESH_SECONDS:-60}
+      LTA_CHARGING_REFRESH_SECONDS: ${LTA_CHARGING_REFRESH_SECONDS:-300}
+      LTA_PARKING_MAX_AGE_SECONDS: ${LTA_PARKING_MAX_AGE_SECONDS:-180}
+      LTA_CHARGING_MAX_AGE_SECONDS: ${LTA_CHARGING_MAX_AGE_SECONDS:-900}
   dispatch:
     <<: *backend
     profiles: [relocation]
@@ -107,6 +114,8 @@ services:
     build: .
     init: true
     profiles: [relocation]
+    environment:
+      FACILITIES_URL: http://facilities:8000
     command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-01", "--zone", "bishan", "--soc", "90", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
     depends_on:
       fleet: {condition: service_healthy}
@@ -115,6 +124,8 @@ services:
     build: .
     init: true
     profiles: [relocation]
+    environment:
+      FACILITIES_URL: http://facilities:8000
     command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-02", "--zone", "tampines", "--soc", "60", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
     depends_on:
       fleet: {condition: service_healthy}

@@ -131,6 +131,7 @@ class FleetStore:
                 "effective_availability": "AVAILABLE" if (
                     not stale and not record["active_claim"] and record["active_rental"] is None and telemetry
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
+                    and telemetry.charging_state != "CHARGING"
                     and telemetry.active_dispatch_id is None) else "UNAVAILABLE",
                 "connectivity": "OFFLINE" if age is None or age >= self.settings.offline_seconds else "ONLINE"}
 

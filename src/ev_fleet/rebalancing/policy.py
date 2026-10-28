@@ -23,6 +23,8 @@ def assess(vehicle, target, settings, now):
         reasons.append("STALE_TELEMETRY")
     if telemetry["availability"] != "AVAILABLE":
         reasons.append("UNAVAILABLE")
+    if telemetry.get("charging_state") == "CHARGING":
+        reasons.append("CHARGING")
     if vehicle.get("active_rental") is not None:
         reasons.append("RENTED")
     if telemetry["relocation_state"] != "IDLE" or telemetry.get("active_dispatch_id") or vehicle.get("active_claim"):

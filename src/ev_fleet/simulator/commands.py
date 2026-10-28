@@ -7,13 +7,14 @@ from uuid import uuid4
 import httpx
 from ev_fleet.contracts.common import utcnow
 from ev_fleet.contracts.dispatch import RelocationCommand
+from ev_fleet.contracts.facilities import VehicleParking
 from .movement import Movement
 
 
 class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
-                 speed_kph=30, time_scale=30, client=None):
+                 speed_kph=30, time_scale=30, client=None, facilities_url=None):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
         self.fleet_url, self.dispatch_url, self.vehicle_id = fleet_url, dispatch_url, vehicle_id
@@ -28,6 +29,8 @@ class MovingNode:
         self.acknowledged = False
         self.initialized = False
         self.ready = asyncio.Event()
+        self.facilities_url = facilities_url
+        self.parking_verified = not bool(facilities_url)
 
     async def request(self, method, url, body=None):
         response = await self.client.request(method, url, json=body)
@@ -43,11 +46,31 @@ class MovingNode:
         if not self.initialized and (state.get("active_claim") or state.get("active_rental") or previous and (
             previous.get("active_dispatch_id") or previous["relocation_state"] != "IDLE")):
             raise RuntimeError("Vehicle has an unresolved journey; refusing to overwrite its physical state")
+        if not self.initialized and previous:
+            # Resume an idle parked/charging EV instead of teleporting to CLI defaults.
+            self.movement.position = previous["position"]
+            self.movement.soc_pct = previous["soc_pct"]
         session = await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry-sessions",
                                      {"request_id": self.session_request})
         self.session = session["session_id"]
         self.sequence = 0
         self.initialized = True
+        if self.facilities_url:
+            await self.refresh_parking()
+
+    async def refresh_parking(self):
+        self.parking_verified = False
+        self.movement.park(None)
+        state = VehicleParking.model_validate(await self.request("GET",
+            f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking")).model_dump(mode="json")
+        if state["vehicle_id"] != self.vehicle_id:
+            raise RuntimeError("Parking response belongs to another vehicle")
+        if state["pending"]:
+            return
+        if state["parking"]:
+            self.parking_verified = self.movement.park(state["parking"])
+        else:
+            self.parking_verified = True
 
     async def send_telemetry(self):
         if self.session is None:
@@ -55,9 +78,12 @@ class MovingNode:
         sequence = self.sequence
         self.sequence += 1  # A lost response must never reuse this number with a different payload.
         try:
+            physical = self.movement.telemetry()
+            if self.facilities_url and not self.parking_verified:
+                physical["availability"] = "UNAVAILABLE"
             await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry", {
                 "session_id": self.session, "sequence": sequence, "observed_at": utcnow().isoformat(),
-                **self.movement.telemetry()})
+                **physical})
             self.ready.set()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -69,6 +95,8 @@ class MovingNode:
     async def command_step(self):
         await self.ready.wait()
         if self.movement.command is None:
+            if self.facilities_url:
+                await self.refresh_parking()
             response = await self.request("GET", f"{self.dispatch_url}/api/v1/vehicles/{self.vehicle_id}/commands")
             if not response["commands"]:
                 return
@@ -93,6 +121,8 @@ class MovingNode:
         state = await self.request("GET", url)
         if state["state"] in ("SUCCEEDED", "REJECTED") and state["claim_held"] is False:
             self.movement.complete()
+            if self.facilities_url:
+                await self.refresh_parking()
             return
         if not self.movement.accepted or self.movement.state == "DISPATCHED":
             return
@@ -129,6 +159,8 @@ class MovingNode:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
             self.movement.advance((now - last) * self.time_scale, self.speed_kph)
+            if self.parking_verified:
+                self.movement.charge((now - last) * self.time_scale)
             last = now
 
     async def run(self):

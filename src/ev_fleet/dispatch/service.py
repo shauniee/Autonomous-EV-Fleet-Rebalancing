@@ -10,7 +10,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
 from ev_fleet.contracts.dispatch import DispatchApproval
-from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
@@ -116,7 +116,7 @@ class DispatchService:
                 f"{self.settings.facilities_url}/api/v1/facilities/{recommendation.parking_facility_id}",
                 model=Facility)
             if (parking.zone_id != target.zone_id or parking.status != "OPEN"
-                    or parking.parking_available <= 0 or parking.source != "MOCK"
+                    or parking.parking_available <= 0 or not parking.is_fresh(self.clock.now())
                     or parking.position != recommendation.target_position):
                 raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
             destination = parking.position
@@ -128,8 +128,12 @@ class DispatchService:
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
         if parking:
+            if recommendation.purpose == "CHARGE" and assessment["current_soc_pct"] >= CHARGING_TARGET_SOC_PCT:
+                raise HTTPException(409, "CHARGING_TARGET_ALREADY_REACHED")
             requires_charge = (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
                                or recommendation.requires_charging)
+            if parking.facility_type == "CHARGING" and not requires_charge:
+                raise HTTPException(409, "CHARGING_NOT_REQUIRED")
             if requires_charge and parking.charging_available <= 0:
                 raise HTTPException(409, "CHARGING_FULL")
             record.data["parking_facility_id"] = parking.facility_id

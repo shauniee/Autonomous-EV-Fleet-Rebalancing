@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--interval", type=float, default=float(os.getenv("TELEMETRY_INTERVAL_SECONDS", "5")))
     parser.add_argument("--updates", type=int, help="Exit after this many accepted observations")
     parser.add_argument("--dispatch-url", help="Enable relocation commands from this Dispatch Service")
+    parser.add_argument("--facilities-url", default=os.getenv("FACILITIES_URL"), help="Enable allocated parking and simulated charging")
     parser.add_argument("--speed-kph", type=float, default=30)
     parser.add_argument("--time-scale", type=float, default=30, help="Simulated seconds per real second")
     parser.add_argument("--tick-seconds", type=float, default=.2)
@@ -34,7 +35,8 @@ def main():
     logging.basicConfig(level=logging.INFO)
     asyncio.run(run_node(args.fleet_url, args.vehicle_id, position, args.soc, args.interval, args.updates,
                         dispatch_url=args.dispatch_url, speed_kph=args.speed_kph, time_scale=args.time_scale,
-                        tick_seconds=args.tick_seconds, poll_interval=args.poll_interval))
+                        tick_seconds=args.tick_seconds, poll_interval=args.poll_interval,
+                        facilities_url=args.facilities_url))
 
 
 if __name__ == "__main__":

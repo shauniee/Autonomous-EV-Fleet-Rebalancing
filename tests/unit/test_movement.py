@@ -64,3 +64,23 @@ def test_zero_distance_arrival_and_battery_failure():
     moving.soc_pct = .001  # Physical fault after acceptance.
     moving.advance(1000, 30)
     assert moving.state == "FAILED" and moving.soc_pct == 0
+
+
+def test_charging_requires_allocated_position_and_stops_at_target():
+    position = {"latitude": 1.283, "longitude": 103.8513}
+    parking = {"facility_id": "lta-charging-demo", "position": position,
+               "charging_allocated": True, "charging_power_kw": 12,
+               "charging_target_soc_pct": 80}
+    moving = Movement(position, 70)
+    assert moving.park(parking)
+    assert moving.telemetry()["availability"] == "UNAVAILABLE"
+    moving.charge(1800)  # 6 kWh into a 60 kWh battery.
+    assert moving.soc_pct == pytest.approx(80)
+    assert moving.charging_state == "COMPLETE"
+    assert moving.telemetry()["availability"] == "AVAILABLE"
+    moving.charge(1800)
+    assert moving.soc_pct == pytest.approx(80)
+    elsewhere = Movement({"latitude": 1.35, "longitude": 103.85}, 70)
+    assert not elsewhere.park(parking)
+    elsewhere.charge(1800)
+    assert elsewhere.soc_pct == 70
