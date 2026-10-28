@@ -1,5 +1,5 @@
 # Optional persistent customer demo in existing ev-fleet cluster.
-# NEVER apply together with customer-job.yaml: both own the same vehicle IDs.
+# Start via the Simulation Console; NEVER run together with customer-job.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/name: customer-rental-demo
     app.kubernetes.io/group: simulations
 spec:
-  replicas: 1
+  replicas: 0
   strategy:
     type: Recreate
   selector:
