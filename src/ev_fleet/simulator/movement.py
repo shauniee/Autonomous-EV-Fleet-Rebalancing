@@ -35,6 +35,8 @@ class Movement:
             return self.seen[identity]["accepted"]
         if self.command:
             raise ValueError("another command is active")
+        if command.get("route") and distance_km(self.position, command["route"]["geometry"][0]) > .005:
+            raise ValueError("route starts away from the road-aligned EV position")
         self.parking = None
         self.charging_state = "NOT_CHARGING"
         self.command = deepcopy(command)
@@ -56,6 +58,11 @@ class Movement:
                                      self.capacity, self.consumption, command["route_factor"],
                                      command["energy_margin_factor"])
         self.accepted = forecast >= command["min_reserve_pct"]
+        if route and self.accepted:
+            # Only a few metres of route-start coordinate normalisation
+            # before motion. All subsequent samples lie on OneMap geometry.
+            self.position = deepcopy(route["geometry"][0])
+            self.origin = deepcopy(self.position)
         self.reason = None if self.accepted else "INSUFFICIENT_LOCAL_SOC"
         self.state = "DISPATCHED" if self.accepted else "IDLE"
         self.seen[identity] = {"command": deepcopy(command), "accepted": self.accepted, "completed": False}
