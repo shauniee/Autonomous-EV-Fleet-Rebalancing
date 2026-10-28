@@ -191,8 +191,8 @@ try {
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Milliseconds 500
-        if (($dashboardJob -and $dashboardJob.State -ne "Running") -or
-            ($simulationJob -and $simulationJob.State -ne "Running")) {
+        if (($dashboardJob -and $dashboardJob.State -in @("Failed", "Completed", "Stopped")) -or
+            ($simulationJob -and $simulationJob.State -in @("Failed", "Completed", "Stopped"))) {
             throw "A dashboard port-forward failed. Inspect the jobs and verify ports 8080 and 8090 are available."
         }
         $dashboardReady = Test-LocalEndpoint "http://127.0.0.1:8080/health"
@@ -217,8 +217,8 @@ try {
     }
     Write-Host "Keep this window open for newly created tunnels; Ctrl+C closes only those tunnels."
     while ($true) {
-        if (($dashboardJob -and $dashboardJob.State -ne "Running") -or
-            ($simulationJob -and $simulationJob.State -ne "Running")) {
+        if (($dashboardJob -and $dashboardJob.State -in @("Failed", "Completed", "Stopped")) -or
+            ($simulationJob -and $simulationJob.State -in @("Failed", "Completed", "Stopped"))) {
             throw "A dashboard port-forward stopped unexpectedly."
         }
         Start-Sleep -Seconds 2
