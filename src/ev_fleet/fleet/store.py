@@ -29,6 +29,8 @@ class FleetStore:
             self.instance_id = payload["instance_id"]
             self.version = payload["version"]
             self.vehicles = payload["vehicles"]
+            for record in self.vehicles.values():
+                record.setdefault("control_version", record["state_version"])
             self.charging_tasks = payload.get("charging_tasks", {})
             now, tick = self.clock.now(), self.clock.monotonic()
             for record in self.vehicles.values():
@@ -60,6 +62,7 @@ class FleetStore:
             record = {"registration": registration, "telemetry": None,
                       "session_id": None, "session_request_id": None,
                       "retired_requests": set(), "state_version": 1,
+                      "control_version": 1,
                       "active_claim": None, "claims": {}, "current_zone_id": None,
                       "active_rental": None, "active_charging_task": None, "rentals": {},
                       "rental_start_requests": {}, "rental_return_requests": {}}
@@ -85,6 +88,7 @@ class FleetStore:
                 record["session_id"] = uuid4()
                 # Preserve physical status, but require new-session telemetry for eligibility.
                 record["state_version"] += 1
+                record["control_version"] += 1
                 self.version += 1
                 await self.persist()
             return {"session_id": str(record["session_id"])}
@@ -109,11 +113,20 @@ class FleetStore:
             # Reject impossible relocation telemetry BEFORE mutating the vehicle record.
             if record["active_rental"] is not None and (update.relocation_state != "IDLE" or update.active_dispatch_id is not None):
                 raise HTTPException(409, "RENTED_RELOCATION_CONFLICT")
+            # Continuous speed/SOC/GPS reports do not invalidate a pending
+            # operator approval. Control transitions still advance the separate
+            # compare-and-swap epoch and claims recheck current physical data.
+            changed_control = previous is None or any(
+                getattr(previous, field) != getattr(update, field) for field in (
+                    "availability", "relocation_state", "active_dispatch_id",
+                    "charging_state", "parked_facility_id"))
             record.update(telemetry=update, received_at=now,
                           received_tick=self.clock.monotonic(), initial_age=max(0, age))
             if update.relocation_state == "RELOCATING" or record["active_rental"] is not None:
                 record["current_zone_id"] = None
             record["state_version"] += 1
+            if changed_control:
+                record["control_version"] += 1
             self.version += 1
             sample = {"vehicle_id": vehicle_id, "session_id": update.session_id,
                       "sequence": update.sequence, "observed_at": update.observed_at,
@@ -146,6 +159,7 @@ class FleetStore:
         stale = not current_session or age >= self.settings.stale_seconds
         return {**record["registration"].model_dump(mode="json"),
                 "state_version": record["state_version"],
+                "control_version": record.get("control_version", record["state_version"]),
                 "telemetry": telemetry.model_dump(mode="json") if telemetry else None,
                 "received_at": record["received_at"].isoformat() if telemetry else None,
                 "telemetry_age_seconds": age, "stale": stale,
@@ -200,6 +214,7 @@ class FleetStore:
                 "create_request_id": str(body.request_id), "requests": {}}
             record["active_charging_task"] = key
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             await self.persist()
             return self._public_task(key)
@@ -238,6 +253,7 @@ class FleetStore:
                 raise HTTPException(409, "INVALID_CHARGING_TRANSITION")
             task["updated_at"] = self.clock.now().isoformat()
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             receipt = self._public_task(str(task_id))
             task["requests"][request_key] = {"body": body, "receipt": deepcopy(receipt)}
@@ -287,6 +303,7 @@ class FleetStore:
             record["rental_start_requests"][str(body.request_id)] = key
             record["current_zone_id"] = None  # A free-floating customer controls the return position.
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             await self.persist()
             return deepcopy(data)
@@ -330,6 +347,7 @@ class FleetStore:
             record["active_rental"] = None
             record["current_zone_id"] = None
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             await self.persist()
             return deepcopy(data)
@@ -354,12 +372,17 @@ class FleetStore:
                 return deepcopy(previous["receipt"])
             if body.approve_before <= self.clock.now():
                 raise HTTPException(409, "APPROVAL_EXPIRED")
-            if record["state_version"] != body.expected_version:
+            if (record["control_version"] != body.expected_control_version
+                    if body.expected_control_version is not None
+                    else record["state_version"] != body.expected_version):
                 raise HTTPException(409, "VEHICLE_VERSION_CONFLICT")
             state = self.view(record)
             if state["effective_availability"] != "AVAILABLE":
                 raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE")
             telemetry = record["telemetry"]
+            if (body.route_origin is not None and
+                    distance_km(telemetry.position.model_dump(), body.route_origin.model_dump()) > .005):
+                raise HTTPException(409, "ROUTE_ORIGIN_CHANGED")
             arrival = predicted_soc(telemetry.position.model_dump(), body.target_position.model_dump(),
                                     telemetry.soc_pct, record["registration"].battery_capacity_kwh,
                                     record["registration"].consumption_kwh_per_km,
@@ -382,6 +405,7 @@ class FleetStore:
             record["claims"][key] = {"request": body, "receipt": receipt}
             record["active_claim"] = receipt
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             await self.persist()
             return deepcopy(receipt)
@@ -421,6 +445,7 @@ class FleetStore:
             if body.outcome == "ARRIVED":
                 record["current_zone_id"] = receipt["target_zone_id"]
             record["state_version"] += 1
+            record["control_version"] += 1
             self.version += 1
             await self.persist()
             return deepcopy(receipt)
