@@ -47,9 +47,20 @@ class MovingNode:
             previous.get("active_dispatch_id") or previous["relocation_state"] != "IDLE")):
             raise RuntimeError("Vehicle has an unresolved journey; refusing to overwrite its physical state")
         if not self.initialized and previous:
-            # Resume an idle parked/charging EV instead of teleporting to CLI defaults.
+            # Resume the actual idle position/SOC; never reconstruct a journey.
             self.movement.position = previous["position"]
             self.movement.soc_pct = previous["soc_pct"]
+        if not self.initialized:
+            # In OneMap mode, place an IDLE simulated EV on a routable road
+            # before its first telemetry and before any journey can be claimed.
+            # This is a one-time initialisation, not an in-flight teleport.
+            match = await self.request("POST", f"{self.dispatch_url}/api/v1/road-matches",
+                                       self.movement.position)
+            if (match.get("source") not in ("ONEMAP", "SIMULATED")
+                    or not isinstance(match.get("position"), dict)):
+                raise RuntimeError("Road matching returned an invalid position")
+            self.movement.position = match["position"]
+            self.movement.origin = match["position"].copy()
         session = await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry-sessions",
                                      {"request_id": self.session_request})
         self.session = session["session_id"]
