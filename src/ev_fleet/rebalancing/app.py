@@ -12,6 +12,7 @@ from ev_fleet.contracts.vehicles import FleetSnapshot
 from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
+from .charging_advice import build_charging_advice
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
@@ -70,6 +71,20 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         await store.put(record, config.recommendation_ttl_seconds)
         return record
 
+    @app.get("/api/v1/charging-advice")
+    async def charging_advice():
+        # Read-only advisory. Do not create recommendations/holds or alter state.
+        fleet_raw, sites_raw = await asyncio.gather(
+            get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
+            get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities"))
+        now = clock.now()
+        try:
+            fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
+            sites = FacilitiesSnapshot.model_validate(sites_raw)
+            return build_charging_advice(fleet, sites.facilities, config, now)
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
+            raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
+
     @app.post("/api/v1/batch-recommendations", status_code=201, response_model=BatchRecommendation)
     async def batch_recommend(body: BatchRecommendationRequest):
         fleet_raw, target_raw, sites_raw = await asyncio.gather(
@@ -86,7 +101,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             if any(s.zone_id != body.target_zone_id for s in snapshot.facilities):
                 raise ValueError("wrong facility zone")
             proposed = rank_pairs(fleet, target, snapshot.facilities, config, now,
-                                  body.quantity, body.purpose, body.vehicle_id)
+                                  body.quantity, body.purpose, body.vehicle_id, body.facility_id)
         except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
         expires = now + timedelta(seconds=max(30, config.recommendation_ttl_seconds))
