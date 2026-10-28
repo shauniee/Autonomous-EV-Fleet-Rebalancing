@@ -17,6 +17,7 @@ spec.loader.exec_module(controller)
 def test_replica_count_handles_omitted_zero_fields_and_rejects_bad_payloads():
     assert controller.replica_count({"spec": {}, "status": {}}, "spec") == 0
     assert controller.replica_count({"spec": {}, "status": {}}, "status") == 0
+    assert controller.replica_count({"spec": {}}, "status") == 0
     assert controller.replica_count({"spec": {"replicas": 1}}, "spec") == 1
     for invalid in ({}, {"spec": None}, {"spec": {"replicas": "0"}},
                     {"spec": {"replicas": -1}}, {"spec": {"replicas": True}}):
