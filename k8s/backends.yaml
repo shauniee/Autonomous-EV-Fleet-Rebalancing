@@ -248,6 +248,9 @@ spec:
                 name: ev-fleet-config
             - secretRef:
                 name: ev-fleet-database
+            - secretRef:
+                name: ev-fleet-routing
+                optional: true
           ports:
             - name: http
               containerPort: 8000

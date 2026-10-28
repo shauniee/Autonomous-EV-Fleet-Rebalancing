@@ -3,6 +3,7 @@ from typing import Literal
 from uuid import UUID
 from pydantic import AwareDatetime, Field
 from .common import Model, Position
+from .routing import RoadRoute
 
 
 class DispatchState(str, Enum):
@@ -32,6 +33,7 @@ class ClaimRequest(Model):
     min_reserve_pct: float = Field(ge=0, lt=100)
     route_factor: float = Field(ge=1)
     energy_margin_factor: float = Field(ge=1)
+    route_distance_km: float | None = Field(default=None, ge=0)
 
 
 class VehicleClaim(Model):
@@ -64,6 +66,7 @@ class RelocationCommand(Model):
     min_reserve_pct: float = Field(ge=0, lt=100)
     route_factor: float = Field(ge=1)
     energy_margin_factor: float = Field(ge=1)
+    route: RoadRoute | None = None
 
 
 class CommandAcknowledgement(Model):

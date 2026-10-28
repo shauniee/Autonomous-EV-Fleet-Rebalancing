@@ -1,5 +1,13 @@
 # Implementation roadmap
 
+## Optional OneMap routing scaffold — 28 October 2026
+
+Implemented opt-in approval-time routes, road-distance reserve checks, polyline
+movement and map directions. Backend-only configuration uses `.env.example`;
+default remains SIMULATED. See [setup and limits](onemap-routing.md).
+Live verification awaits a token. Build/static checks passed; tests were not run.
+Scope review removed unused metadata and redundant calculations/documentation.
+
 ## LTA DataMall integration — 28 October 2026
 
 Frontend follow-up: facility cards use client-side pagination (12 per page),

@@ -76,6 +76,8 @@ export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {
 }
 function DispatchRow({ dispatch, vehicle }: { dispatch: Dispatch; vehicle?: Vehicle }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
+  const route = dispatch.command?.route;
+  const remaining = route ? Math.max(0, 1 - dispatch.distance_travelled_km / Math.max(route.distance_km, .000001)) : 0;
   return <article className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
@@ -87,6 +89,13 @@ function DispatchRow({ dispatch, vehicle }: { dispatch: Dispatch; vehicle?: Vehi
       <div><dt>Last dispatch contact</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
       <div><dt>Claim held</dt><dd>{dispatch.claim_held == null ? 'Unknown' : dispatch.claim_held ? 'Yes' : 'No'}</dd></div>
     </dl>
+    {route && <details className="route-directions"><summary>OneMap route & directions</summary>
+      <p>{number(route.distance_km, ' km')} · estimated journey {Math.ceil(route.duration_seconds / 60)} min</p>
+      <p className="muted">{['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state) ? 'Journey ended.'
+        : `Estimated remaining: ${Math.ceil(route.duration_seconds * remaining / 60)} simulated min.`} Traffic adjustment is unverified. Tracking follows reported EV telemetry.</p>
+      <small>Route fetched {time(route.fetched_at)} · Simulation time may be accelerated.</small>
+      <ol>{route.instructions.map((instruction, index) => <li key={index}>{instruction.text} <span className="muted">· {number(instruction.distance_m, ' m')}</span></li>)}</ol>
+    </details>}
     {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
     <small className="identifier">{dispatch.dispatch_id}</small>

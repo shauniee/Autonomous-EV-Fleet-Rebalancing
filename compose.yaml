@@ -94,6 +94,8 @@ services:
     command: ["uvicorn", "ev_fleet.dispatch.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${DISPATCH_PORT:-8004}:8000"]
     environment:
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-SIMULATED}
+      ONEMAP_ACCESS_TOKEN: ${ONEMAP_ACCESS_TOKEN:-}
       FLEET_URL: http://fleet:8000
       DEMAND_URL: http://demand:8000
       FACILITIES_URL: http://facilities:8000

@@ -87,6 +87,8 @@ td{padding:15px 10px;border-bottom:1px solid #edf2ee;white-space:nowrap}
 small{display:block;font-size:10px;color:#74887c}
 .dispatch-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}
 .dispatch-card{border:1px solid #e0e8e3;border-radius:8px;padding:16px}
+.route-directions ol{max-height:240px;overflow:auto;padding-left:22px}
+.route-directions li{padding:6px 0;border-bottom:1px solid #edf2ee;overflow-wrap:anywhere}
 .identifier{overflow-wrap:anywhere;font-family:monospace}
 footer{color:#84958d;text-align:center;font-size:11px;padding:12px}
 dialog{border:0;border-radius:12px;box-shadow:0 20px 100px #0d383b40;padding:30px;max-width:510px;width:calc(100% - 32px);color:#233f48}

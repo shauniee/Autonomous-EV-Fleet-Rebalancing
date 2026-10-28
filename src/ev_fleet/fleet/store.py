@@ -255,6 +255,11 @@ class FleetStore:
                                     record["registration"].consumption_kwh_per_km,
                                     max(body.route_factor, self.settings.route_factor),
                                     max(body.energy_margin_factor, self.settings.energy_margin_factor))
+            if body.route_distance_km is not None:
+                road_arrival = telemetry.soc_pct - 100 * body.route_distance_km * (
+                    record["registration"].consumption_kwh_per_km * max(body.energy_margin_factor, self.settings.energy_margin_factor)
+                    / record["registration"].battery_capacity_kwh)
+                arrival = min(arrival, road_arrival)
             if arrival < max(body.min_reserve_pct, self.settings.min_reserve_pct):
                 raise HTTPException(409, "BELOW_OPERATIONAL_RESERVE")
             receipt = {"dispatch_id": key, "command_id": str(body.command_id),

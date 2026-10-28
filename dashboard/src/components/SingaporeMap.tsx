@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import type { Facility, Vehicle, Zone } from '../api/contracts';
+import type { Dispatch, Facility, Vehicle, Zone } from '../api/contracts';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
 
-export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSelect }: {
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], selected, onSelect }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; selected: string; onSelect: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -14,7 +14,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
   latestZones.current = zones;
   const fitted = useRef(false);
   const [tileError, setTileError] = useState(false);
-  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true });
+  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true });
+  const activeRoutes = useMemo(() => dispatches.filter(dispatch => dispatch.command?.route
+    && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state)), [dispatches]);
   const [selectedZoneOnly, setSelectedZoneOnly] = useState(true);
   const facilityZone = selectedZoneOnly ? selected : '';
   const shownFacilities = useMemo(() => facilityZone
@@ -26,6 +28,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
     { key: 'vehicles', label: 'EVs', colour: '#163c63', count: vehicles.filter(vehicle => vehicle.telemetry).length },
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
+    { key: 'routes', label: 'Routes', colour: '#326995', count: activeRoutes.length },
   ] as const;
   useEffect(() => {
     const instance = L.map(element.current!, { preferCanvas: true }).setView([1.35, 103.82], 11);
@@ -74,6 +77,19 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
     }
     return () => { layer.remove(); };
   }, [shownFacilities, visible.parking, visible.charging]);
+  useEffect(() => {
+    if (!map.current || !visible.routes) return;
+    const layer = L.layerGroup().addTo(map.current);
+    for (const dispatch of activeRoutes) {
+      const route = dispatch.command!.route!;
+      const label = document.createElement('span');
+      label.textContent = `${dispatch.vehicle_id} · OneMap road route · ${route.distance_km.toFixed(2)} km`;
+      L.polyline(route.geometry.map(point => [point.latitude, point.longitude] as [number, number]), {
+        color: '#326995', weight: 4, opacity: .8,
+      }).bindTooltip(label).addTo(layer);
+    }
+    return () => { layer.remove(); };
+  }, [activeRoutes, visible.routes]);
   useEffect(() => {
     if (!map.current || !visible.vehicles) return;
     const layer = L.layerGroup().addTo(map.current);

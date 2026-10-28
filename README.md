@@ -87,6 +87,8 @@ The macOS script loads only the facilities settings from root `.env` into a back
 Kubernetes Secret. To use real parking and charging observations, set
 `FACILITIES_SOURCE=LTA_DATAMALL` and `LTA_DATAMALL_ACCOUNT_KEY=...` there.
 See [LTA DataMall integration](docs/lta-datamall.md) for modelling and freshness rules.
+Optional [OneMap routing](docs/onemap-routing.md) adds road-following simulation,
+map route overlays and directions using a separate backend access token.
 The macOS script builds native images with unique tags and replaces application
 Pods, including simulators, to load the integration. Run it between demos with no
 active relocations. To reopen both interfaces without reading `.env` or deploying:
