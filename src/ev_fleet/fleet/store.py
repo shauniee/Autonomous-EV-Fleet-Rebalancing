@@ -2,6 +2,7 @@ import asyncio
 from uuid import uuid4
 from datetime import timedelta
 from copy import deepcopy
+from collections import deque
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings
@@ -19,6 +20,7 @@ class FleetStore:
         self.instance_id = str(uuid4())
         self.version = 0
         self.repository = repository or SnapshotRepository.from_env("fleet")
+        self.history_cache = {}  # bounded ephemeral-only cache; PostgreSQL is durable
 
     async def start(self):
         await self.repository.start()
@@ -40,10 +42,13 @@ class FleetStore:
     async def close(self):
         await self.repository.close()
 
-    async def persist(self):
-        await self.repository.save({"instance_id": self.instance_id,
-                                    "version": self.version,
-                                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks})
+    async def persist(self, telemetry_sample=None):
+        payload = {"instance_id": self.instance_id, "version": self.version,
+                   "vehicles": self.vehicles, "charging_tasks": self.charging_tasks}
+        if telemetry_sample is None:
+            await self.repository.save(payload)
+        else:
+            await self.repository.save(payload, telemetry_sample=telemetry_sample)
 
     async def register(self, registration):
         async with self.lock:
@@ -110,8 +115,28 @@ class FleetStore:
                 record["current_zone_id"] = None
             record["state_version"] += 1
             self.version += 1
-            await self.persist()
+            sample = {"vehicle_id": vehicle_id, "session_id": update.session_id,
+                      "sequence": update.sequence, "observed_at": update.observed_at,
+                      "received_at": now, "telemetry": update.model_dump(mode="json")}
+            await self.persist(telemetry_sample=sample)
+            if not getattr(self.repository, "enabled", False):
+                self.history_cache.setdefault(vehicle_id, deque(maxlen=500)).append({
+                    **{k: v for k, v in sample.items() if k != "telemetry"},
+                    "session_id": str(update.session_id),
+                    "observed_at": update.observed_at.isoformat(), "received_at": now.isoformat()})
+                self.history_cache[vehicle_id][-1]["telemetry"] = sample["telemetry"]
             return {"accepted": True, "duplicate": False, "vehicle": self.view(record)}
+
+    async def telemetry_history(self, vehicle_id, limit=100):
+        async with self.lock:
+            self.record(vehicle_id)
+            if getattr(self.repository, "enabled", False):
+                samples = await self.repository.telemetry_history(vehicle_id, limit)
+            else:
+                samples = list(self.history_cache.get(vehicle_id, []))[-limit:]
+        return {"vehicle_id": vehicle_id, "samples": deepcopy(samples),
+                "storage": "postgresql" if getattr(self.repository, "enabled", False) else "ephemeral",
+                "limit": limit}
 
     def view(self, record):
         telemetry = record["telemetry"]
