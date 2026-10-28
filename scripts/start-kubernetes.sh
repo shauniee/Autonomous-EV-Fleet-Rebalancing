@@ -17,6 +17,7 @@ if [[ "$mode" != "--connect-only" ]]; then
     command -v "$tool" >/dev/null || { echo "Required command missing: $tool" >&2; exit 1; }
   done
   python3 scripts/render_facilities_secret.py --check .env
+  python3 scripts/render_facilities_secret.py --routing --check .env
   kubectl --context docker-desktop wait --for=condition=Ready node/docker-desktop --timeout=120s
   architecture=$(docker --context desktop-linux info --format '{{.Architecture}}')
   case "$architecture" in arm64|aarch64) platform=linux/arm64 ;; x86_64|amd64) platform=linux/amd64 ;; *) echo "Unsupported Docker architecture: $architecture" >&2; exit 1 ;; esac
@@ -28,6 +29,7 @@ if [[ "$mode" != "--connect-only" ]]; then
   kubectl --context docker-desktop apply -f k8s/namespace.yaml
   kubectl --context docker-desktop wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
   python3 scripts/render_facilities_secret.py .env | kubectl --context docker-desktop apply -f -
+  python3 scripts/render_facilities_secret.py --routing .env | kubectl --context docker-desktop apply -f -
   # Unique image tags ensure every changed service, including telemetry owners,
   # loads this build. The checked-in manifests remain unchanged.
   kubectl kustomize k8s | sed \

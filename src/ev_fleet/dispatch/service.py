@@ -15,6 +15,7 @@ from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
+from .routing import RoutingSettings, driving_route
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
@@ -31,6 +32,7 @@ class DispatchService:
         self.batches = {}
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
+        self.routing = RoutingSettings.from_env()
 
     async def start(self):
         await self.repository.start()
@@ -124,7 +126,25 @@ class DispatchService:
             assessed_target["charging"] = {
                 "observed_at": self.clock.now().isoformat(),
                 "available_slots": parking.charging_available}
+        origin = vehicle.telemetry.position.model_dump() if vehicle.telemetry else None
+        route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
+                                    self.settings.arrival_tolerance_km) if origin else None
+        if route:
+            # Routing may take longer than a telemetry interval. Revalidate a
+            # fresh Fleet version without reusing a route from a moved origin.
+            fresh = await request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot)
+            if fresh.instance_id != fleet.instance_id:
+                raise HTTPException(409, "FLEET_INSTANCE_CHANGED")
+            vehicle = next((item for item in fresh.vehicles if item.vehicle_id == recommendation.selected_vehicle_id), None)
+            if vehicle is None or vehicle.telemetry is None or vehicle.telemetry.position.model_dump() != origin:
+                raise HTTPException(409, "ROUTE_ORIGIN_CHANGED")
         assessment = assess(vehicle.model_dump(mode="json"), assessed_target, policy, self.clock.now())
+        if route:
+            energy = route.distance_km * vehicle.consumption_kwh_per_km * max(policy.energy_margin_factor, self.settings.energy_margin_factor)
+            arrival = vehicle.telemetry.soc_pct - 100 * energy / vehicle.battery_capacity_kwh
+            assessment.update(distance_km=route.distance_km, energy_required_kwh=energy, predicted_arrival_soc_pct=arrival)
+            if arrival < max(policy.min_reserve_pct, self.settings.min_reserve_pct):
+                raise HTTPException(409, "ROUTE_BELOW_OPERATIONAL_RESERVE")
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
         if parking:
@@ -147,12 +167,13 @@ class DispatchService:
             target_position=destination, approve_before=recommendation.expires_at,
             min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
             route_factor=max(policy.route_factor, self.settings.route_factor),
-            energy_margin_factor=max(policy.energy_margin_factor, self.settings.energy_margin_factor))
+            energy_margin_factor=max(policy.energy_margin_factor, self.settings.energy_margin_factor),
+            route_distance_km=route.distance_km if route else None)
         command = RelocationCommand(dispatch_id=record.data["dispatch_id"], command_id=command_id,
             vehicle_id=vehicle.vehicle_id, fleet_instance_id=fleet.instance_id,
             target_zone_id=target.zone_id, target_position=destination, issued_at=self.clock.now(),
             min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
-            energy_margin_factor=claim.energy_margin_factor)
+            energy_margin_factor=claim.energy_margin_factor, route=route)
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
                            revalidated_metrics=assessment)
         # Store the exact request BEFORE the remote mutation. Never silently refresh its version.
@@ -228,6 +249,11 @@ class DispatchService:
                         await self.prepare(record)
                     await self.acquire(record)
                 except HTTPException as exc:
+                    if not record.claim_request and str(exc.detail).startswith("ONEMAP_"):
+                        # No remote mutation has occurred. Reject explicitly;
+                        # never retry expired tokens/rate limits in reconciliation.
+                        self.transition(record, "REJECTED", str(exc.detail))
+                        return record.view()
                     # Only definite claim failures may free a parking reservation.
                     # Lost responses keep the reservation until reconciliation.
                     if (exc.status_code in (404, 409, 422) and not record.claimed

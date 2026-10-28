@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { Candidate, Claim, Dispatch, Recommendation, Vehicle, Zone } from '../api/contracts';
 import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
+import { RouteDetails } from './RouteDetails';
 
 export function ServiceStatus({ name, resource }: { name: string; resource: Resource<unknown> }) {
   return <span className={`service ${resource.error ? 'broken' : resource.data ? '' : 'loading'}`}>
@@ -74,8 +75,9 @@ export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {
       <tbody>{vehicles.map(v => <tr key={v.vehicle_id} data-testid={`vehicle-${v.vehicle_id}`}><td><strong>{v.vehicle_id}</strong></td><td>{v.current_zone_id ?? position(v.telemetry?.position)}</td><td>{number(v.telemetry?.soc_pct, '%')}</td><td>{v.telemetry?.parked_facility_id ?? 'Unallocated'}{v.telemetry?.charging_state === 'CHARGING' && <small>CHARGING (simulated) · {number(v.telemetry.charging_power_kw, ' kW')}</small>}{v.telemetry?.charging_state === 'COMPLETE' && <small>Charging complete · parked</small>}</td><td>{v.active_rental ? <><Badge value="RENTED"/><small>Expected return {time(v.active_rental.expected_end_at)}</small></> : '—'}</td><td>{v.effective_availability}</td><td>{v.effective_relocation_state}</td><td><Badge value={v.stale ? 'STALE' : v.connectivity}/><small>Received {time(v.received_at)}</small></td></tr>)}</tbody>
     </table></div>{vehicles.length === 0 && <p className="empty">No fleet observations available.</p>}</section>;
 }
-function DispatchRow({ dispatch, vehicle }: { dispatch: Dispatch; vehicle?: Vehicle }) {
+function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
+  const route = dispatch.command?.route;
   return <article className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
@@ -87,14 +89,16 @@ function DispatchRow({ dispatch, vehicle }: { dispatch: Dispatch; vehicle?: Vehi
       <div><dt>Last dispatch contact</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
       <div><dt>Claim held</dt><dd>{dispatch.claim_held == null ? 'Unknown' : dispatch.claim_held ? 'Yes' : 'No'}</dd></div>
     </dl>
+    {route && <><button className="map-reset" onClick={() => onTrack(dispatch.dispatch_id)}>View route on map</button>
+      <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
     {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
-export function RelocationPanel({ dispatches, vehicles }: { dispatches: Dispatch[]; vehicles: Vehicle[] }) {
+export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void }) {
   return <section className="panel"><div className="section-title"><h2>Relocations</h2><span className="muted">Live status & recent outcomes</span></div>
     {dispatches.length === 0 && <p className="empty">No dispatches yet. Choose a zone and request a recommendation to begin.</p>}
-    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)}/> : <article key={d.dispatch_id}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
+    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
   </section>;
 }

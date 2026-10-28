@@ -1,5 +1,43 @@
 # Implementation roadmap
 
+## Map icons and overlap — 28 October 2026
+
+Distinct SVG EV, parking and charging icons use the existing map palette. One
+shared Leaflet marker cluster groups nearby items across all three types; click
+to zoom or spread co-located markers. Selected-EV groups are highlighted. Existing
+filters and route selection remain intact. Marker instances survive polling;
+only reported position changes move them, preserving expanded stationary pins.
+Added `leaflet.markercluster` and its TypeScript types. TypeScript, production
+build (env-file loading disabled) and whitespace checks passed. No test cases or
+`.env` access; live deployment verification remains pending.
+
+Area filtering now covers all map icons and counts: EVs use reported coordinates
+and the nearest operating-zone centre (matching LTA facility assignment), while
+facilities use their assigned zone. Only the selected demand marker is shown;
+routes target that zone and outside endpoint icons are hidden. Route lines retain
+cross-zone context. All zones is an explicit override, reset by selecting another
+zone. Follow/fit controls respect icon scope; relocation links select their target
+zone. Display-only changes, with no backend or dispatch-policy changes.
+
+## Optional OneMap routing scaffold — 28 October 2026
+
+Implemented opt-in approval-time routes, road-distance reserve checks, polyline
+movement and map directions. Backend-only configuration uses `.env.example`;
+default remains SIMULATED. See [setup and limits](onemap-routing.md).
+Live verification awaits a token. Build/static checks passed; tests were not run.
+Scope review removed unused metadata and redundant calculations/documentation.
+
+UI follow-up: selected journey, highlighted road/EV/endpoints, Fit route and
+telemetry-based Follow EV controls, shared progress/directions, and relocation
+card links. Reuses the existing road-following simulator and polling APIs; no new
+backend, dependencies or navigation engine. TypeScript/build and whitespace checks
+passed; tests were not run and `.env` was not accessed. Live verification pending.
+
+Facility-selection clarification: existing LTA matching already chooses charging
+below 35% predicted arrival SOC and parking otherwise, with reserve checks.
+Updated request/review labels to expose this automatic behaviour and the assumed
+ground-team cable connection. No backend policy or charging-state changes.
+
 ## LTA DataMall integration — 28 October 2026
 
 Frontend follow-up: facility cards use client-side pagination (12 per page),

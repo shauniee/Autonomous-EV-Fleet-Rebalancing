@@ -1,5 +1,10 @@
 // Wire fields consumed from the existing Pydantic contracts; no business rules here.
 export interface Position { latitude: number; longitude: number }
+export interface RoadRoute {
+  source: 'ONEMAP'; fetched_at: string; geometry: Position[];
+  distance_km: number; duration_seconds: number;
+  instructions: { text: string; distance_m: number }[];
+}
 export interface Zone {
   zone_id: string; name: string; position: Position;
   rental_demand: number | null; demand_level: string; demand_status: string;
@@ -19,6 +24,7 @@ export interface Vehicle {
   vehicle_id: string; current_zone_id: string | null; stale: boolean; connectivity: string;
   effective_availability: string; effective_relocation_state: string; received_at: string | null;
   telemetry: { position: Position; soc_pct: number; observed_at: string;
+    active_dispatch_id?: string | null; distance_travelled_km?: number | null;
     parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
     charging_power_kw?: number | null } | null;
 }
@@ -35,7 +41,7 @@ export interface Recommendation {
 }
 export interface Dispatch {
   dispatch_id: string; request_id: string; vehicle_id: string | null; state: string;
-  command: { target_zone_id: string; target_position: Position } | null;
+  command: { target_zone_id: string; target_position: Position; route?: RoadRoute | null } | null;
   created_at: string; acknowledged_at: string | null; last_contact_at: string | null;
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
   parking_facility_id?: string | null; parking_status?: string | null;

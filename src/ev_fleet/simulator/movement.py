@@ -1,5 +1,6 @@
 from copy import deepcopy
 from math import isfinite
+from bisect import bisect_right
 from ev_fleet.common.travel import distance_km, predicted_soc
 
 
@@ -24,6 +25,7 @@ class Movement:
         self.origin = deepcopy(position)
         self.parking = None
         self.charging_state = "NOT_CHARGING"
+        self.path_lengths = []
 
     def accept(self, command):
         identity = command["command_id"]
@@ -38,10 +40,21 @@ class Movement:
         self.command = deepcopy(command)
         self.origin = deepcopy(self.position)
         self.distance = 0.0
-        self.total = distance_km(self.position, command["target_position"]) * command["route_factor"]
-        forecast = predicted_soc(self.position, command["target_position"], self.soc_pct,
-                                 self.capacity, self.consumption, command["route_factor"],
-                                 command["energy_margin_factor"])
+        route = command.get("route")
+        self.path_lengths = []
+        if route:
+            self.total = route["distance_km"]
+            self.path_lengths = [0.0]
+            for a, b in zip(route["geometry"], route["geometry"][1:]):
+                self.path_lengths.append(self.path_lengths[-1] + distance_km(a, b))
+            forecast = self.soc_pct - 100 * self.total * self.consumption * command["energy_margin_factor"] / self.capacity
+            if self.total > 0 and self.path_lengths[-1] <= 0:
+                raise ValueError("route has no usable path")
+        else:
+            self.total = distance_km(self.position, command["target_position"]) * command["route_factor"]
+            forecast = predicted_soc(self.position, command["target_position"], self.soc_pct,
+                                     self.capacity, self.consumption, command["route_factor"],
+                                     command["energy_margin_factor"])
         self.accepted = forecast >= command["min_reserve_pct"]
         self.reason = None if self.accepted else "INSUFFICIENT_LOCAL_SOC"
         self.state = "DISPATCHED" if self.accepted else "IDLE"
@@ -59,14 +72,24 @@ class Movement:
             return
         remaining = max(0, self.total - self.distance)
         possible = self.soc_pct / 100 * self.capacity / self.consumption
-        step = min(remaining, speed_kph * elapsed_seconds / 3600, possible)
+        route = self.command.get("route")
+        speed = self.total / route["duration_seconds"] if route and route["duration_seconds"] > 0 else speed_kph / 3600
+        step = min(remaining, speed * elapsed_seconds, possible)
         self.distance += step
         self.soc_pct = max(0, self.soc_pct - 100 * step * self.consumption / self.capacity)
         fraction = 1 if self.total == 0 else min(1, self.distance / self.total)
-        self.position = {key: self.origin[key] + fraction * (self.command["target_position"][key] - self.origin[key])
-                         for key in ("latitude", "longitude")}
+        if route:
+            along_path = fraction * self.path_lengths[-1]
+            index = min(len(self.path_lengths) - 2, max(0, bisect_right(self.path_lengths, along_path) - 1))
+            length = self.path_lengths[index + 1] - self.path_lengths[index]
+            ratio = (along_path - self.path_lengths[index]) / length if length else 1
+            a, b = route["geometry"][index:index + 2]
+            self.position = {key: a[key] + ratio * (b[key] - a[key]) for key in ("latitude", "longitude")}
+        else:
+            self.position = {key: self.origin[key] + fraction * (self.command["target_position"][key] - self.origin[key])
+                             for key in ("latitude", "longitude")}
         if self.distance >= self.total - 1e-9:
-            self.position = deepcopy(self.command["target_position"])
+            self.position = deepcopy(route["geometry"][-1] if route else self.command["target_position"])
             self.state = "ARRIVED"
         elif self.soc_pct <= 1e-9:
             self.state = "FAILED"
