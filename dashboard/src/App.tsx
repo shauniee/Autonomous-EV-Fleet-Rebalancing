@@ -6,6 +6,7 @@ import { SingaporeMap } from './components/SingaporeMap';
 import { ChargingOperations } from './components/ChargingOperations';
 import { TrafficConditions } from './components/TrafficConditions';
 import { TrafficJourneyCheck } from './components/TrafficJourneyCheck';
+import { TwinHistoryPanel } from './components/TwinHistoryPanel';
 import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
@@ -82,6 +83,8 @@ export default function App() {
   }, []);
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
+  const twinVehicle = vehicles.find(v => v.vehicle_id === selectedVehicle) ||
+    vehicles.find(v => v.vehicle_id === dispatches.data?.dispatches.find(d => d.dispatch_id === selectedDispatch)?.vehicle_id) || vehicles[0];
   const sites = facilities.data?.facilities ?? [];
   const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
   // An unknown provider must not fall back to a zone-only destination.
@@ -248,7 +251,9 @@ export default function App() {
           setQuantity(1);
           mapPanel.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
         }}/>
-      <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+      <FleetPanel vehicles={vehicles}/>
+      {twinVehicle && <TwinHistoryPanel key={twinVehicle.vehicle_id} vehicle={twinVehicle}/>}
+      <RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
         const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
         if (target && target !== selected) choose(target);
         setSelectedDispatch(id); mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
