@@ -165,42 +165,70 @@ if ($ConnectOnly) {
     Write-Host "Kubernetes has rolled out the $tag images. Checking dashboard tunnels..." -ForegroundColor Green
 }
 
-Write-Host "Starting both local dashboard tunnels..." -ForegroundColor Cyan
-$dashboardJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/dashboard 8080:80 }
-$simulationJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/simulation-console 8090:8090 }
+function Test-LocalEndpoint([string]$Url) {
+    try {
+        return (Invoke-WebRequest $Url -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+Write-Host "Opening local dashboard tunnels (reusing healthy existing tunnels)..." -ForegroundColor Cyan
+$dashboardJob = $null
+$simulationJob = $null
+if (Test-LocalEndpoint "http://127.0.0.1:8080/health") {
+    Write-Host "Reusing operator dashboard at port 8080."
+} else {
+    $dashboardJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/dashboard 8080:80 }
+}
+if (Test-LocalEndpoint "http://127.0.0.1:8090/health/live") {
+    Write-Host "Reusing simulation dashboard at port 8090."
+} else {
+    $simulationJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/simulation-console 8090:8090 }
+}
 
 try {
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Milliseconds 500
-        if ($dashboardJob.State -eq "Failed" -or $simulationJob.State -eq "Failed") {
-            throw "A dashboard port-forward failed. Check whether ports 8080 and 8090 are already in use."
+        if (($dashboardJob -and $dashboardJob.State -ne "Running") -or
+            ($simulationJob -and $simulationJob.State -ne "Running")) {
+            throw "A dashboard port-forward failed. Inspect the jobs and verify ports 8080 and 8090 are available."
         }
-        $dashboardReady = $false
-        $simulationReady = $false
-        try { $dashboardReady = (Invoke-WebRequest http://127.0.0.1:8080/health -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
-        try { $simulationReady = (Invoke-WebRequest http://127.0.0.1:8090/health/live -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
+        $dashboardReady = Test-LocalEndpoint "http://127.0.0.1:8080/health"
+        $simulationReady = Test-LocalEndpoint "http://127.0.0.1:8090/health/live"
     } until (($dashboardReady -and $simulationReady) -or (Get-Date) -ge $deadline)
 
     if (-not ($dashboardReady -and $simulationReady)) {
-        throw "The application deployed, but one or both dashboard tunnels did not become ready."
+        throw "One or both dashboard tunnels are unavailable. Check port-forward errors."
     }
 
-    Write-Host "" 
-    Write-Host "Complete stack is ready." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "EV Fleet dashboards are ready." -ForegroundColor Green
     Write-Host "Operator dashboard:   http://127.0.0.1:8080"
     Write-Host "Simulation dashboard: http://127.0.0.1:8090"
-    Write-Host "PostgreSQL state is stored in the postgres-data-postgres-0 PVC."
+    Write-Host "PostgreSQL state remains on the postgres-data-postgres-0 PVC."
     Write-Host "Dashboard HPA: kubectl get hpa dashboard -n ev-fleet"
     Write-Host "CPU metrics: kubectl top pods -n ev-fleet"
-    Write-Host "Keep this window open. Press Ctrl+C to close both dashboard tunnels."
 
-    while ($dashboardJob.State -eq "Running" -and $simulationJob.State -eq "Running") {
+    if (-not $dashboardJob -and -not $simulationJob) {
+        Write-Host "Reusing existing tunnels; no terminal needs to stay open for this command."
+        return
+    }
+    Write-Host "Keep this window open for newly created tunnels; Ctrl+C closes only those tunnels."
+    while ($true) {
+        if (($dashboardJob -and $dashboardJob.State -ne "Running") -or
+            ($simulationJob -and $simulationJob.State -ne "Running")) {
+            throw "A dashboard port-forward stopped unexpectedly."
+        }
         Start-Sleep -Seconds 2
     }
-    throw "A dashboard port-forward stopped unexpectedly."
 }
 finally {
-    Stop-Job $dashboardJob, $simulationJob -ErrorAction SilentlyContinue
-    Remove-Job $dashboardJob, $simulationJob -Force -ErrorAction SilentlyContinue
+    foreach ($job in @($dashboardJob, $simulationJob)) {
+        if ($null -ne $job) {
+            Stop-Job $job -ErrorAction SilentlyContinue
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
