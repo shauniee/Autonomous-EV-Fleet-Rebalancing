@@ -275,6 +275,9 @@ async def run_experiment(args):
         }, sort_keys=True))
         if metrics["errors"]:
             raise RuntimeError("Some customer trips failed; review logs before rerunning")
+        if args.keep_alive:
+            LOG.info("CUSTOMER_SIMULATION_OBSERVATION_MODE: customer EVs remain online for approved relocations")
+            await asyncio.Future()
     finally:
         for task in tasks:
             task.cancel()
@@ -291,6 +294,8 @@ def main():
     parser.add_argument("--rate-per-hour", type=float, default=18)
     parser.add_argument("--time-scale", type=float, default=float(os.getenv("SIMULATION_TIME_SCALE", "30")))
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--keep-alive", action="store_true",
+                        help="After generating customers, keep EV telemetry/dispatch polling alive")
     args = parser.parse_args()
     if not 1 <= args.vehicles <= 12 or not all(math.isfinite(v) and v > 0 for v in (
             args.duration_minutes, args.rate_per_hour, args.time_scale)):
