@@ -5,6 +5,7 @@ import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
 import { ChargingOperations } from './components/ChargingOperations';
 import { TrafficConditions } from './components/TrafficConditions';
+import { TrafficJourneyCheck } from './components/TrafficJourneyCheck';
 import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
@@ -226,6 +227,8 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
+      {selectedDispatch && dispatches.data?.dispatches.some(d => d.dispatch_id === selectedDispatch && d.command?.route && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)) &&
+        <TrafficJourneyCheck dispatchId={selectedDispatch}/>}
       <TrafficConditions snapshot={traffic.data} error={traffic.error}/>
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
