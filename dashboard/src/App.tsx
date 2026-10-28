@@ -179,17 +179,21 @@ export default function App() {
       </section>
       <section className="panel relocation-request" aria-labelledby="relocation-request-title"><div className="section-title"><h2 id="relocation-request-title">Relocation request</h2><span className="muted">1–20 EVs</span></div>
         {zone ? <><p>How many EVs should be relocated to <strong>{zone.name}</strong>?</p>
-          <label htmlFor="relocation-purpose">Destination purpose </label>
-          <select id="relocation-purpose" value={purpose} disabled={recommending || submitting} onChange={event => {
+          <div className="request-fields"><div className="request-field">
+          <label htmlFor="relocation-purpose">Destination purpose</label>
+          <div className="select-wrap"><select className="form-select" id="relocation-purpose" aria-describedby="relocation-purpose-help" value={purpose} disabled={recommending || submitting} onChange={event => {
             setPurpose(event.target.value as 'REBALANCE' | 'CHARGE');
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
-          }}><option value="REBALANCE">Parking / demand rebalancing</option><option value="CHARGE">Charging — replenish to 80%</option></select>
-          {purpose === 'CHARGE' && <p className="muted">Lower-SOC EVs are prioritised for available chargers in this zone. Charging is simulated after confirmed arrival; charging EVs remain unavailable until 80% SOC.</p>}
-          <label htmlFor="relocation-vehicle">Vehicle </label>
-          <select id="relocation-vehicle" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
+          }}><option value="REBALANCE">Parking / demand rebalancing</option><option value="CHARGE">Charging — replenish to 80%</option></select></div>
+          <p id="relocation-purpose-help" className="muted">{purpose === 'CHARGE' ? 'Prioritise lower-SOC EVs. Simulated charging begins after arrival and finishes at 80%.' : 'Find a parking destination to meet demand in this zone.'}</p>
+          </div><div className="request-field">
+          <label htmlFor="relocation-vehicle">Vehicle</label>
+          <div className="select-wrap"><select className="form-select" id="relocation-vehicle" aria-describedby="relocation-vehicle-help" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
             setSelectedVehicle(event.target.value); if (event.target.value) setQuantity(1);
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
-          }}><option value="">Any eligible EV</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select>
+          }}><option value="">Any eligible EV</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
+          <p id="relocation-vehicle-help" className="muted">{selectedVehicle ? 'One relocation for the selected EV.' : 'Let the system select, or choose an EV for a single relocation.'}</p>
+          </div></div>
           <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
             const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
             setQuantity(value); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
@@ -204,7 +208,7 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
-      <FacilitiesPanel facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
+      <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>

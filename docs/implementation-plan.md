@@ -2,6 +2,15 @@
 
 ## LTA DataMall integration — 28 October 2026
 
+Frontend follow-up: facility cards use client-side pagination (12 per page),
+Previous/Next and direct page selection in the existing dashboard style. Pages
+reset on zone changes, survive refreshes and clamp when results shrink. Map and
+recommendation inputs retain the full dataset. No tests rerun or `.env` accessed.
+Production build/TypeScript and whitespace checks passed.
+UI refinement: numbered pages with ellipses and an active state, a styled page
+jump, and labeled relocation dropdowns with helper text and mobile stacking.
+Selection and dispatch behavior remain unchanged; no tests rerun or `.env` access.
+
 Implemented real LTA destinations, charging requests and vehicle selection,
 allocated parking telemetry and simulated charging to 80%. macOS startup supports
 native images, tunnel reuse and connection-only mode. See [LTA setup](lta-datamall.md).
