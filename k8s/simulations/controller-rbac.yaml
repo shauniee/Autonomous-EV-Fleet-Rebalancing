@@ -1,0 +1,35 @@
+# Local-demo only: console may scale exactly one rental Deployment, never other workloads.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simulation-console-controller
+  namespace: ev-fleet
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: customer-rental-controller
+  namespace: ev-fleet
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["customer-rental-demo"]
+    verbs: ["get", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    resourceNames: ["customer-rental-simulation"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simulation-console-rental-control
+  namespace: ev-fleet
+subjects:
+  - kind: ServiceAccount
+    name: simulation-console-controller
+    namespace: ev-fleet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: customer-rental-controller
