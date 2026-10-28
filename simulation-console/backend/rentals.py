@@ -74,9 +74,13 @@ async def stop(request: Request):
             raise ValueError("Invalid fleet response")
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "FLEET_STATE_UNAVAILABLE") from exc
-    if any(v.get("active_rental") for v in vehicles
-           if isinstance(v, dict) and v.get("vehicle_id", "").startswith("customer-ev-")):
+    customer_vehicles = [v for v in vehicles if isinstance(v, dict)
+                         and v.get("vehicle_id", "").startswith("customer-ev-")]
+    if any(v.get("active_rental") for v in customer_vehicles):
         raise HTTPException(409, "ACTIVE_CUSTOMER_RENTALS_MUST_FINISH")
+    if any(v.get("active_claim") or v.get("effective_relocation_state") not in (None, "IDLE")
+           for v in customer_vehicles):
+        raise HTTPException(409, "ACTIVE_CUSTOMER_RELOCATIONS_MUST_FINISH")
     scale = await cluster_request("GET", SCALE_PATH)
     if scale is None:
         raise HTTPException(503, "RENTAL_DEPLOYMENT_NOT_INSTALLED")
