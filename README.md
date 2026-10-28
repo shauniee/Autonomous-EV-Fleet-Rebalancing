@@ -74,11 +74,27 @@ See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops
 - PowerShell
 - Host ports 8080 and 8090 available
 
-On Windows, from the repository root, run:
+On Windows, choose the command based on whether you want to deploy code changes.
+
+**Run updated code — build, deploy, and open both dashboards:**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
+
+Use this command after changing the code. It builds new backend, operator
+Dashboard, and Simulation Console images, deploys them to Kubernetes, waits for
+the updated Pods, and then opens the dashboard connections.
+
+**Run the existing deployed code — open both dashboards only:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
+```
+
+Use this command when the system is already deployed and you do not want to
+apply local code changes. It only opens or reuses the dashboard connections;
+it does not build images, deploy code, or restart Pods.
 
 On macOS with Docker Desktop Kubernetes (kubeadm), Python 3 and curl available:
 
@@ -114,13 +130,6 @@ Deployment is blocked if Fleet reports an in-progress rental, relocation or
 charging operation, or the customer rental simulator/Job is running. Finish
 those sessions first; the script never resets PostgreSQL or forcibly completes
 a customer journey. Do not issue new dispatches while deploying.
-
-If the system is already deployed and you only want to open the dashboards,
-**without building or restarting anything**:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
-```
 
 The original `-SetupMetricsServer -AllowInsecureLocalKubeletTls` command remains
 **Deploy mode**. Metrics Server setup is idempotent but typically only needed
