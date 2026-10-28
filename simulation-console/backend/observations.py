@@ -14,6 +14,7 @@ class Zone(BaseModel):
     zone_id: str
     name: str
     demand: DemandValue | None
+    position: dict | None = None
 
 
 class Vehicle(BaseModel):
@@ -23,6 +24,9 @@ class Vehicle(BaseModel):
     stale: bool
     effective_availability: str
     telemetry: dict | None
+    battery_capacity_kwh: float | None = None
+    consumption_kwh_per_km: float | None = None
+    active_rental: dict | None = None
 
 
 class Dispatch(BaseModel):
