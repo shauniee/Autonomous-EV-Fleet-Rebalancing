@@ -15,6 +15,7 @@ class FleetStore:
         self.clock = clock or Clock()
         self.lock = asyncio.Lock()
         self.vehicles = {}
+        self.charging_tasks = {}
         self.instance_id = str(uuid4())
         self.version = 0
         self.repository = repository or SnapshotRepository.from_env("fleet")
@@ -26,6 +27,7 @@ class FleetStore:
             self.instance_id = payload["instance_id"]
             self.version = payload["version"]
             self.vehicles = payload["vehicles"]
+            self.charging_tasks = payload.get("charging_tasks", {})
             now, tick = self.clock.now(), self.clock.monotonic()
             for record in self.vehicles.values():
                 if record["telemetry"] is not None:
@@ -41,7 +43,7 @@ class FleetStore:
     async def persist(self):
         await self.repository.save({"instance_id": self.instance_id,
                                     "version": self.version,
-                                    "vehicles": self.vehicles})
+                                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks})
 
     async def register(self, registration):
         async with self.lock:
@@ -54,7 +56,7 @@ class FleetStore:
                       "session_id": None, "session_request_id": None,
                       "retired_requests": set(), "state_version": 1,
                       "active_claim": None, "claims": {}, "current_zone_id": None,
-                      "active_rental": None, "rentals": {},
+                      "active_rental": None, "active_charging_task": None, "rentals": {},
                       "rental_start_requests": {}, "rental_return_requests": {}}
             self.vehicles[key] = record
             self.version += 1
@@ -124,16 +126,98 @@ class FleetStore:
                 "telemetry_age_seconds": age, "stale": stale,
                 "active_claim": deepcopy(record["active_claim"]),
                 "active_rental": deepcopy(record["active_rental"]),
+                "active_charging_task": self._public_task(record.get("active_charging_task")),
                 "current_zone_id": record["current_zone_id"],
                 "effective_relocation_state": ("DISPATCHED" if record["active_claim"] and (
                     not telemetry or telemetry.relocation_state == "IDLE") else
                     telemetry.relocation_state.value if telemetry else "IDLE"),
                 "effective_availability": "AVAILABLE" if (
-                    not stale and not record["active_claim"] and record["active_rental"] is None and telemetry
+                    not stale and not record["active_claim"] and record["active_rental"] is None
+                    and record.get("active_charging_task") is None and telemetry
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
                     and telemetry.charging_state != "CHARGING"
                     and telemetry.active_dispatch_id is None) else "UNAVAILABLE",
                 "connectivity": "OFFLINE" if age is None or age >= self.settings.offline_seconds else "ONLINE"}
+
+
+    def _public_task(self, task_id):
+        task = self.charging_tasks.get(task_id)
+        return None if task is None else {k: deepcopy(v) for k, v in task.items() if k != "requests"}
+
+    async def list_charging_tasks(self):
+        async with self.lock:
+            return {"tasks": [self._public_task(key) for key in sorted(self.charging_tasks)]}
+
+    async def create_charging_task(self, body):
+        """The dispatcher queues a low-SOC EV; no real charger is operated."""
+        async with self.lock:
+            for task in self.charging_tasks.values():
+                if task["create_request_id"] == str(body.request_id):
+                    if task["vehicle_id"] != body.vehicle_id:
+                        raise HTTPException(409, "CHARGING_REQUEST_CONFLICT")
+                    return self._public_task(task["task_id"])
+            record = self.record(body.vehicle_id)
+            state = self.view(record)
+            telemetry = record["telemetry"]
+            if body.expected_version != record["state_version"]:
+                raise HTTPException(409, "VEHICLE_VERSION_CONFLICT")
+            if record.get("active_charging_task") or record["active_rental"] or record["active_claim"]:
+                raise HTTPException(409, "VEHICLE_BUSY")
+            if (state["stale"] or state["connectivity"] != "ONLINE" or not telemetry
+                    or telemetry.soc_pct > 30 or telemetry.relocation_state != "IDLE"):
+                raise HTTPException(409, "NOT_ELIGIBLE_FOR_CHARGING_TASK")
+            key = str(uuid4())
+            now = self.clock.now().isoformat()
+            self.charging_tasks[key] = {
+                "task_id": key, "vehicle_id": body.vehicle_id,
+                "status": "PENDING", "soc_at_creation": telemetry.soc_pct,
+                "created_at": now, "updated_at": now, "assigned_staff": None,
+                "create_request_id": str(body.request_id), "requests": {}}
+            record["active_charging_task"] = key
+            record["state_version"] += 1
+            self.version += 1
+            await self.persist()
+            return self._public_task(key)
+
+    async def update_charging_task(self, task_id, body):
+        """Progress is approved manually; completion requires actual fresh SOC evidence."""
+        async with self.lock:
+            task = self.charging_tasks.get(str(task_id))
+            if task is None:
+                raise HTTPException(404, "CHARGING_TASK_NOT_FOUND")
+            request_key = str(body.request_id)
+            if request_key in task["requests"]:
+                if task["requests"][request_key]["body"] != body:
+                    raise HTTPException(409, "CHARGING_REQUEST_CONFLICT")
+                return deepcopy(task["requests"][request_key]["receipt"])
+            record = self.record(task["vehicle_id"])
+            if body.expected_version != record["state_version"]:
+                raise HTTPException(409, "VEHICLE_VERSION_CONFLICT")
+            status = task["status"]
+            if body.action == "ASSIGN" and status == "PENDING" and body.staff_name:
+                task["status"], task["assigned_staff"] = "ASSIGNED", body.staff_name
+            elif body.action == "START_WORK" and status == "ASSIGNED":
+                task["status"] = "IN_PROGRESS"
+            elif body.action == "CANCEL" and status in ("PENDING", "ASSIGNED"):
+                task["status"] = "CANCELLED"
+                record["active_charging_task"] = None
+            elif body.action == "COMPLETE" and status == "IN_PROGRESS":
+                state = self.view(record)
+                telemetry = record["telemetry"]
+                if (not telemetry or state["stale"] or state["connectivity"] != "ONLINE"
+                        or telemetry.charging_state != "COMPLETE" or telemetry.soc_pct < 50):
+                    raise HTTPException(409, "CHARGING_EVIDENCE_REQUIRED")
+                task["status"] = "COMPLETED"
+                record["active_charging_task"] = None
+            else:
+                raise HTTPException(409, "INVALID_CHARGING_TRANSITION")
+            task["updated_at"] = self.clock.now().isoformat()
+            record["state_version"] += 1
+            self.version += 1
+            receipt = self._public_task(str(task_id))
+            task["requests"][request_key] = {"body": body, "receipt": deepcopy(receipt)}
+            await self.persist()
+            return receipt
 
     async def start_rental(self, vehicle_id, body):
         """Start a simulated free-floating rental. A rental blocks both ranking and claims."""
