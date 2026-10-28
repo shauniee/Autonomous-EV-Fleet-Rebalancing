@@ -46,6 +46,7 @@ class Recommendation(Model):
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     ranked_candidates: list[CandidateAssessment]
     excluded_candidates: list[CandidateAssessment]
+    traffic_assessment: dict | None = None
     decision_latency_ms: float = Field(ge=0)
     explanation: str
     assumptions: list[str]
