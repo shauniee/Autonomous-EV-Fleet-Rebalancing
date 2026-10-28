@@ -146,7 +146,7 @@ class RentalVehicle(MovingNode):
             return
         await super().command_step()
 
-    async def run_customer_trip(self, destination_zone):
+    async def run_customer_trip(self, destination_zone, on_started=None):
         """One attempt; Fleet is authoritative on availability and return."""
         if not self.ready.is_set():
             return "not-ready"
@@ -171,6 +171,8 @@ class RentalVehicle(MovingNode):
             raise
         # Only the owning EV process changes physical position and SOC.
         self.movement.start_customer_trip(rental_id, target)
+        if on_started is not None:
+            on_started()
         LOG.info("CUSTOMER_START vehicle=%s rental=%s origin=%s destination=%s",
                  self.vehicle_id, rental_id, zone_for(before["telemetry"]["position"]), destination_zone)
         distance = self.movement.rental["total"]
@@ -223,7 +225,6 @@ async def run_experiment(args):
     active = set()
     trips = []
     metrics = {"attempted": 0, "started": 0, "returned": 0, "unfulfilled": 0, "errors": 0}
-    start_time = time.monotonic()
     wall_duration = args.duration_minutes * 60 / args.time_scale
     target_requests = max(0, round(args.rate_per_hour * args.duration_minutes / 60))
     if args.scenario == "spike":
@@ -231,10 +232,8 @@ async def run_experiment(args):
 
     async def run_one(node, destination):
         try:
-            result = await node.run_customer_trip(destination)
+            result = await node.run_customer_trip(destination, on_started=lambda: metrics.__setitem__("started", metrics["started"] + 1))
             metrics["returned" if result == "returned" else "unfulfilled"] += 1
-            if result == "returned":
-                metrics["started"] += 1
         except (httpx.HTTPError, RuntimeError, TimeoutError, ValueError) as exc:
             metrics["errors"] += 1
             LOG.error("CUSTOMER_ERROR vehicle=%s kind=%s detail=%s",
@@ -244,6 +243,7 @@ async def run_experiment(args):
 
     try:
         await asyncio.wait_for(asyncio.gather(*(node.ready.wait() for node in nodes)), timeout=60)
+        start_time = time.monotonic()
         LOG.info("CUSTOMER_SIMULATION_START scenario=%s seed=%d vehicles=%d requests=%d",
                  args.scenario, args.seed, len(nodes), target_requests)
         for i in range(target_requests):
