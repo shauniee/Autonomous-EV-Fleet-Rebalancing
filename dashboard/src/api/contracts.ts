@@ -62,6 +62,7 @@ export interface Vehicle {
   vehicle_id: string; current_zone_id: string | null; stale: boolean; connectivity: string;
   effective_availability: string; effective_relocation_state: string; received_at: string | null;
   telemetry: { position: Position; soc_pct: number; observed_at: string;
+    session_id: string; sequence: number;
     active_dispatch_id?: string | null; distance_travelled_km?: number | null;
     parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
     charging_power_kw?: number | null;
