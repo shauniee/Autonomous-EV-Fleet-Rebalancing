@@ -6,7 +6,7 @@ geolocated road-block/diversion incidents cause a hard route exclusion.
 """
 import asyncio
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from math import cos, radians, isfinite
 import httpx
 
@@ -139,7 +139,7 @@ class TrafficMonitor:
         while True:
             try:
                 await asyncio.wait_for(self.snapshot(), timeout=75)
-            except (asyncio.TimeoutError, TrafficDataError, Exception):
+            except Exception:
                 # Deliberately omit upstream exception details: credentials can
                 # occur in transport diagnostics. The cached feed retains its
                 # last age/status and becomes visibly stale after expiry.
@@ -210,7 +210,8 @@ def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
     matched = [row for row in traffic.get("speeds", []) if
                _near_route(row["start"], geometry, .10) or _near_route(row["end"], geometry, .10)]
     road_names = {item["road"] for item in matched if item["road"]}
-    current = when.date().isoformat()
+    # Roadworks dates are Singapore local calendar dates, not UTC dates.
+    current = when.astimezone(timezone(timedelta(hours=8))).date().isoformat()
     roadworks = [w for w in traffic.get("roadworks", [])
                  if w["road"] in road_names and w["start_date"] <= current <= w["end_date"]]
     incidents = [i for i in traffic.get("incidents", [])
