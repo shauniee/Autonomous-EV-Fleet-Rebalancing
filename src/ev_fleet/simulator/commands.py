@@ -53,6 +53,8 @@ class MovingNode:
             # Resume the actual idle position/SOC; never reconstruct a journey.
             self.movement.position = previous["position"]
             self.movement.soc_pct = previous["soc_pct"]
+            self.movement.odometer_km = previous.get("odometer_km") or 0.0
+            self.movement.heading_deg = previous.get("heading_deg") or 0.0
         if not self.initialized and self.road_match_initial:
             # In OneMap mode, place an IDLE simulated EV on a routable road
             # before its first telemetry and before any journey can be claimed.
