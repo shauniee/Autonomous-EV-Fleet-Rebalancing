@@ -33,6 +33,7 @@ class MovingNode:
         self.facilities_url = facilities_url
         self.road_match_initial = road_match_initial
         self.parking_verified = not bool(facilities_url)
+        self.telemetry_changed = asyncio.Event()
 
     async def request(self, method, url, body=None):
         response = await self.client.request(method, url, json=body)
@@ -120,6 +121,7 @@ class MovingNode:
             if previous and previous["completed"]:
                 return  # Never execute a completed command again.
             self.movement.accept(command)
+            self.telemetry_changed.set()
             self.acknowledged = False
             self.event_sequence = 0
         command = self.movement.command
@@ -131,9 +133,11 @@ class MovingNode:
                 "accepted": self.movement.accepted, "reason": self.movement.reason})
             self.acknowledged = True
             self.movement.start()
+            self.telemetry_changed.set()
         state = await self.request("GET", url)
         if state["state"] in ("SUCCEEDED", "REJECTED") and state["claim_held"] is False:
             self.movement.complete()
+            self.telemetry_changed.set()
             if self.facilities_url:
                 await self.refresh_parking()
             return
@@ -147,6 +151,13 @@ class MovingNode:
             "command_id": command["command_id"], "vehicle_id": self.vehicle_id,
             "sequence": sequence, "observed_at": utcnow().isoformat(), "kind": kind,
             "distance_travelled_km": self.movement.distance, "reason": self.movement.reason})
+
+    def telemetry_delay(self):
+        if self.movement.state in ("DISPATCHED", "RELOCATING", "ARRIVED", "FAILED"):
+            return min(self.telemetry_interval, 1.0)
+        if self.movement.charging_state == "CHARGING":
+            return min(self.telemetry_interval, 2.0)
+        return self.telemetry_interval
 
     async def network_loop(self, operation, interval):
         failures = 0
@@ -164,16 +175,28 @@ class MovingNode:
                         raise
                 logging.warning("vehicle=%s operation=%s failure=%s", self.vehicle_id, operation.__name__, type(exc).__name__)
                 delay = min(10, interval * 2 ** min(failures, 4)) + random.uniform(0, .2)
-            await asyncio.sleep(delay)
+            if operation == self.send_telemetry and failures == 0:
+                # Wake immediately on a command/state transition, otherwise
+                # wait 1s in motion, 2s charging or 5s idle by default.
+                self.telemetry_changed.clear()
+                try:
+                    await asyncio.wait_for(self.telemetry_changed.wait(), timeout=self.telemetry_delay())
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(delay)
 
     async def movement_loop(self):
         last = time.monotonic()
         while True:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
+            previous = (self.movement.state, self.movement.charging_state)
             self.movement.advance((now - last) * self.time_scale, self.speed_kph)
             if self.parking_verified:
                 self.movement.charge((now - last) * self.time_scale)
+            if previous != (self.movement.state, self.movement.charging_state):
+                self.telemetry_changed.set()
             last = now
 
     async def run(self):
