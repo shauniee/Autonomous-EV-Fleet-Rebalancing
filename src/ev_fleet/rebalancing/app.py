@@ -13,6 +13,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
 from .charging_advice import build_charging_advice
+from .traffic import TrafficMonitor
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
@@ -25,6 +26,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     store = RecommendationStore(clock, "rebalancing.recommendations")
     batch_store = RecommendationStore(clock, "rebalancing.batches")
     app.state.persistence = (store.repository, batch_store.repository)
+    app.state.traffic_monitor = None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -33,6 +35,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
                 app.state.client = client or owned
+                app.state.traffic_monitor = TrafficMonitor(app.state.client, clock=clock.now)
                 yield
         finally:
             await store.close()
@@ -71,6 +74,11 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         await store.put(record, config.recommendation_ttl_seconds)
         return record
 
+    @app.get("/api/v1/traffic/conditions")
+    async def traffic_conditions():
+        # Each feed caches independently. Missing data is explicitly UNKNOWN.
+        return await app.state.traffic_monitor.snapshot()
+
     @app.get("/api/v1/charging-advice")
     async def charging_advice():
         # Read-only advisory. Do not create recommendations/holds or alter state.
@@ -92,6 +100,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
             get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities?zone_id={body.target_zone_id}"))
         now = clock.now()
+        traffic = await app.state.traffic_monitor.snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
             target = ZoneState.model_validate(target_raw).model_dump(mode="json")
@@ -101,7 +110,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             if any(s.zone_id != body.target_zone_id for s in snapshot.facilities):
                 raise ValueError("wrong facility zone")
             proposed = rank_pairs(fleet, target, snapshot.facilities, config, now,
-                                  body.quantity, body.purpose, body.vehicle_id, body.facility_id)
+                                  body.quantity, body.purpose, body.vehicle_id, body.facility_id, traffic)
         except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
         expires = now + timedelta(seconds=max(30, config.recommendation_ttl_seconds))
@@ -119,6 +128,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                      "target_position": edge["target_position"],
                      "requires_charging": edge["requires_charging"],
                      "purpose": body.purpose,
+                     "traffic_assessment": edge.get("traffic_assessment"),
                      "ranked_candidates": [edge["assessment"]], "excluded_candidates": [],
                      "decision_latency_ms": 0.0,
                      "explanation": "Facility-aware simulated relocation; revalidated on approval.",
@@ -128,17 +138,20 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             assignments.append({**{key: edge[key] for key in
                 ("vehicle_id", "facility_id", "facility_name", "target_position",
                  "requires_charging", "distance_km", "predicted_arrival_soc_pct", "score")},
+                "traffic_assessment": edge.get("traffic_assessment"),,
                 "recommendation_id": rec_id})
         identifier = str(uuid4())
         result = {"batch_recommendation_id": identifier,
                   "purpose": body.purpose,
                   "target_zone_id": body.target_zone_id, "requested_count": body.quantity,
+                  "traffic_status": traffic["status"], "traffic_generated_at": traffic["generated_at"],
                   "recommended_count": len(assignments),
                   "unfulfilled_count": body.quantity - len(assignments),
                   "created_at": now.isoformat(), "expires_at": expires.isoformat(),
                   "assignments": assignments,
                   "explanation": f"Proposed {len(assignments)} of {body.quantity} EV-to-parking assignments (capacity-limited greedy heuristic).",
                   "assumptions": [f"Facility source: {snapshot.data_source}", "Only simulated allocations are reserved",
+                                  "Traffic ranking uses approximate direct corridors; road route rechecked at approval",
                                   "No road routing or guaranteed real parking"]}
         await batch_store.put({**result, "recommendation_id": identifier}, ttl)
         return result
