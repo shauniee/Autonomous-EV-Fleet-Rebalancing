@@ -3,7 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
-import type { Dispatch, Facility, Position, Vehicle, Zone } from '../api/contracts';
+import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
 import { mapIcon, mapSymbols } from './mapIcons';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
@@ -41,8 +41,8 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], selected, onSelect, selectedDispatch, onSelectDispatch }: {
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, selected, onSelect, selectedDispatch, onSelectDispatch }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
@@ -52,7 +52,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const vehiclePins = useRef(new Map<string, L.Marker>());
   const fitted = useRef(false);
   const [tileError, setTileError] = useState(false);
-  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true });
+  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: false });
   const [selectedZoneOnly, setSelectedZoneOnly] = useState(true);
   const areaZone = selectedZoneOnly ? selected : '';
   const area = zones.find(zone => zone.zone_id === areaZone);
@@ -79,6 +79,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
     { key: 'routes', label: 'Routes', colour: '#326995', count: routes.length },
+    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count: traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length : 0 },
   ] as const;
   useEffect(() => { setSelectedZoneOnly(true); setFollowEV(false); }, [selected]);
   useEffect(() => {
@@ -180,7 +181,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       const route = dispatch.command!.route!;
       const focused = dispatch.dispatch_id === journeyId;
       const label = document.createElement('span');
-      label.textContent = `${dispatch.vehicle_id} · OneMap road route · ${route.distance_km.toFixed(2)} km`;
+      label.textContent = `${dispatch.vehicle_id} · ${route.source} road route · ${route.distance_km.toFixed(2)} km${route.rerouted ? ' · traffic alternate' : ''}`;
       L.polyline(route.geometry.map(point => [point.latitude, point.longitude] as [number, number]), {
         color: focused ? '#176d62' : '#326995', weight: focused ? 5 : 3, opacity: focused ? .95 : .4,
       }).bindTooltip(label).on('click', () => onSelectDispatch(dispatch.dispatch_id)).addTo(layer);
@@ -195,6 +196,28 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     }
     return () => { layer.remove(); };
   }, [routes, journeyId, onSelectDispatch, visible.routes, areaZone, zones]);
+  useEffect(() => {
+    if (!map.current || !visible.traffic || traffic?.source !== 'LTA_DATAMALL') return;
+    const layer = L.layerGroup().addTo(map.current);
+    // Rendering bound: show at most 500 observed road segments at a time.
+    // This layer is descriptive only; geometry is not a routable network.
+    for (const segment of traffic.speeds.slice(0, 500)) {
+      const average = (segment.min_kph + segment.max_kph) / 2;
+      const colour = average < 20 ? '#bd453b' : average < 40 ? '#d6a137' : '#23826e';
+      const label = document.createElement('span');
+      label.textContent = segment.road + ' · ' + segment.min_kph + '–' + segment.max_kph + ' km/h (LTA observed)';
+      L.polyline([[segment.start.latitude, segment.start.longitude], [segment.end.latitude, segment.end.longitude]],
+        { color: colour, weight: 4, opacity: .7 }).bindTooltip(label).addTo(layer);
+    }
+    for (const incident of traffic.incidents.slice(0, 100)) {
+      const label = document.createElement('span');
+      label.textContent = incident.type + ': ' + incident.message;
+      L.circleMarker([incident.position.latitude, incident.position.longitude],
+        { radius: 7, color: '#ad3e28', fillOpacity: .75, weight: 2 })
+        .bindTooltip(label).addTo(layer);
+    }
+    return () => { layer.remove(); };
+  }, [visible.traffic, traffic]);
   useEffect(() => {
     const group = markers.current;
     if (!group) return;
@@ -252,7 +275,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       }}>Reset view</button>
     </div>
     <div className="route-toolbar">
-      <label className="map-scope"><span>OneMap journey</span><span className="select-wrap">
+      <label className="map-scope"><span>Road journey</span><span className="select-wrap">
         <select className="form-select" value={journeyId ?? ''} disabled={!shownDispatches.length} onChange={event => onSelectDispatch(event.target.value)}>
           {!journey && <option value="">No active road route</option>}
           {[...shownDispatches].reverse().map(dispatch => <option key={dispatch.dispatch_id} value={dispatch.dispatch_id}>
