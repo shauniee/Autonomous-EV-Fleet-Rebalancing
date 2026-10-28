@@ -69,7 +69,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                     if estimate["blocked"]:
                         candidate["eligible"] = False
                         candidate["exclusion_reasons"] = ["TRAFFIC_ROAD_BLOCK_ESTIMATE"]
-                    elif cost is not None:
+                    elif cost is not None and estimate["status"] == "FRESH":
                         candidate["score"] = 1 - cost
                 excluded.extend(candidate for candidate in eligible if not candidate["eligible"])
                 eligible = [candidate for candidate in eligible if candidate["eligible"]]
