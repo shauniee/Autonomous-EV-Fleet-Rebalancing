@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.routing import RoadRoute
 from ev_fleet.contracts.dispatch import BatchApproval
-from ev_fleet.contracts.facilities import ParkingHoldRequest
+from ev_fleet.contracts.facilities import ParkingHoldRequest, VehicleParking
 from ev_fleet.dispatch.routing import RoutingSettings, driving_route, road_match_spawn
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.facilities.store import FacilitiesStore
@@ -110,9 +110,9 @@ def test_parked_ev_stays_at_drivable_road_access_without_teleport():
         await store.reserve(site.facility_id, hold)
         await store.change(dispatch_id, "OCCUPIED")
         parked = await store.vehicle_parking("ev-road")
-        assert parked["parking"]["position"] == access
+        assert parked["parking"]["position"].model_dump() == access
         mover = Movement(access, 24)
-        assert mover.park(parked["parking"])
+        assert mover.park(VehicleParking.model_validate(parked).model_dump()["parking"])
         assert mover.position == access
         # The facility centre remains off-road and is NOT the vehicle position.
         assert distance_km(mover.position, centre) > .05
@@ -158,5 +158,5 @@ def test_charging_approval_claims_access_road_and_not_facility_centre(clock, mon
             assert pending["status"] == "RESERVED"
             await cluster.facilities.change(approved["items"][0]["dispatch_id"], "OCCUPIED")
             parked = await cluster.facilities.vehicle_parking("ev-road")
-            assert parked["parking"]["position"] == road_end
+            assert parked["parking"]["position"].model_dump() == road_end
     asyncio.run(scenario())
