@@ -14,7 +14,7 @@ from .movement import Movement
 class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
-                 speed_kph=30, time_scale=30, client=None, facilities_url=None,
+                 speed_kph=30, time_scale=10, client=None, facilities_url=None,
                  road_match_initial=True):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
