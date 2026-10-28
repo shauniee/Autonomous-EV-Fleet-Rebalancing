@@ -182,7 +182,10 @@ class DispatchService:
                 requires_charging=requires_charge).model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
-            expected_version=vehicle.state_version, target_zone_id=target.zone_id,
+            expected_version=vehicle.state_version,
+            expected_control_version=vehicle.control_version,
+            route_origin=route.geometry[0] if route else None,
+            target_zone_id=target.zone_id,
             target_position=destination, approve_before=recommendation.expires_at,
             min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
             route_factor=max(policy.route_factor, self.settings.route_factor),
