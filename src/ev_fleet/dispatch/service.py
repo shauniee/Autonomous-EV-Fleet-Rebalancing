@@ -19,6 +19,7 @@ from .store import DispatchRecord, DispatchStore
 from .routing import RoutingSettings, driving_route
 from .traffic_routes import choose_traffic_route
 from ev_fleet.rebalancing.traffic import assess_traffic
+from ev_fleet.common.travel import distance_km
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
@@ -255,6 +256,46 @@ class DispatchService:
         except HTTPException as exc:
             logging.warning("parking finalisation pending dispatch=%s error=%s",
                             record.data["dispatch_id"], exc.detail)
+
+    async def traffic_check(self, dispatch_id):
+        """Read-only active-journey condition check; never alters command identity."""
+        record = await self.get(dispatch_id)
+        cmd = record.get("command")
+        if not self.traffic_enabled or not cmd or not cmd.get("route"):
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "NO_LIVE_ROAD_ROUTE"}
+        if record["state"] in TERMINAL:
+            return {"status": "FINISHED", "action": "NONE", "reason": "JOURNEY_TERMINAL"}
+        traffic, fleet = await asyncio.gather(
+            request_json(self.client, "GET",
+                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions"),
+            request_json(self.client, "GET",
+                f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == record["vehicle_id"]), None)
+        if vehicle is None or vehicle.stale or vehicle.telemetry is None:
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "TELEMETRY_UNAVAILABLE"}
+        points = cmd["route"]["geometry"]
+        location = vehicle.telemetry.position.model_dump()
+        closest = min(range(len(points)), key=lambda i: distance_km(location, points[i]))
+        if distance_km(location, points[closest]) > .05:
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "VEHICLE_NOT_ON_RECORDED_ROUTE"}
+        remaining = points[closest:]
+        if len(remaining) < 2:
+            return {"status": "ARRIVING", "action": "NONE", "reason": "NEAR_DESTINATION"}
+        estimated_length = sum(distance_km(p, q) for p, q in zip(remaining, remaining[1:]))
+        total_geometry_length = sum(distance_km(p, q) for p, q in zip(points, points[1:]))
+        baseline = cmd["route"]["duration_seconds"] * estimated_length / max(.001, total_geometry_length)
+        report = assess_traffic(remaining, estimated_length, baseline, traffic, self.clock.now())
+        if report["blocked"]:
+            return {"status": "BLOCKED_AHEAD", "action": "OPERATOR_REVIEW_REQUIRED",
+                    "reason": "CLOSURE_ON_REMAINING_ROUTE", "assessment": report}
+        if report["status"] != "FRESH":
+            return {"status": "UNKNOWN", "action": "NONE",
+                    "reason": "TRAFFIC_COVERAGE_INCOMPLETE", "assessment": report}
+        if report["delay_factor"] is not None and report["delay_factor"] >= 1.5:
+            return {"status": "CONGESTED_AHEAD", "action": "OPERATOR_REVIEW_REQUIRED",
+                    "reason": "SIGNIFICANT_DELAY", "assessment": report}
+        return {"status": "MONITORED", "action": "NONE", "reason": "NO_RECORDED_DISRUPTION",
+                "assessment": report}
 
     async def approve(self, body):
         record = await self.store.begin(body)
