@@ -24,7 +24,7 @@ export interface ChargingTask {
   soc_at_creation: number; assigned_staff: string | null;
   created_at: string; updated_at: string;
 }
-export interface Rental { rental_id: string; status: 'RENTED' | 'RETURNED'; expected_end_at: string; started_at: string; return_position: Position | null; return_soc_pct: number | null; }
+export interface Rental { rental_id: string; status: 'RENTED' | 'RETURNED'; expected_end_at: string; expected_return_zone_id?: string | null; started_at: string; return_position: Position | null; return_soc_pct: number | null; }
 export interface Vehicle {
   active_rental?: Rental | null;
   active_charging_task?: ChargingTask | null;
