@@ -160,3 +160,51 @@ def test_charging_approval_claims_access_road_and_not_facility_centre(clock, mon
             parked = await cluster.facilities.vehicle_parking("ev-road")
             assert parked["parking"]["position"].model_dump() == road_end
     asyncio.run(scenario())
+
+
+def test_moving_ev_registers_at_road_before_first_fleet_telemetry(clock, monkeypatch):
+    from ev_fleet.dispatch import routing
+    from ev_fleet.simulator.commands import MovingNode
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            cluster.dispatch.routing = RoutingSettings(provider="ONEMAP", access_token="test-token")
+            offroad = {"latitude": 1.35113, "longitude": 103.85}
+            road = {"latitude": 1.35, "longitude": 103.85}
+            calls = []
+            async def fake_route(_client, _settings, origin, target):
+                calls.append(origin)
+                return road_route(road, target)
+
+            monkeypatch.setattr(routing, "_onemap_route", fake_route)
+            node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-road-start",
+                              offroad, 70, client=cluster.client)
+            await node.send_telemetry()
+            state = await cluster.fleet.get("ev-road-start")
+            assert state["telemetry"]["position"] == road
+            assert state["telemetry"]["soc_pct"] == 70
+            assert node.movement.position == road
+            assert len(calls) == 1  # Once during initialisation, never per telemetry.
+            await node.send_telemetry()
+            assert len(calls) == 1
+            assert state["active_claim"] is None
+
+    asyncio.run(scenario())
+
+
+def test_reject_route_start_that_would_create_an_offroad_connector():
+    origin = {"latitude": 1.35, "longitude": 103.85}
+    road_start = {"latitude": 1.35113, "longitude": 103.85}
+    road_end = {"latitude": 1.352, "longitude": 103.85}
+    route = road_route(road_start, road_end)
+    cmd = {
+        "command_id": str(uuid4()), "dispatch_id": str(uuid4()),
+        "target_position": road_end, "route_factor": 1.3,
+        "energy_margin_factor": 1.15, "min_reserve_pct": 20,
+        "route": route.model_dump(mode="json"),
+    }
+    mover = Movement(origin, 70)
+    with pytest.raises(ValueError, match="road-aligned"):
+        mover.accept(cmd)
+    assert mover.position == origin
+    assert mover.command is None
