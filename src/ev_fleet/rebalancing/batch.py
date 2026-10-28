@@ -43,6 +43,7 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANC
                            if site.parking_capacity is not None else 0.5)
             score = .85 * assessment["score"] + .15 * parking_fit
             evaluation = None
+            traffic_scored = False
             if traffic and traffic.get("source") == "LTA_DATAMALL":
                 # Pre-approval heuristic uses a direct origin-to-site corridor.
                 # No claim is made that this line is the eventual road route.
@@ -53,20 +54,30 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANC
                 if evaluation["blocked"]:
                     continue
                 cost = rank_cost(evaluation, assessment["energy_required_kwh"])
-                if cost is not None:
+                if cost is not None and evaluation["status"] == "FRESH":
                     score = 1 - cost
+                    traffic_scored = True
             edges.append({
                 "vehicle_id": vehicle["vehicle_id"], "facility_id": site.facility_id,
                 "facility_name": site.name, "target_position": site.position.model_dump(mode="json"),
                 "requires_charging": need_charge, "distance_km": assessment["distance_km"],
                 "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"],
                 "score": min(1.0, score), "assessment": assessment,
-                "traffic_assessment": evaluation,
+                "traffic_assessment": evaluation, "traffic_scored": traffic_scored,
             })
-    edges.sort(key=lambda e: (-e["score"],
-                               (e["assessment"]["current_soc_pct"] if purpose == "CHARGE" else 0),
-                               -e["predicted_arrival_soc_pct"],
-                               e["distance_km"], e["vehicle_id"], e["facility_id"]))
+    if any(edge["traffic_scored"] for edge in edges):
+        # Traffic-aware score differs from baseline only for observed roads.
+        # Prefer observed candidates; unobserved alternatives are explicitly
+        # uncertain rather than assumed free-flow.
+        edges.sort(key=lambda e: (not e["traffic_scored"], -e["score"],
+                                  e["distance_km"], e["vehicle_id"], e["facility_id"]))
+    else:
+        # Preserve the original low-SOC-first CHARGE policy whenever traffic is
+        # disabled, missing, stale or covers none of the candidate roads.
+        edges.sort(key=lambda e: (
+            (e["assessment"]["current_soc_pct"] if purpose == "CHARGE" else 0),
+            -e["score"], -e["predicted_arrival_soc_pct"],
+            e["distance_km"], e["vehicle_id"], e["facility_id"]))
     assigned_vehicles = set()
     selected = []
     for edge in edges:
