@@ -97,7 +97,7 @@ export function RentalPanel({ vehicles, zones, available }: {
     <h2>Customer rentals & anticipated returns</h2>
     <p className="description">The optional six-car rental demo runs in this Kubernetes cluster. Customer journey destinations are synthetic. Rentals always remain unavailable for relocation until the actual return is confirmed by Fleet.</p>
     <p role="status">Rental workload: <strong>{error ? 'Unavailable' : status?.running ? 'Enabled' : status ? 'Paused' : 'Checking…'}</strong>
-      {status && ` · ${status.actual_replicas}/${status.desired_replicas} available Pods`}</p>
+      {status && ` · ${status.actual_replicas}/${status.desired_replicas} existing Pods`}</p>
     {error && <p className="warning">{error}</p>}
     <button disabled={busy || !status || status.running} onClick={() => void control('start')}>Start customer rentals</button>{' '}
     <button disabled={busy || !status || !status.running} onClick={() => void control('stop')}>Stop after active rentals finish</button>
