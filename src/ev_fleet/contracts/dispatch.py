@@ -27,6 +27,8 @@ class ClaimRequest(Model):
     command_id: UUID
     expected_instance_id: UUID
     expected_version: int = Field(ge=1)
+    expected_control_version: int | None = Field(default=None, ge=1)
+    route_origin: Position | None = None
     target_zone_id: str = Field(pattern=r"^[a-z0-9-]{1,64}$")
     target_position: Position
     approve_before: AwareDatetime
