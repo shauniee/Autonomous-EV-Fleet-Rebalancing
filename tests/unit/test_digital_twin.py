@@ -95,3 +95,66 @@ def test_telemetry_model_rejects_invalid_digital_twin_measurements():
                   {"battery_temp_c": 200}, {"gps_quality": "GNSS_TRUSTED"}]:
         with pytest.raises(ValueError):
             TelemetryUpdate(**args, **extra)
+
+
+def test_one_hertz_idle_telemetry_does_not_invalidate_safely_rechecked_control_claim(clock):
+    from datetime import timedelta
+    from ev_fleet.contracts.dispatch import ClaimRequest
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle("ev-1", soc=80)
+            before = await cluster.fleet.get("ev-1")
+            origin = before["telemetry"]["position"]
+            request = ClaimRequest(
+                command_id=uuid4(), expected_instance_id=cluster.fleet.instance_id,
+                expected_version=before["state_version"],
+                expected_control_version=before["control_version"],
+                route_origin=origin,
+                target_zone_id="cbd",
+                target_position={"latitude": 1.283, "longitude": 103.8513},
+                approve_before=clock.now() + timedelta(seconds=60),
+                min_reserve_pct=20, route_factor=1.3,
+                energy_margin_factor=1.15)
+            for _ in range(5):
+                await cluster.telemetry("ev-1", soc=79)
+            after = await cluster.fleet.get("ev-1")
+            assert after["state_version"] > before["state_version"]
+            assert after["control_version"] == before["control_version"]
+            claim = await cluster.fleet.claim("ev-1", uuid4(), request)
+            assert claim["status"] == "ACTIVE"
+            assert (await cluster.fleet.get("ev-1"))["control_version"] > before["control_version"]
+
+    asyncio.run(scenario())
+
+
+def test_control_change_or_moved_route_origin_still_rejects_delayed_claim(clock):
+    from datetime import timedelta
+    from ev_fleet.contracts.dispatch import ClaimRequest
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle("ev-1", soc=80)
+            before = await cluster.fleet.get("ev-1")
+            def request():
+                return ClaimRequest(
+                    command_id=uuid4(), expected_instance_id=cluster.fleet.instance_id,
+                    expected_version=before["state_version"],
+                    expected_control_version=before["control_version"],
+                    route_origin=before["telemetry"]["position"],
+                    target_zone_id="cbd",
+                    target_position={"latitude": 1.283, "longitude": 103.8513},
+                    approve_before=clock.now() + timedelta(seconds=60),
+                    min_reserve_pct=20, route_factor=1.3,
+                    energy_margin_factor=1.15)
+            await cluster.telemetry("ev-1", soc=79,
+                position={"latitude": 1.3500, "longitude": 103.855})
+            with pytest.raises(HTTPException) as offroad:
+                await cluster.fleet.claim("ev-1", uuid4(), request())
+            assert offroad.value.detail == "ROUTE_ORIGIN_CHANGED"
+
+            await cluster.telemetry("ev-1", soc=79, availability="UNAVAILABLE")
+            with pytest.raises(HTTPException) as blocked:
+                await cluster.fleet.claim("ev-1", uuid4(), request())
+            assert blocked.value.detail == "VEHICLE_VERSION_CONFLICT"
+    asyncio.run(scenario())
