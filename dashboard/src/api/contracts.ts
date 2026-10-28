@@ -64,7 +64,12 @@ export interface Vehicle {
   telemetry: { position: Position; soc_pct: number; observed_at: string;
     active_dispatch_id?: string | null; distance_travelled_km?: number | null;
     parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
-    charging_power_kw?: number | null } | null;
+    charging_power_kw?: number | null;
+    speed_kph?: number | null; heading_deg?: number | null;
+    odometer_km?: number | null; battery_temp_c?: number | null;
+    motor_temp_c?: number | null; power_kw?: number | null;
+    battery_soh_pct?: number | null; gps_quality?: string | null;
+    fault_codes?: string[] } | null;
 }
 export interface Fleet { instance_id: string; snapshot_at: string; vehicles: Vehicle[] }
 export interface Candidate {
