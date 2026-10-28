@@ -10,6 +10,12 @@ Production build/TypeScript and whitespace checks passed.
 UI refinement: numbered pages with ellipses and an active state, a styled page
 jump, and labeled relocation dropdowns with helper text and mobile stacking.
 Selection and dispatch behavior remain unchanged; no tests rerun or `.env` access.
+Map follow-up: accessible layer toggles/counts for zones, EVs, parking and charging;
+reset-view control, lighter markers and Canvas rendering. Separate layer updates
+avoid redrawing facilities on each telemetry refresh. Display filters do not
+change planning or allocations. No tests rerun or `.env` access.
+Map facilities now default to the selected operating zone, with an All zones
+override. Parking/charging counts follow this filter; EVs and zones stay visible.
 
 Implemented real LTA destinations, charging requests and vehicle selection,
 allocated parking telemetry and simulated charging to 80%. macOS startup supports

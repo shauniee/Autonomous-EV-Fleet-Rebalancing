@@ -172,7 +172,7 @@ export default function App() {
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><div className="workspace-main"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
         <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} selected={selected} onSelect={choose}/>
-        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span><span>● {liveFacilities ? 'LTA' : 'Mock'} parking (teal)</span><span>● {liveFacilities ? 'LTA' : 'Mock'} charging (amber)</span></div>
+        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
         <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · Approximate simulation coordinates</p>
