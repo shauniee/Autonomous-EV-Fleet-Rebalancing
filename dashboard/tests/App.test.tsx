@@ -357,4 +357,30 @@ describe('dispatcher dashboard', () => {
     expect(within(panel).getByText('FIRST ROAD')).toBeInTheDocument();
   });
 
+  it('shows read-only latest digital twin diagnostics and accepted history', async () => {
+    const fleet = makeFleet();
+    fleet.vehicles[0].telemetry!.speed_kph = 28;
+    fleet.vehicles[0].telemetry!.battery_temp_c = 32;
+    fleet.vehicles[0].telemetry!.gps_quality = 'SIMULATED';
+    const now = new Date().toISOString();
+    const history = { vehicle_id: 'ev-01', storage: 'postgresql', limit: 100,
+      samples: [
+        { session_id: 'test-session', sequence: 1, observed_at: now, received_at: now,
+          telemetry: { ...fleet.vehicles[0].telemetry!, soc_pct: 90, speed_kph: 0 } },
+        { session_id: 'test-session', sequence: 2, observed_at: now, received_at: now,
+          telemetry: { ...fleet.vehicles[0].telemetry!, soc_pct: 89, speed_kph: 28 } },
+      ] };
+    const fetch = server({ '/api/fleet/vehicles': fleet,
+      '/api/fleet/vehicles/ev-01/telemetry-history?limit=100': history });
+    render(<App/>);
+    const panel = await screen.findByRole('region', { name: 'EV digital twin diagnostics' });
+    expect(within(panel).getByText('28 km/h')).toBeInTheDocument();
+    expect(within(panel).getByText('32°C')).toBeInTheDocument();
+    expect(within(panel).getByText('SIMULATED')).toBeInTheDocument();
+    expect(await within(panel).findByText(/2 accepted samples shown/)).toBeInTheDocument();
+    expect(within(panel).getByRole('img', { name: 'Historical battery state of charge' })).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([path, init]) =>
+      String(path).includes('telemetry-history') && init?.method === 'POST')).toBe(false);
+  });
+
 });
