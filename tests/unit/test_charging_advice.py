@@ -91,7 +91,9 @@ def test_exact_charger_filter_requires_explicit_single_ev_charge():
         {"quantity": 1, "vehicle_id": "ev-low", "facility_id": "mock-bishan-01", "purpose": "REBALANCE"},
     ]:
         with pytest.raises(ValidationError):
-            BatchRecommendationRequest(target_zone_id="bishan", purpose="CHARGE", **invalid)
+            BatchRecommendationRequest(**{
+                "target_zone_id": "bishan", "purpose": "CHARGE", **invalid
+            })
 
 
 def test_advisory_to_exact_charge_batch_requires_dispatch_approval(clock):
