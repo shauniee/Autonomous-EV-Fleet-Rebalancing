@@ -1,5 +1,5 @@
 from copy import deepcopy
-from math import isfinite
+from math import atan2, cos, degrees, isfinite, radians
 from bisect import bisect_right
 from ev_fleet.common.travel import distance_km, predicted_soc
 
@@ -18,6 +18,7 @@ class Movement:
         self.command = None
         self.seen = {}
         self.state = "IDLE"
+        self.speed_kph = 0.0
         self.accepted = None
         self.reason = None
         self.distance = 0.0
@@ -26,6 +27,9 @@ class Movement:
         self.parking = None
         self.charging_state = "NOT_CHARGING"
         self.path_lengths = []
+        self.odometer_km = 0.0
+        self.speed_kph = 0.0
+        self.heading_deg = 0.0
 
     def accept(self, command):
         identity = command["command_id"]
@@ -76,13 +80,17 @@ class Movement:
         if not isfinite(elapsed_seconds) or not isfinite(speed_kph) or elapsed_seconds < 0 or speed_kph <= 0:
             raise ValueError("invalid simulation step")
         if self.state != "RELOCATING":
+            self.speed_kph = 0.0
             return
         remaining = max(0, self.total - self.distance)
         possible = self.soc_pct / 100 * self.capacity / self.consumption
         route = self.command.get("route")
         speed = self.total / route["duration_seconds"] if route and route["duration_seconds"] > 0 else speed_kph / 3600
         step = min(remaining, speed * elapsed_seconds, possible)
+        previous_position = deepcopy(self.position)
         self.distance += step
+        self.odometer_km += step
+        self.speed_kph = (step * 3600 / elapsed_seconds) if elapsed_seconds else 0.0
         self.soc_pct = max(0, self.soc_pct - 100 * step * self.consumption / self.capacity)
         fraction = 1 if self.total == 0 else min(1, self.distance / self.total)
         if route:
@@ -95,11 +103,17 @@ class Movement:
         else:
             self.position = {key: self.origin[key] + fraction * (self.command["target_position"][key] - self.origin[key])
                              for key in ("latitude", "longitude")}
+        if distance_km(previous_position, self.position) > 1e-9:
+            dy = self.position["latitude"] - previous_position["latitude"]
+            dx = (self.position["longitude"] - previous_position["longitude"]) * cos(radians(self.position["latitude"]))
+            self.heading_deg = (degrees(atan2(dx, dy)) + 360) % 360
         if self.distance >= self.total - 1e-9:
             self.position = deepcopy(route["geometry"][-1] if route else self.command["target_position"])
             self.state = "ARRIVED"
+            self.speed_kph = 0.0
         elif self.soc_pct <= 1e-9:
             self.state = "FAILED"
+            self.speed_kph = 0.0
             self.reason = "BATTERY_DEPLETED"
 
     def complete(self):
@@ -112,7 +126,17 @@ class Movement:
         self.reason = None
 
     def telemetry(self):
+        # Synthetic condition estimates for demonstration, not measured sensors.
+        charging_kw = self.parking["charging_power_kw"] if self.parking and self.charging_state == "CHARGING" else 0.0
+        traction_kw = self.speed_kph * self.consumption
         return {"position": deepcopy(self.position), "soc_pct": self.soc_pct,
+                "speed_kph": round(self.speed_kph, 3), "heading_deg": round(self.heading_deg, 3),
+                "odometer_km": round(self.odometer_km, 6),
+                "battery_temp_c": round(28 + min(12, traction_kw * .4 + charging_kw * .03), 2),
+                "motor_temp_c": round(29 + min(40, traction_kw * 1.4), 2),
+                "power_kw": round(traction_kw - charging_kw, 3),
+                "battery_soh_pct": 98.0, "gps_quality": "SIMULATED",
+                "fault_codes": ["BATTERY_DEPLETED"] if self.state == "FAILED" and self.reason == "BATTERY_DEPLETED" else [],
                 "availability": "UNAVAILABLE" if self.command or self.charging_state == "CHARGING" else "AVAILABLE",
                 "relocation_state": self.state,
                 "distance_travelled_km": self.distance if self.command else None,
@@ -126,6 +150,7 @@ class Movement:
         self.charging_state = "NOT_CHARGING"
         if self.command or not parking or distance_km(self.position, parking["position"]) > .05:
             return False
+        self.speed_kph = 0.0
         self.parking = deepcopy(parking)
         if parking["charging_allocated"]:
             self.charging_state = ("CHARGING" if self.soc_pct < parking["charging_target_soc_pct"] else "COMPLETE")
