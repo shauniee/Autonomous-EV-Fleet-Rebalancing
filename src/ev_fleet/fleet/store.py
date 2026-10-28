@@ -159,6 +159,7 @@ class FleetStore:
             telemetry = record["telemetry"]
             data = {"rental_id": key, "status": "RENTED",
                     "expected_end_at": body.expected_end_at.isoformat(),
+                     "expected_return_zone_id": body.expected_return_zone_id,
                     "started_at": now.isoformat(),
                     "start_position": telemetry.position.model_dump(mode="json"),
                     "start_soc_pct": telemetry.soc_pct,
