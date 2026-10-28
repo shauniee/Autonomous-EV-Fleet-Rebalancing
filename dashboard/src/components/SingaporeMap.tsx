@@ -3,8 +3,9 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
-import type { Dispatch, Facility, Position, Vehicle, Zone } from '../api/contracts';
+import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
+import { prepareConfirmedRoute } from './routeInterpolation';
 import { mapIcon, mapSymbols } from './mapIcons';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
@@ -41,8 +42,8 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], selected, onSelect, selectedDispatch, onSelectDispatch }: {
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, selected, onSelect, selectedDispatch, onSelectDispatch }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
@@ -50,9 +51,11 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const markers = useRef<L.MarkerClusterGroup | null>(null);
   const facilityPins = useRef(new Map<string, L.Marker>());
   const vehiclePins = useRef(new Map<string, L.Marker>());
+  const displayAnimations = useRef(new Map<string, number>());
+  const lastConfirmed = useRef(new Map<string, { position: Position; session: string; sequence: number }>());
   const fitted = useRef(false);
   const [tileError, setTileError] = useState(false);
-  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true });
+  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: false });
   const [selectedZoneOnly, setSelectedZoneOnly] = useState(true);
   const areaZone = selectedZoneOnly ? selected : '';
   const area = zones.find(zone => zone.zone_id === areaZone);
@@ -79,6 +82,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
     { key: 'routes', label: 'Routes', colour: '#326995', count: routes.length },
+    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count: traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length : 0 },
   ] as const;
   useEffect(() => { setSelectedZoneOnly(true); setFollowEV(false); }, [selected]);
   useEffect(() => {
@@ -106,6 +110,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     resize.observe(element.current!);
     return () => {
       resize.disconnect(); instance.remove(); map.current = null; markers.current = null;
+      for (const handle of displayAnimations.current.values()) cancelAnimationFrame(handle);
+      displayAnimations.current.clear(); lastConfirmed.current.clear();
       facilityPins.current.clear(); vehiclePins.current.clear(); fitted.current = false; fittedJourney.current = '';
     };
   }, []);
@@ -180,7 +186,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       const route = dispatch.command!.route!;
       const focused = dispatch.dispatch_id === journeyId;
       const label = document.createElement('span');
-      label.textContent = `${dispatch.vehicle_id} · OneMap road route · ${route.distance_km.toFixed(2)} km`;
+      label.textContent = `${dispatch.vehicle_id} · ${route.source} road route · ${route.distance_km.toFixed(2)} km${route.rerouted ? ' · traffic alternate' : ''}`;
       L.polyline(route.geometry.map(point => [point.latitude, point.longitude] as [number, number]), {
         color: focused ? '#176d62' : '#326995', weight: focused ? 5 : 3, opacity: focused ? .95 : .4,
       }).bindTooltip(label).on('click', () => onSelectDispatch(dispatch.dispatch_id)).addTo(layer);
@@ -196,6 +202,28 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     return () => { layer.remove(); };
   }, [routes, journeyId, onSelectDispatch, visible.routes, areaZone, zones]);
   useEffect(() => {
+    if (!map.current || !visible.traffic || traffic?.source !== 'LTA_DATAMALL') return;
+    const layer = L.layerGroup().addTo(map.current);
+    // Rendering bound: show at most 500 observed road segments at a time.
+    // This layer is descriptive only; geometry is not a routable network.
+    for (const segment of traffic.speeds.slice(0, 500)) {
+      const average = (segment.min_kph + segment.max_kph) / 2;
+      const colour = average < 20 ? '#bd453b' : average < 40 ? '#d6a137' : '#23826e';
+      const label = document.createElement('span');
+      label.textContent = segment.road + ' · ' + segment.min_kph + '–' + segment.max_kph + ' km/h (LTA observed)';
+      L.polyline([[segment.start.latitude, segment.start.longitude], [segment.end.latitude, segment.end.longitude]],
+        { color: colour, weight: 4, opacity: .7 }).bindTooltip(label).addTo(layer);
+    }
+    for (const incident of traffic.incidents.slice(0, 100)) {
+      const label = document.createElement('span');
+      label.textContent = incident.type + ': ' + incident.message;
+      L.circleMarker([incident.position.latitude, incident.position.longitude],
+        { radius: 7, color: '#ad3e28', fillOpacity: .75, weight: 2 })
+        .bindTooltip(label).addTo(layer);
+    }
+    return () => { layer.remove(); };
+  }, [visible.traffic, traffic]);
+  useEffect(() => {
     const group = markers.current;
     if (!group) return;
     const added: L.Marker[] = [];
@@ -209,12 +237,45 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       const icon = mapIcon('ev', { muted: vehicle.stale, selected: focused, rented: !!vehicle.active_rental });
       ids.add(vehicle.vehicle_id);
       let marker = vehiclePins.current.get(vehicle.vehicle_id);
-      if (marker) updatePin(marker, position, icon, label);
-      else {
+      if (marker) {
+        const previous = lastConfirmed.current.get(vehicle.vehicle_id);
+        const t = vehicle.telemetry;
+        const path = journey?.command?.route?.geometry;
+        const sameJourney = !!path && !vehicle.stale && !vehicle.active_rental &&
+          t.active_dispatch_id === journey?.dispatch_id && previous &&
+          previous.session === t.session_id && t.sequence > previous.sequence;
+        const tween = sameJourney ? prepareConfirmedRoute(path!, previous.position, t.position) : null;
+        const active = displayAnimations.current.get(vehicle.vehicle_id);
+        if (active !== undefined) {
+          cancelAnimationFrame(active);
+          displayAnimations.current.delete(vehicle.vehicle_id);
+        }
+        if (tween) {
+          // This is only visual easing between two *observed* road positions.
+          // No position is extrapolated past the newer Fleet observation.
+          marker.setIcon(icon);
+          marker.setTooltipContent(label);
+          reportedPositions.set(marker, L.latLng(position));
+          const pin = marker;
+          const begin = performance.now();
+          const animate = (now: number) => {
+            const t = Math.max(0, Math.min(1, (now - begin) / 800));
+            const road = tween(t);
+            if (road) pin.setLatLng([road.latitude, road.longitude]);
+            if (t < 1) displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
+            else { pin.setLatLng(position); displayAnimations.current.delete(vehicle.vehicle_id); }
+          };
+          displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
+        } else updatePin(marker, position, icon, label);
+      } else {
         marker = L.marker(position, { icon, title: vehicle.vehicle_id }).bindTooltip(label, { direction: 'top' });
         reportedPositions.set(marker, L.latLng(position));
         vehiclePins.current.set(vehicle.vehicle_id, marker); added.push(marker);
       }
+      lastConfirmed.current.set(vehicle.vehicle_id, {
+        position: vehicle.telemetry.position, session: vehicle.telemetry.session_id,
+        sequence: vehicle.telemetry.sequence,
+      });
       marker.off('click').on('click', () => {
         const dispatch = activeRoutes.find(item => item.vehicle_id === vehicle.vehicle_id);
         if (dispatch) onSelectDispatch(dispatch.dispatch_id);
@@ -223,7 +284,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     removeHiddenPins(group, vehiclePins.current, ids);
     if (added.length) group.addLayers(added);
     group.refreshClusters();
-  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, activeRoutes, onSelectDispatch]);
+  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, journey?.command?.route, journeyId, activeRoutes, onSelectDispatch]);
   return <>
     <div className="map-toolbar">
       <fieldset className="map-filters"><legend>Show on map</legend><div className="map-filter-options">
@@ -252,7 +313,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       }}>Reset view</button>
     </div>
     <div className="route-toolbar">
-      <label className="map-scope"><span>OneMap journey</span><span className="select-wrap">
+      <label className="map-scope"><span>Road journey</span><span className="select-wrap">
         <select className="form-select" value={journeyId ?? ''} disabled={!shownDispatches.length} onChange={event => onSelectDispatch(event.target.value)}>
           {!journey && <option value="">No active road route</option>}
           {[...shownDispatches].reverse().map(dispatch => <option key={dispatch.dispatch_id} value={dispatch.dispatch_id}>

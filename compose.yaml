@@ -53,6 +53,8 @@ services:
       FLEET_URL: http://fleet:8000
       DEMAND_URL: http://demand:8000
       FACILITIES_URL: http://facilities:8000
+      TRAFFIC_SOURCE: ${TRAFFIC_SOURCE:-DISABLED}
+      LTA_DATAMALL_ACCOUNT_KEY: ${LTA_DATAMALL_ACCOUNT_KEY:-}
       STALE_SECONDS: ${STALE_SECONDS:-15}
       OFFLINE_SECONDS: ${OFFLINE_SECONDS:-30}
       MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
@@ -96,6 +98,8 @@ services:
     environment:
       ROUTING_PROVIDER: ${ROUTING_PROVIDER:-SIMULATED}
       ONEMAP_ACCESS_TOKEN: ${ONEMAP_ACCESS_TOKEN:-}
+      OSRM_ROUTING_URL: ${OSRM_ROUTING_URL:-}
+      TRAFFIC_SOURCE: ${TRAFFIC_SOURCE:-DISABLED}
       FLEET_URL: http://fleet:8000
       DEMAND_URL: http://demand:8000
       FACILITIES_URL: http://facilities:8000
@@ -118,7 +122,7 @@ services:
     profiles: [relocation]
     environment:
       FACILITIES_URL: http://facilities:8000
-    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-01", "--zone", "bishan", "--soc", "90", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-01", "--zone", "bishan", "--soc", "90", "--time-scale", "${SIMULATION_TIME_SCALE:-10}"]
     depends_on:
       fleet: {condition: service_healthy}
       dispatch: {condition: service_healthy}
@@ -128,7 +132,7 @@ services:
     profiles: [relocation]
     environment:
       FACILITIES_URL: http://facilities:8000
-    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-02", "--zone", "tampines", "--soc", "60", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
+    command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-02", "--zone", "tampines", "--soc", "60", "--time-scale", "${SIMULATION_TIME_SCALE:-10}"]
     depends_on:
       fleet: {condition: service_healthy}
       dispatch: {condition: service_healthy}

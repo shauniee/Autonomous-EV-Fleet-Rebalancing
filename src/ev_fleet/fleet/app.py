@@ -1,6 +1,6 @@
 from ev_fleet.common.logging import base_app
 from ev_fleet.common.dashboard_cache import DashboardCache
-from fastapi import Response
+from fastapi import Response, Query
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, SessionRequest, VehicleState, FleetSnapshot
 from .store import FleetStore
 from uuid import UUID
@@ -35,6 +35,10 @@ def create_app(store=None, cache=None):
     @app.get("/api/v1/vehicles/{vehicle_id}", response_model=VehicleState)
     async def vehicle(vehicle_id: str):
         return await state.get(vehicle_id)
+
+    @app.get("/api/v1/vehicles/{vehicle_id}/telemetry-history")
+    async def telemetry_history(vehicle_id: str, limit: int = Query(default=100, ge=1, le=500)):
+        return await state.telemetry_history(vehicle_id, limit)
 
     @app.post("/api/v1/vehicles/{vehicle_id}/telemetry-sessions")
     async def session(vehicle_id: str, body: SessionRequest):

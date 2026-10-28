@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--dispatch-url", help="Enable relocation commands from this Dispatch Service")
     parser.add_argument("--facilities-url", default=os.getenv("FACILITIES_URL"), help="Enable allocated parking and simulated charging")
     parser.add_argument("--speed-kph", type=float, default=30)
-    parser.add_argument("--time-scale", type=float, default=30, help="Simulated seconds per real second")
+    parser.add_argument("--time-scale", type=float, default=float(os.getenv("SIMULATION_TIME_SCALE", "10")), help="Simulated seconds per real second (demo default 10x)")
     parser.add_argument("--tick-seconds", type=float, default=.2)
     parser.add_argument("--poll-interval", type=float, default=1)
     args = parser.parse_args()

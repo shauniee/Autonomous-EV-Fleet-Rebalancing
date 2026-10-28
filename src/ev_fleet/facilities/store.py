@@ -9,7 +9,8 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.contracts.facilities import FacilitiesSnapshot, FacilityFeed
 from .catalog import CATALOGUE
 from .datamall import FacilitiesSettings
-from ev_fleet.common.parking import CHARGING_TARGET_SOC_PCT, DEFAULT_CHARGING_POWER_KW
+from ev_fleet.common.parking import CHARGING_TARGET_SOC_PCT, DEFAULT_CHARGING_POWER_KW, MAX_FACILITY_ROAD_ACCESS_KM
+from ev_fleet.common.travel import distance_km
 
 
 class FacilitiesStore:
@@ -126,6 +127,10 @@ class FacilitiesStore:
                 raise HTTPException(404, "FACILITY_NOT_FOUND")
             if site.zone_id != body.expected_zone_id or site.position != body.expected_position:
                 raise HTTPException(409, "PARKING_FACILITY_CHANGED")
+            if (body.access_position is not None and
+                    distance_km(body.access_position.model_dump(), site.position.model_dump())
+                    > MAX_FACILITY_ROAD_ACCESS_KM):
+                raise HTTPException(409, "PARKING_ROAD_ACCESS_TOO_FAR")
             if site.status != "OPEN":
                 raise HTTPException(409, "PARKING_CLOSED")
             if site.facility_type == "CHARGING" and not body.requires_charging:
@@ -198,7 +203,8 @@ class FacilitiesStore:
                 site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
                 if site:
                     parking = {"facility_id": site.facility_id, "name": site.name,
-                        "position": site.position, "zone_id": site.zone_id, "source": site.source,
+                        "position": occupied["request"].access_position or site.position,
+                        "zone_id": site.zone_id, "source": site.source,
                         "charging_allocated": occupied["charging_allocated"],
                         "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
                         "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}

@@ -14,7 +14,8 @@ from .movement import Movement
 class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
-                 speed_kph=30, time_scale=30, client=None, facilities_url=None):
+                 speed_kph=30, time_scale=10, client=None, facilities_url=None,
+                 road_match_initial=True):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
         self.fleet_url, self.dispatch_url, self.vehicle_id = fleet_url, dispatch_url, vehicle_id
@@ -30,7 +31,9 @@ class MovingNode:
         self.initialized = False
         self.ready = asyncio.Event()
         self.facilities_url = facilities_url
+        self.road_match_initial = road_match_initial
         self.parking_verified = not bool(facilities_url)
+        self.telemetry_changed = asyncio.Event()
 
     async def request(self, method, url, body=None):
         response = await self.client.request(method, url, json=body)
@@ -43,13 +46,26 @@ class MovingNode:
             "consumption_kwh_per_km": self.movement.consumption})
         # A new process cannot safely reconstruct an in-flight journey from CLI defaults.
         previous = state.get("telemetry")
-        if not self.initialized and (state.get("active_claim") or state.get("active_rental") or previous and (
+        if not self.initialized and (state.get("active_claim") or state.get("active_rental") or state.get("active_charging_task") or previous and (
             previous.get("active_dispatch_id") or previous["relocation_state"] != "IDLE")):
             raise RuntimeError("Vehicle has an unresolved journey; refusing to overwrite its physical state")
         if not self.initialized and previous:
-            # Resume an idle parked/charging EV instead of teleporting to CLI defaults.
+            # Resume the actual idle position/SOC; never reconstruct a journey.
             self.movement.position = previous["position"]
             self.movement.soc_pct = previous["soc_pct"]
+            self.movement.odometer_km = previous.get("odometer_km") or 0.0
+            self.movement.heading_deg = previous.get("heading_deg") or 0.0
+        if not self.initialized and self.road_match_initial:
+            # In OneMap mode, place an IDLE simulated EV on a routable road
+            # before its first telemetry and before any journey can be claimed.
+            # This is a one-time initialisation, not an in-flight teleport.
+            match = await self.request("POST", f"{self.dispatch_url}/api/v1/road-matches",
+                                       self.movement.position)
+            if (match.get("source") not in ("ONEMAP", "SIMULATED")
+                    or not isinstance(match.get("position"), dict)):
+                raise RuntimeError("Road matching returned an invalid position")
+            self.movement.position = match["position"]
+            self.movement.origin = match["position"].copy()
         session = await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry-sessions",
                                      {"request_id": self.session_request})
         self.session = session["session_id"]
@@ -60,6 +76,7 @@ class MovingNode:
 
     async def refresh_parking(self):
         self.parking_verified = False
+        previous_charging = self.movement.charging_state
         self.movement.park(None)
         state = VehicleParking.model_validate(await self.request("GET",
             f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking")).model_dump(mode="json")
@@ -71,6 +88,8 @@ class MovingNode:
             self.parking_verified = self.movement.park(state["parking"])
         else:
             self.parking_verified = True
+        if self.movement.charging_state != previous_charging:
+            self.telemetry_changed.set()
 
     async def send_telemetry(self):
         if self.session is None:
@@ -107,6 +126,7 @@ class MovingNode:
             if previous and previous["completed"]:
                 return  # Never execute a completed command again.
             self.movement.accept(command)
+            self.telemetry_changed.set()
             self.acknowledged = False
             self.event_sequence = 0
         command = self.movement.command
@@ -118,9 +138,11 @@ class MovingNode:
                 "accepted": self.movement.accepted, "reason": self.movement.reason})
             self.acknowledged = True
             self.movement.start()
+            self.telemetry_changed.set()
         state = await self.request("GET", url)
         if state["state"] in ("SUCCEEDED", "REJECTED") and state["claim_held"] is False:
             self.movement.complete()
+            self.telemetry_changed.set()
             if self.facilities_url:
                 await self.refresh_parking()
             return
@@ -135,10 +157,21 @@ class MovingNode:
             "sequence": sequence, "observed_at": utcnow().isoformat(), "kind": kind,
             "distance_travelled_km": self.movement.distance, "reason": self.movement.reason})
 
+    def telemetry_delay(self):
+        if self.movement.state in ("DISPATCHED", "RELOCATING", "ARRIVED", "FAILED"):
+            return min(self.telemetry_interval, 1.0)
+        if self.movement.charging_state == "CHARGING":
+            return min(self.telemetry_interval, 2.0)
+        return self.telemetry_interval
+
     async def network_loop(self, operation, interval):
         failures = 0
         while True:
             delay = interval
+            if operation == self.send_telemetry:
+                # Clear BEFORE publishing, so transitions during the network
+                # request cannot be lost when we begin waiting again.
+                self.telemetry_changed.clear()
             try:
                 await operation()
                 failures = 0
@@ -151,16 +184,27 @@ class MovingNode:
                         raise
                 logging.warning("vehicle=%s operation=%s failure=%s", self.vehicle_id, operation.__name__, type(exc).__name__)
                 delay = min(10, interval * 2 ** min(failures, 4)) + random.uniform(0, .2)
-            await asyncio.sleep(delay)
+            if operation == self.send_telemetry and failures == 0:
+                # Wake immediately on a command/state transition, otherwise
+                # wait 1s in motion, 2s charging or 5s idle by default.
+                try:
+                    await asyncio.wait_for(self.telemetry_changed.wait(), timeout=self.telemetry_delay())
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(delay)
 
     async def movement_loop(self):
         last = time.monotonic()
         while True:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
+            previous = (self.movement.state, self.movement.charging_state)
             self.movement.advance((now - last) * self.time_scale, self.speed_kph)
             if self.parking_verified:
                 self.movement.charge((now - last) * self.time_scale)
+            if previous != (self.movement.state, self.movement.charging_state):
+                self.telemetry_changed.set()
             last = now
 
     async def run(self):

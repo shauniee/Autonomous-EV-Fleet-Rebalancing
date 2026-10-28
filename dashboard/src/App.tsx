@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
 import { ChargingOperations } from './components/ChargingOperations';
+import { TrafficConditions } from './components/TrafficConditions';
+import { TrafficJourneyCheck } from './components/TrafficJourneyCheck';
+import { TwinHistoryPanel } from './components/TwinHistoryPanel';
 import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
@@ -29,6 +32,8 @@ export default function App() {
   const fleet = usePolling<Fleet>('/api/fleet/vehicles');
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
+  const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
+  const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 30000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const mapPanel = useRef<HTMLElement>(null);
@@ -36,6 +41,7 @@ export default function App() {
   const [quantity, setQuantity] = useState(1);
   const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
   const [selectedVehicle, setSelectedVehicle] = useState('');
+  const [selectedFacility, setSelectedFacility] = useState('');
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
@@ -73,10 +79,12 @@ export default function App() {
   }, [dispatches.data, pending, setPending]);
   const choose = useCallback((id: string) => {
     recommendationRequest.current?.abort(); setRecommending(false);
-    setSelected(id); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false); setError('');
+    setSelected(id); setSelectedFacility(''); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false); setError('');
   }, []);
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
+  const twinVehicle = vehicles.find(v => v.vehicle_id === selectedVehicle) ||
+    vehicles.find(v => v.vehicle_id === dispatches.data?.dispatches.find(d => d.dispatch_id === selectedDispatch)?.vehicle_id) || vehicles[0];
   const sites = facilities.data?.facilities ?? [];
   const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
   // An unknown provider must not fall back to a zone-only destination.
@@ -89,6 +97,8 @@ export default function App() {
   const batchRemaining = batch ? Math.max(0, Math.ceil((Date.parse(batch.expires_at) - now) / 1000)) : 0;
   const facilitiesFresh = !!facilities.data && !facilities.error && !!facilities.updatedAt
     && now - Date.parse(facilities.updatedAt) < 30000;
+  const chargingAdviceFresh = !!chargingAdvice.data && !chargingAdvice.error && !!chargingAdvice.updatedAt
+    && now - Date.parse(chargingAdvice.updatedAt) < 30000 && now - Date.parse(chargingAdvice.data.generated_at) < 30000;
   const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0;
   const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
   async function recommend() {
@@ -105,7 +115,8 @@ export default function App() {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
           method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity,
             ...(purpose === 'CHARGE' ? { purpose } : {}),
-            ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}) }), signal: controller.signal,
+            ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
+            ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
         });
         if (!controller.signal.aborted) setBatch(result);
       }
@@ -178,7 +189,7 @@ export default function App() {
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><div className="workspace-main"><section ref={mapPanel} className="panel map-panel"><div className="section-title"><h2>Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
-        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
+        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
@@ -189,7 +200,7 @@ export default function App() {
           <div className="request-fields"><div className="request-field">
           <label htmlFor="relocation-purpose">Destination purpose</label>
           <div className="select-wrap"><select className="form-select" id="relocation-purpose" aria-describedby="relocation-purpose-help" value={purpose} disabled={recommending || submitting} onChange={event => {
-            setPurpose(event.target.value as 'REBALANCE' | 'CHARGE');
+            setPurpose(event.target.value as 'REBALANCE' | 'CHARGE'); setSelectedFacility('');
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
           }}><option value="REBALANCE">{facilityWorkflow ? 'Automatic — parking or charging' : 'Parking / demand rebalancing'}</option><option value="CHARGE">Charging only — replenish to 80%</option></select></div>
           <p id="relocation-purpose-help" className="muted">{purpose === 'CHARGE'
@@ -199,10 +210,11 @@ export default function App() {
           </div><div className="request-field">
           <label htmlFor="relocation-vehicle">Vehicle</label>
           <div className="select-wrap"><select className="form-select" id="relocation-vehicle" aria-describedby="relocation-vehicle-help" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
-            setSelectedVehicle(event.target.value); if (event.target.value) setQuantity(1);
+            setSelectedVehicle(event.target.value); setSelectedFacility(''); if (event.target.value) setQuantity(1);
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
           }}><option value="">Any eligible EV</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
           <p id="relocation-vehicle-help" className="muted">{selectedVehicle ? 'One relocation for the selected EV.' : 'Let the system select, or choose an EV for a single relocation.'}</p>
+          {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => { setSelectedFacility(''); setRecommendation(null); setBatch(null); }}>Clear advised charger</button></p>}
           </div></div>
           <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
             const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
@@ -218,11 +230,30 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
+      {selectedDispatch && dispatches.data?.dispatches.some(d => d.dispatch_id === selectedDispatch && d.command?.route && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)) &&
+        <TrafficJourneyCheck dispatchId={selectedDispatch}/>}
+      <TrafficConditions snapshot={traffic.data} error={traffic.error}/>
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/>
-      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}/>
-      <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}
+        advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
+        canPrepare={!!fresh && facilitiesFresh && !pending && !pendingBatch && !submitting && !recommending}
+        onPrepare={(item: ChargerAdvice) => {
+          if (!item.charger || !chargingAdviceFresh || !fresh || !facilitiesFresh
+              || pending || pendingBatch || submitting || recommending) return;
+          // Prefill only; the operator must explicitly request and review the
+          // live backend batch recommendation, then approve the dispatch.
+          choose(item.charger.zone_id);
+          setSelectedVehicle(item.vehicle_id);
+          setSelectedFacility(item.charger.facility_id);
+          setPurpose('CHARGE');
+          setQuantity(1);
+          mapPanel.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }}/>
+      <FleetPanel vehicles={vehicles}/>
+      {twinVehicle && <TwinHistoryPanel key={twinVehicle.vehicle_id} vehicle={twinVehicle}/>}
+      <RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
         const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
         if (target && target !== selected) choose(target);
         setSelectedDispatch(id); mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });

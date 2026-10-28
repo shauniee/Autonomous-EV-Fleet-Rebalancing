@@ -8,7 +8,11 @@ function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
-    '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(), ...overrides,
+    '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/rebalancing/traffic/conditions': { source: 'DISABLED', status: 'DISABLED',
+      generated_at: new Date().toISOString(), feeds: {}, speeds: [], incidents: [], roadworks: [] },
+    '/api/rebalancing/charging-advice': { generated_at: new Date().toISOString(), trigger_soc_pct: 25,
+      min_arrival_reserve_pct: 20, vehicles: [], assumptions: [] }, ...overrides,
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
@@ -261,4 +265,122 @@ describe('dispatcher dashboard', () => {
     expect(await screen.findByText(/LTA parking: MISSING_KEY/)).toBeInTheDocument();
     expect(screen.queryByText('MOCK · NOT REAL PARKING')).not.toBeInTheDocument();
   });
+
+  it('prepares exact low-SOC charger route without issuing any dispatch before approval', async () => {
+    const fleet = makeFleet(); fleet.vehicles[0].telemetry!.soc_pct = 25;
+    const site = {
+      facility_id: 'mock-bishan-01', name: 'Bishan simulated parking 1', zone_id: 'bishan',
+      position: { latitude: 1.351, longitude: 103.85 }, source: 'MOCK', status: 'OPEN',
+      parking_capacity: 66, parking_available: 14, charging_bays: 6, charging_available: 3,
+      connector_types: ['CCS2'],
+    };
+    const now = new Date().toISOString();
+    const advice = {
+      generated_at: now, trigger_soc_pct: 25, min_arrival_reserve_pct: 20, assumptions: [],
+      vehicles: [{ vehicle_id: 'ev-01', current_soc_pct: 25, status: 'RECOMMENDED', reasons: [],
+        charger: { facility_id: site.facility_id, facility_name: site.name, zone_id: 'bishan',
+          source: 'MOCK', distance_km: .15, energy_required_kwh: .05,
+          predicted_arrival_soc_pct: 24.9, charging_available: 3, charging_power_kw: null } }],
+    };
+    const proposed = {
+      batch_recommendation_id: 'safe-charge-batch', target_zone_id: 'bishan', purpose: 'CHARGE',
+      requested_count: 1, recommended_count: 1, unfulfilled_count: 0,
+      created_at: now, expires_at: new Date(Date.now() + 60000).toISOString(),
+      explanation: 'One feasible charging destination', assumptions: [],
+      assignments: [{ recommendation_id: 'safe-charge', vehicle_id: 'ev-01',
+        facility_id: site.facility_id, facility_name: site.name, target_position: site.position,
+        requires_charging: true, distance_km: .15, predicted_arrival_soc_pct: 24.9, score: .7 }],
+    };
+    const fetch = server({
+      '/api/fleet/vehicles': fleet,
+      '/api/facilities/facilities': { generated_at: now, data_source: 'MOCK', facilities: [site] },
+      '/api/rebalancing/charging-advice': advice,
+      '/api/rebalancing/batch-recommendations': proposed,
+    });
+    render(<App/>);
+    const action = await screen.findByRole('button', { name: 'Prepare charger route' });
+    await waitFor(() => expect(action).toBeEnabled());
+    fireEvent.click(action);
+    expect(screen.getByLabelText('Destination purpose')).toHaveValue('CHARGE');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('ev-01');
+    expect(screen.getByText(/Charging advisory destination:/)).toHaveTextContent('mock-bishan-01');
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
+    expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('Bishan simulated parking 1');
+    const requests = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({
+      target_zone_id: 'bishan', quantity: 1, purpose: 'CHARGE',
+      vehicle_id: 'ev-01', facility_id: 'mock-bishan-01',
+    });
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toBe(false);
+  });
+
+  it('does not offer a charging route when the backend cannot find a safe charger', async () => {
+    const fleet = makeFleet(); fleet.vehicles[0].telemetry!.soc_pct = 19;
+    server({ '/api/fleet/vehicles': fleet,
+      '/api/rebalancing/charging-advice': {
+        generated_at: new Date().toISOString(), trigger_soc_pct: 25, min_arrival_reserve_pct: 20,
+        vehicles: [{ vehicle_id: 'ev-01', current_soc_pct: 19,
+          status: 'INELIGIBLE', reasons: ['BELOW_OPERATIONAL_RESERVE'], charger: null }],
+        assumptions: [],
+      },
+    });
+    render(<App/>);
+    expect(await screen.findByText(/BELOW_OPERATIONAL_RESERVE/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prepare charger route' })).not.toBeInTheDocument();
+  });
+  it('shows disabled LTA traffic without implying clear roads', async () => {
+    server(); render(<App/>);
+    const panel = await screen.findByRole('region', { name: 'Traffic conditions and roadworks' });
+    expect(within(panel).getByText(/Live LTA traffic ranking is disabled/)).toBeInTheDocument();
+    expect(within(panel).getByText('DISABLED')).toBeInTheDocument();
+  });
+
+  it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {
+    server({ '/api/rebalancing/traffic/conditions': {
+      source: 'LTA_DATAMALL', status: 'FRESH', generated_at: new Date().toISOString(),
+      feeds: { speeds: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null},
+        incidents: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null},
+        roadworks: {status:'FRESH', observed_at: new Date().toISOString(), count:1, error:null} },
+      speeds: [{ id:'speed-1', road:'FIRST ROAD', start:{ latitude:1.3,longitude:103.8 },
+        end:{ latitude:1.3,longitude:103.81 }, min_kph:10,max_kph:19 }],
+      incidents: [{ id:'incident-1', type:'ROAD BLOCK',
+        position:{ latitude:1.3,longitude:103.8 }, message:'Synthetic fixture closure' }],
+      roadworks: [{ id:'work-1', road:'FIRST ROAD',
+        start_date:'2020-01-01', end_date:'2099-01-01' }],
+    }});
+    render(<App/>);
+    const panel = await screen.findByRole('region', { name:'Traffic conditions and roadworks' });
+    expect(within(panel).getAllByText('FRESH').length).toBeGreaterThan(0);
+    expect(within(panel).getByText('Synthetic fixture closure')).toBeInTheDocument();
+    expect(within(panel).getByText('FIRST ROAD')).toBeInTheDocument();
+  });
+
+  it('shows read-only latest digital twin diagnostics and accepted history', async () => {
+    const fleet = makeFleet();
+    fleet.vehicles[0].telemetry!.speed_kph = 28;
+    fleet.vehicles[0].telemetry!.battery_temp_c = 32;
+    fleet.vehicles[0].telemetry!.gps_quality = 'SIMULATED';
+    const now = new Date().toISOString();
+    const history = { vehicle_id: 'ev-01', storage: 'postgresql', limit: 100,
+      samples: [
+        { session_id: 'test-session', sequence: 1, observed_at: now, received_at: now,
+          telemetry: { ...fleet.vehicles[0].telemetry!, soc_pct: 90, speed_kph: 0 } },
+        { session_id: 'test-session', sequence: 2, observed_at: now, received_at: now,
+          telemetry: { ...fleet.vehicles[0].telemetry!, soc_pct: 89, speed_kph: 28 } },
+      ] };
+    const fetch = server({ '/api/fleet/vehicles': fleet,
+      '/api/fleet/vehicles/ev-01/telemetry-history?limit=100': history });
+    render(<App/>);
+    const panel = await screen.findByRole('region', { name: 'EV digital twin diagnostics' });
+    expect(within(panel).getByText('28 km/h')).toBeInTheDocument();
+    expect(within(panel).getByText('32°C')).toBeInTheDocument();
+    expect(within(panel).getByText('SIMULATED')).toBeInTheDocument();
+    expect(await within(panel).findByText(/2 accepted samples shown/)).toBeInTheDocument();
+    expect(within(panel).getByRole('img', { name: 'Historical battery state of charge' })).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([path, init]) =>
+      String(path).includes('telemetry-history') && init?.method === 'POST')).toBe(false);
+  });
+
 });

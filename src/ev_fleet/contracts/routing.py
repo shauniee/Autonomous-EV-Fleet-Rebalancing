@@ -9,12 +9,14 @@ class RouteInstruction(Model):
 
 
 class RoadRoute(Model):
-    source: Literal["ONEMAP"] = "ONEMAP"
+    source: Literal["ONEMAP", "OSRM"] = "ONEMAP"
     fetched_at: AwareDatetime
     geometry: list[Position] = Field(min_length=2, max_length=50000)
     distance_km: float = Field(ge=0)
     duration_seconds: float = Field(ge=0)
     instructions: list[RouteInstruction] = Field(default_factory=list, max_length=5000)
+    rerouted: bool = False
+    traffic_assessment: dict | None = None
 
     @model_validator(mode="after")
     def duration_matches_distance(self):

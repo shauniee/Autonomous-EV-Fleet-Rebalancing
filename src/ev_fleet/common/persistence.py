@@ -117,6 +117,22 @@ class SnapshotRepository:
                             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                         )
                     """)
+                    if self.namespace == "fleet":
+                        await connection.execute("""
+                            CREATE TABLE IF NOT EXISTS telemetry_samples (
+                                vehicle_id TEXT NOT NULL,
+                                session_id UUID NOT NULL,
+                                sequence BIGINT NOT NULL,
+                                observed_at TIMESTAMPTZ NOT NULL,
+                                received_at TIMESTAMPTZ NOT NULL,
+                                payload JSONB NOT NULL,
+                                PRIMARY KEY(vehicle_id, session_id, sequence)
+                            )
+                        """)
+                        await connection.execute("""
+                            CREATE INDEX IF NOT EXISTS telemetry_samples_vehicle_time_idx
+                            ON telemetry_samples(vehicle_id, received_at DESC)
+                        """)
                 return
             except (OSError, asyncpg.PostgresError) as exc:
                 last_error = exc
@@ -143,7 +159,7 @@ class SnapshotRepository:
             payload = json.loads(payload)
         return decode_state(payload)
 
-    async def save(self, payload):
+    async def save(self, payload, *, telemetry_sample=None):
         if not self.enabled:
             return
         if self.pool is None:
@@ -159,6 +175,37 @@ class SnapshotRepository:
                         revision = service_snapshots.revision + 1,
                         updated_at = NOW()
                 """, self.namespace, encoded)
+                if telemetry_sample is not None:
+                    # Snapshot and append-only history commit atomically.
+                    await connection.execute("""
+                        INSERT INTO telemetry_samples (
+                            vehicle_id, session_id, sequence, observed_at,
+                            received_at, payload
+                        ) VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
+                        ON CONFLICT(vehicle_id, session_id, sequence) DO NOTHING
+                    """, telemetry_sample["vehicle_id"], str(telemetry_sample["session_id"]),
+                        telemetry_sample["sequence"], telemetry_sample["observed_at"],
+                        telemetry_sample["received_at"],
+                        json.dumps(telemetry_sample["telemetry"], allow_nan=False))
+
+    async def telemetry_history(self, vehicle_id, limit=100):
+        if not self.enabled:
+            return []
+        if self.namespace != "fleet" or self.pool is None:
+            raise RuntimeError("Telemetry history requires an active Fleet repository")
+        async with self.pool.acquire() as connection:
+            rows = await connection.fetch("""
+                SELECT vehicle_id, session_id::text AS session_id,
+                       sequence, observed_at, received_at, payload
+                FROM telemetry_samples WHERE vehicle_id = $1
+                ORDER BY received_at DESC, sequence DESC LIMIT $2
+            """, vehicle_id, limit)
+        return [{"vehicle_id": row["vehicle_id"],
+                 "session_id": row["session_id"], "sequence": row["sequence"],
+                 "observed_at": row["observed_at"].isoformat(),
+                 "received_at": row["received_at"].isoformat(),
+                 "telemetry": json.loads(row["payload"]) if isinstance(row["payload"], str)
+                     else row["payload"]} for row in reversed(rows)]
 
     async def close(self):
         if self.pool is not None:
