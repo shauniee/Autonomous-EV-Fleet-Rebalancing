@@ -247,6 +247,8 @@ async def run_experiment(args):
         LOG.info("CUSTOMER_SIMULATION_START scenario=%s seed=%d vehicles=%d requests=%d",
                  args.scenario, args.seed, len(nodes), target_requests)
         for i in range(target_requests):
+            if any(task.done() for task in tasks):
+                raise RuntimeError("An EV simulator worker stopped; aborting customer generation")
             due = start_time + i * wall_duration / max(1, target_requests)
             await asyncio.sleep(max(0, due - time.monotonic()))
             metrics["attempted"] += 1
@@ -277,7 +279,10 @@ async def run_experiment(args):
             raise RuntimeError("Some customer trips failed; review logs before rerunning")
         if args.keep_alive:
             LOG.info("CUSTOMER_SIMULATION_OBSERVATION_MODE: customer EVs remain online for approved relocations")
-            await asyncio.Future()
+            while True:
+                if any(task.done() for task in tasks):
+                    raise RuntimeError("An EV simulator worker stopped during observation")
+                await asyncio.sleep(2)
     finally:
         for task in tasks:
             task.cancel()
