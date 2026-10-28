@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from ev_fleet.common.travel import distance_km
+from ev_fleet.common.clock import Clock
 from ev_fleet.contracts.routing import RoadRoute
 from ev_fleet.contracts.dispatch import BatchApproval
 from ev_fleet.contracts.facilities import ParkingHoldRequest, VehicleParking
@@ -162,12 +163,14 @@ def test_charging_approval_claims_access_road_and_not_facility_centre(clock, mon
     asyncio.run(scenario())
 
 
-def test_moving_ev_registers_at_road_before_first_fleet_telemetry(clock, monkeypatch):
+def test_moving_ev_registers_at_road_before_first_fleet_telemetry(monkeypatch):
     from ev_fleet.dispatch import routing
     from ev_fleet.simulator.commands import MovingNode
 
     async def scenario():
-        async with Cluster(clock) as cluster:
+        # MovingNode uses a real UTC timestamp. Test with a real wall clock,
+        # not the fixed historical FakeClock fixture.
+        async with Cluster(Clock()) as cluster:
             cluster.dispatch.routing = RoutingSettings(provider="ONEMAP", access_token="test-token")
             offroad = {"latitude": 1.35113, "longitude": 103.85}
             road = {"latitude": 1.35, "longitude": 103.85}
