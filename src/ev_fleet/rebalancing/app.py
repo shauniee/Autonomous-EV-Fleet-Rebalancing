@@ -13,7 +13,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
 from .charging_advice import build_charging_advice
-from .traffic import TrafficMonitor
+from .traffic import TrafficMonitor, assess_traffic, rank_cost
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
@@ -50,12 +50,30 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
         now = clock.now()
+        traffic = await app.state.traffic_monitor.snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet).model_dump(mode="json")
             target = ZoneState.model_validate(target).model_dump(mode="json")
             if target["zone_id"] != body.target_zone_id:
                 raise ValueError("target identity mismatch")
             eligible, excluded = strategy.rank(fleet, target, config, now)
+            if traffic["source"] == "LTA_DATAMALL":
+                by_id = {vehicle["vehicle_id"]: vehicle for vehicle in fleet["vehicles"]}
+                for candidate in eligible:
+                    vehicle = by_id[candidate["vehicle_id"]]
+                    corridor = [vehicle["telemetry"]["position"], target["position"]]
+                    estimate = assess_traffic(corridor, candidate["distance_km"],
+                        3600*candidate["distance_km"]/30, traffic, now)
+                    candidate["traffic_assessment"] = estimate
+                    cost = rank_cost(estimate, candidate["energy_required_kwh"])
+                    if estimate["blocked"]:
+                        candidate["eligible"] = False
+                        candidate["exclusion_reasons"] = ["TRAFFIC_ROAD_BLOCK_ESTIMATE"]
+                    elif cost is not None:
+                        candidate["score"] = 1 - cost
+                excluded.extend(candidate for candidate in eligible if not candidate["eligible"])
+                eligible = [candidate for candidate in eligible if candidate["eligible"]]
+                eligible.sort(key=lambda c: (-c["score"], c["vehicle_id"]))
             source = {key: fleet[key] for key in ("instance_id", "snapshot_version", "snapshot_at")}
         except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
