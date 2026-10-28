@@ -51,6 +51,27 @@ jobs:
           assert objects['StatefulSet', 'ev-moving-extra']['spec']['replicas'] == 18
           print('Kustomize, HPA target, dashboard CPU request and singleton service checks passed.')
           PY
+      - name: Validate safe PostgreSQL hostpath initialisation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          objects = {
+              (obj['kind'], obj['metadata']['name']): obj
+              for obj in yaml.safe_load_all(Path('/tmp/ev-fleet.yaml').read_text())
+          }
+          pg = objects['StatefulSet', 'postgres']
+          init = pg['spec']['template']['spec']['initContainers'][0]
+          command = init['args'][0]
+          assert init['name'] == 'initialize-postgres-volume'
+          assert 'PG_VERSION' in command
+          assert "stat -c '%u:%g'" in command
+          assert "stat -c '%a'" in command
+          assert 'chown -R' not in command
+          assert 'Existing PostgreSQL data ownership verified' in command
+          assert 'refusing to mutate stored database' in command
+          print('PostgreSQL keeps existing data intact and verifies permissions before startup.')
+          PY
       - name: Validate optional customer simulation workloads
         run: |
           python - <<'PY'
