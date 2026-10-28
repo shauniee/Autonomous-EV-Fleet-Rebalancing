@@ -153,3 +153,15 @@ def test_traffic_aware_matching_changes_ranking_without_holding_bays(clock):
             assert chosen[0]["vehicle_id"] == "far"
             assert not cluster.facilities.holds
     asyncio.run(scenario())
+
+
+def test_synthetic_comparison_covers_four_conditions_and_avoids_known_roadblock():
+    from experiments.traffic.evaluate import evaluate
+    results = evaluate()
+    assert {row["scenario"] for row in results} == {
+        "normal", "congestion", "roadworks", "roadblock"}
+    blocked = next(row for row in results if row["scenario"] == "roadblock")
+    assert blocked["baseline_choice"] == "short"
+    assert blocked["baseline_blocked"] is True
+    assert blocked["traffic_choice"] == "long"
+    assert blocked["traffic_blocked"] is False
