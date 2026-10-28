@@ -21,7 +21,8 @@ and charging observations for simulated destinations; see [LTA setup](docs/lta-d
 - Human-approved dispatch, atomic vehicle claims, idempotent commands, gradual
   movement, SOC consumption, arrival verification, and timeout reconciliation.
 - A React/TypeScript operator dashboard with a Leaflet/OpenStreetMap display.
-- A separate simulation console for setting demand and observing service state.
+- A separate simulation console for setting demand, controlling the optional customer rental workload, and observing expected return zones.
+- Operator-reviewed low-battery alerts, ground-staff charging tasks and advisory rental-return forecasts.
 - A complete local Docker Desktop Kubernetes deployment.
 - Unit, integration, dashboard, browser, container, and experimental evaluation
   evidence.
@@ -61,6 +62,8 @@ Demand and Fleet observations
 
 A recommendation is advisory. It neither reserves nor moves an EV. Only the
 separate Dispatch approval operation can start a relocation.
+
+See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md) for local-only controls, safety assumptions and current limitations. Rental returns do not automatically alter the Rebalancing algorithm, and ground-staff tasks do not themselves physically charge EVs.
 
 ## Kubernetes startup
 

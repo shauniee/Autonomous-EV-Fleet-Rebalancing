@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DemandForm } from './DemandForm';
+import { RentalPanel } from './RentalPanel';
+import type { RentalVehicle } from './RentalPanel';
 import type { Zone } from './DemandForm';
 import './styles.css';
 
@@ -9,14 +11,7 @@ type Resource<T> = {
   observed_at: string | null;
   error: string | null;
 };
-type Vehicle = {
-  vehicle_id: string;
-  current_zone_id: string | null;
-  connectivity: string;
-  stale: boolean;
-  effective_availability: string;
-  telemetry: { soc_pct?: number } | null;
-};
+type Vehicle = RentalVehicle;
 type Dispatch = {
   dispatch_id: string;
   vehicle_id: string | null;
@@ -148,6 +143,8 @@ function App() {
           !!observations?.zones.data && !observations.zones.error && !error
         }
       />
+      <RentalPanel vehicles={observations?.fleet.data ?? []} zones={observations?.zones.data ?? []}
+        available={!error && !!observations?.fleet.data && !observations.fleet.error && !!observations?.zones.data && !observations.zones.error} />
       <section>
         <h2>Operating zones</h2>
         <p className="description">Discovered from the app’s Demand API.</p>

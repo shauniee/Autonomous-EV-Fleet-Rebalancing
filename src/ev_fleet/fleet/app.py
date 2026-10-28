@@ -6,6 +6,7 @@ from .store import FleetStore
 from uuid import UUID
 from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
+from ev_fleet.contracts.charging_tasks import ChargingTaskCreate, ChargingTaskUpdate
 
 
 def create_app(store=None, cache=None):
@@ -54,6 +55,18 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/rentals/{rental_id}/return", response_model=RentalRecord)
     async def return_rental(vehicle_id: str, rental_id: UUID, body: RentalReturn):
         return await state.return_rental(vehicle_id, rental_id, body)
+
+    @app.get("/api/v1/charging-tasks")
+    async def charging_tasks():
+        return await state.list_charging_tasks()
+
+    @app.post("/api/v1/charging-tasks", status_code=201)
+    async def create_charging_task(body: ChargingTaskCreate):
+        return await state.create_charging_task(body)
+
+    @app.post("/api/v1/charging-tasks/{task_id}/transition")
+    async def transition_charging_task(task_id: UUID, body: ChargingTaskUpdate):
+        return await state.update_charging_task(task_id, body)
 
     @app.put("/api/v1/vehicles/{vehicle_id}/claims/{dispatch_id}", response_model=VehicleClaim)
     async def claim(vehicle_id: str, dispatch_id: UUID, body: ClaimRequest):

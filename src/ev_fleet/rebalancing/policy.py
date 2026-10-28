@@ -27,6 +27,8 @@ def assess(vehicle, target, settings, now):
         reasons.append("CHARGING")
     if vehicle.get("active_rental") is not None:
         reasons.append("RENTED")
+    if vehicle.get("active_charging_task") is not None:
+        reasons.append("CHARGING_TASK")
     if telemetry["relocation_state"] != "IDLE" or telemetry.get("active_dispatch_id") or vehicle.get("active_claim"):
         reasons.append("BUSY")
     distance = distance_km(telemetry["position"], target["position"]) * settings.route_factor

@@ -12,6 +12,8 @@ class RentalStart(Model):
     request_id: UUID
     expected_version: int = Field(ge=1)
     expected_end_at: AwareDatetime
+    # An estimate for forecasting only; the physical return position remains authoritative.
+    expected_return_zone_id: Literal['punggol', 'woodlands', 'tampines', 'bishan', 'cbd', 'jurong-east'] | None = None
 
 
 class RentalReturn(Model):
@@ -24,6 +26,7 @@ class RentalRecord(Model):
     status: Literal["RENTED", "RETURNED"]
     expected_end_at: AwareDatetime
     started_at: AwareDatetime
+    expected_return_zone_id: str | None = None
     start_position: Position
     start_soc_pct: float = Field(ge=0, le=100)
     returned_at: AwareDatetime | None = None

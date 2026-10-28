@@ -160,9 +160,13 @@ class RentalVehicle(MovingNode):
         if not self.movement.can_rent_to(target):
             return "ineligible"
         rental_id = str(uuid4())
+        # Estimated real-time ETA; this is advisory, not an automatic return.
+        route_km = distance_km(self.movement.position, target) * 1.3
+        travel_seconds = 3600 * route_km / (self.speed_kph * self.time_scale)
         start_request = {"rental_id": rental_id, "request_id": str(uuid4()),
                          "expected_version": before["state_version"],
-                         "expected_end_at": (utcnow() + timedelta(hours=2)).isoformat()}
+                         "expected_return_zone_id": destination_zone,
+                         "expected_end_at": (utcnow() + timedelta(seconds=max(45, travel_seconds * 1.3))).isoformat()}
         try:
             await self.request("POST", path + "/rentals", start_request)
         except httpx.HTTPStatusError as exc:

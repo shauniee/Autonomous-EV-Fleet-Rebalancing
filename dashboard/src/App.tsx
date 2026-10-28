@@ -3,6 +3,8 @@ import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, Dispa
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
+import { ChargingOperations } from './components/ChargingOperations';
+import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
 import { Badge, time } from './components/format';
@@ -218,6 +220,8 @@ export default function App() {
       </aside></div>
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
+      <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/>
+      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}/>
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
         const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
         if (target && target !== selected) choose(target);

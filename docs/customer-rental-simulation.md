@@ -1,6 +1,6 @@
 # Customer rental simulation — finite Kubernetes experiment
 
-**Status:** opt-in experiment, not a new cluster or UI. The existing namespace
+**Status:** opt-in experiment controlled from the local Simulation Console (or kubectl). The existing namespace
 is `ev-fleet` on the Docker Desktop Kubernetes cluster. Existing demand,
 Fleet, Rebalancing, Dispatch, 20 EV simulator Pods and two dashboards are
 unchanged. The Job or persistent Deployment adds **six separately owned, rental-capable EV identities**
@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
 
 In a **second** terminal, while the backend is Ready, start the customer
-experiment (optional, and never automatically run by the normal startup script):
+experiment (optional; ensure the dashboard-controlled Deployment is paused):
 
 ```powershell
 kubectl apply -f .\k8s\simulations\customer-job.yaml
@@ -56,14 +56,13 @@ repeat automatically; its demand-generation phase runs once per Pod start.
 
 **Never run the Deployment and Job simultaneously.** Both use the same six
 `customer-ev-*` vehicle IDs and would compete for Fleet telemetry sessions.
-Do not restart the Deployment during active rentals or relocations. Since the
-simulation is opt-in, it is not applied by the base Kustomize startup.
+Do not restart the Deployment during active rentals or relocations. The base Kustomize install creates the Deployment with **zero replicas**; starting it is opt-in. The Simulation Console at localhost:8090 provides Start and Stop controls, backed by a ServiceAccount allowed to scale only this Deployment.
 
 To stop the Deployment, first verify there are no active rentals or relocations
 for its cars, then run:
 
 ```powershell
-kubectl -n ev-fleet delete deployment customer-rental-demo
+kubectl -n ev-fleet scale deployment/customer-rental-demo --replicas=0
 ```
 
 This leaves the six EV identities in Fleet, but they will become stale/offline
@@ -117,9 +116,7 @@ even with the same seed; this is not yet an exact replay evaluator.
 - The six new cars increase total fleet supply: compare baselines only after
   controlling for fleet size. For fair with-vs-without-relocation evaluations,
   record the same initial fleet and customer schedule in isolated experiments.
-- The finite Job stops publishing telemetry at completion, so its six cars will become stale and cannot be relocated later unless their owning simulator is restarted. Use the persistent Deployment for interactive relocation after returns. The existing simulation console remains unchanged. This is a CLI/Job
-  capability, not a new interactive controller.
+- The finite Job stops publishing telemetry at completion, so its six cars will become stale and cannot be relocated later unless their owning simulator is restarted. Use the persistent Deployment for interactive relocation after returns. The Simulation Console exposes basic rental start/stop and live rental observations.
+  It is a **local-only, unauthenticated administrative interface**; never expose it publicly.
 
-Future enhancement: coordinate a replayable trip schedule with the Demand
-Service's time-based target-availability profile, and give the existing
-Simulation Console an optional Job status and scenario selector.
+Future enhancement: support true advance bookings and a replayable trip schedule coupled to Demand profiles. Expected return zones currently come from active simulated rentals and are advisory, not confirmed reservations or automatic Dispatch inputs.

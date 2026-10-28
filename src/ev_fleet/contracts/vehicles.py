@@ -53,6 +53,7 @@ class VehicleState(VehicleRegistration):
     connectivity: Literal["ONLINE", "OFFLINE"]
     active_claim: VehicleClaim | None = None
     active_rental: RentalRecord | None = None
+    active_charging_task: dict | None = None
     effective_availability: Availability = Availability.UNAVAILABLE
     current_zone_id: str | None = None
     effective_relocation_state: RelocationState = RelocationState.IDLE

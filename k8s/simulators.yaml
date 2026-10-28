@@ -54,14 +54,14 @@ spec:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 2
-            timeoutSeconds: 1
+            timeoutSeconds: 5
             failureThreshold: 30
           livenessProbe:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 10
-            timeoutSeconds: 1
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             exec:
               command:
@@ -69,7 +69,7 @@ spec:
                 - -c
                 - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-01', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 8
             failureThreshold: 3
           resources:
             requests:
@@ -135,14 +135,14 @@ spec:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 2
-            timeoutSeconds: 1
+            timeoutSeconds: 5
             failureThreshold: 30
           livenessProbe:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 10
-            timeoutSeconds: 1
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             exec:
               command:
@@ -150,7 +150,7 @@ spec:
                 - -c
                 - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-02', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 8
             failureThreshold: 3
           resources:
             requests:
@@ -222,14 +222,14 @@ spec:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 2
-            timeoutSeconds: 1
+            timeoutSeconds: 5
             failureThreshold: 30
           livenessProbe:
             exec:
               command: ["sh", "-c", "kill -0 1"]
             periodSeconds: 10
-            timeoutSeconds: 1
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             exec:
               command:
@@ -237,7 +237,7 @@ spec:
                 - -c
                 - "import json,os,urllib.request; vehicle_id=os.environ['HOSTNAME']; d=json.load(urllib.request.urlopen(f'http://fleet:8000/api/v1/vehicles/{vehicle_id}', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 8
             failureThreshold: 3
           resources:
             requests:

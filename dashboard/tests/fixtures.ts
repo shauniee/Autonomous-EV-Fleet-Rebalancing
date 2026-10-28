@@ -9,7 +9,7 @@ export const makeHeat = (): HeatMap => ({
   })),
 });
 export const makeFleet = (): Fleet => ({ instance_id: 'fleet-instance', snapshot_at: new Date().toISOString(), vehicles: [{
-  vehicle_id: 'ev-01', current_zone_id: 'bishan', stale: false, connectivity: 'ONLINE', effective_availability: 'AVAILABLE',
+  vehicle_id: 'ev-01', state_version: 1, current_zone_id: 'bishan', stale: false, connectivity: 'ONLINE', effective_availability: 'AVAILABLE',
   effective_relocation_state: 'IDLE', received_at: new Date().toISOString(),
   telemetry: { position: { latitude: 1.35, longitude: 103.85 }, soc_pct: 90, observed_at: new Date().toISOString() },
 }] });

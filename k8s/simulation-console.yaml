@@ -15,7 +15,8 @@ spec:
         app.kubernetes.io/name: simulation-console
         app.kubernetes.io/component: frontend
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: simulation-console-controller
+      automountServiceAccountToken: true
       terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
@@ -28,6 +29,8 @@ spec:
           image: csc3104/ev-fleet-simulation-console:k8s-local
           imagePullPolicy: Never
           env:
+            - name: RENTAL_K8S_CONTROL
+              value: 'true'
             - name: FLEET_URL
               value: http://fleet:8000
             - name: DEMAND_URL
