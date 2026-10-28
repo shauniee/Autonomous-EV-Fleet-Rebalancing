@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
 import { ChargingOperations } from './components/ChargingOperations';
+import { TrafficConditions } from './components/TrafficConditions';
 import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
@@ -30,6 +31,7 @@ export default function App() {
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
+  const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 30000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const mapPanel = useRef<HTMLElement>(null);
@@ -183,7 +185,7 @@ export default function App() {
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><div className="workspace-main"><section ref={mapPanel} className="panel map-panel"><div className="section-title"><h2>Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
-        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
+        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
@@ -224,6 +226,7 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
+      <TrafficConditions snapshot={traffic.data} error={traffic.error}/>
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/>
