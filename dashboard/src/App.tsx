@@ -240,7 +240,7 @@ export default function App() {
           setSelectedFacility(item.charger.facility_id);
           setPurpose('CHARGE');
           setQuantity(1);
-          mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          mapPanel.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
         }}/>
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
         const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
