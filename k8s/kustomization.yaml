@@ -12,6 +12,8 @@ resources:
   - dashboard.yaml
   - hpa-dashboard.yaml
   - simulation-console.yaml
+  - simulations/controller-rbac.yaml
+  - simulations/customer-deployment.yaml
 
 labels:
   - pairs:
