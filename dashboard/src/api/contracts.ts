@@ -1,7 +1,21 @@
 // Wire fields consumed from the existing Pydantic contracts; no business rules here.
 export interface Position { latitude: number; longitude: number }
+export interface TrafficRouteAssessment {
+  status: string; blocked: boolean; delay_factor: number | null;
+  estimated_duration_seconds: number | null; risk: number | null;
+  matched_speed_segments: number; roadworks: number; incidents: number;
+}
+export interface TrafficSegment { id: string; road: string; start: Position; end: Position; min_kph: number; max_kph: number }
+export interface TrafficIncident { id: string; type: string; position: Position; message: string }
+export interface TrafficSnapshot {
+  source: string; status: string; generated_at: string;
+  feeds: Record<string, {status: string; observed_at: string | null; count: number; error: string | null}>;
+  speeds: TrafficSegment[]; incidents: TrafficIncident[];
+  roadworks: {id: string; road: string; start_date: string; end_date: string}[];
+}
 export interface RoadRoute {
-  source: 'ONEMAP'; fetched_at: string; geometry: Position[];
+  source: 'ONEMAP' | 'OSRM'; fetched_at: string; geometry: Position[];
+  rerouted?: boolean; traffic_assessment?: TrafficRouteAssessment | null;
   distance_km: number; duration_seconds: number;
   instructions: { text: string; distance_m: number }[];
 }
@@ -98,12 +112,13 @@ export interface FacilitiesSnapshot {
 export interface ParkingAssignment {
   recommendation_id: string; vehicle_id: string; facility_id: string; facility_name: string;
   target_position: Position; requires_charging: boolean; distance_km: number;
-  predicted_arrival_soc_pct: number; score: number;
+  predicted_arrival_soc_pct: number; score: number; traffic_assessment?: TrafficRouteAssessment | null;
 }
 export interface BatchRecommendation {
   batch_recommendation_id: string; target_zone_id: string;
   purpose?: 'REBALANCE' | 'CHARGE';
   requested_count: number; recommended_count: number; unfulfilled_count: number;
+  traffic_status?: string; traffic_generated_at?: string;
   created_at: string; expires_at: string; explanation: string;
   assignments: ParkingAssignment[]; assumptions: string[];
 }
