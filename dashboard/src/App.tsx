@@ -72,6 +72,8 @@ export default function App() {
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
   const sites = facilities.data?.facilities ?? [];
+  const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
+  const facilityWorkflow = quantity > 1 || liveFacilities;
   const zone = zones.find(z => z.zone_id === selected);
   const current = recommendation && vehicles.find(v => v.vehicle_id === recommendation.selected_vehicle_id);
   const fresh = !!heat.data && !heat.error && !!fleet.data && !fleet.error && heat.data.fleet_status === 'FRESH'
@@ -87,7 +89,7 @@ export default function App() {
     const controller = new AbortController(); recommendationRequest.current = controller;
     setRecommending(true); setRecommendation(null); setBatch(null); setBatchResult(null); setError(''); setNotice('');
     try {
-      if (quantity === 1) {
+      if (!facilityWorkflow) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
           method: 'POST', body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
         });
@@ -152,7 +154,7 @@ export default function App() {
   }
   return <div className="app">
     <header><div className="brand-icon" aria-hidden="true">↗</div><div><div className="eyebrow">Operations / Singapore</div><h1>Fleet Dispatch</h1></div><span className="simulation">SIMULATION</span></header>
-    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name="Facilities (mock)" resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
+    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name={liveFacilities ? 'Facilities (LTA)' : 'Facilities (mock)'} resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
     <main>
       <div className="page-intro"><div><h2>A clear view. An informed move.</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); }}>Refresh now</button></div>
       {(heat.error || fleet.error || dispatches.error) && <p className="warning" role="status">Some services are unavailable. Retained observations are last known, not live. Healthy panels continue updating.</p>}
@@ -165,7 +167,7 @@ export default function App() {
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><div className="workspace-main"><section className="panel map-panel"><div className="section-title"><h2>Singapore demand</h2><span className="muted">6 operating zones</span></div>
         <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} selected={selected} onSelect={choose}/>
-        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span><span>● Mock parking (teal)</span><span>● Mock charging (amber)</span></div>
+        <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}<span>● EV location</span><span>● {liveFacilities ? 'LTA' : 'Mock'} parking (teal)</span><span>● {liveFacilities ? 'LTA' : 'Mock'} charging (amber)</span></div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
         <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · Approximate simulation coordinates</p>
@@ -180,13 +182,13 @@ export default function App() {
           : <p className="empty">Select a destination zone above before choosing the required number of EVs.</p>}
       </section></div>
       <aside className="panel target-panel">{zone ? <><div className="eyebrow">Selected destination</div><ZoneDetails zone={zone}/><hr/>
-        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || (quantity > 1 && !facilitiesFresh)} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
+        <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || !fresh || (facilityWorkflow && !facilitiesFresh)} onClick={() => void recommend()}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
         <p className="muted">A recommendation does not move an EV. The dispatcher must review and approve it.</p></> : <div className="empty"><div className="empty-icon">↗</div><h2>Where is an EV needed?</h2><p>Select a zone on the map or from the list to review its demand and request a recommendation.</p></div>}
         {zone && !fresh && <p className="warning">Fresh demand and fleet data are required to request or approve a recommendation.</p>}
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
-      <FacilitiesPanel facilities={sites} selectedZone={selected} error={facilities.error}/>
+      <FacilitiesPanel facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>

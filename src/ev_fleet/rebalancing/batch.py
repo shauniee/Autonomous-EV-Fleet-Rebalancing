@@ -12,7 +12,8 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity):
     left = {}
     left_charge = {}
     for site in facilities:
-        if site.zone_id != zone["zone_id"] or site.status != "OPEN" or site.parking_available < 1:
+        if (site.zone_id != zone["zone_id"] or site.status != "OPEN"
+                or not site.is_fresh(now) or site.parking_available < 1):
             continue
         left[site.facility_id] = site.parking_available
         left_charge[site.facility_id] = site.charging_available
@@ -24,9 +25,14 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity):
             if not assessment["eligible"]:
                 continue
             need_charge = assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+            if site.facility_type == "CHARGING" and not need_charge:
+                continue  # Do not send high-SOC cars to occupy a charger as ordinary parking.
             if need_charge and site.charging_available <= 0:
                 continue
-            parking_fit = site.parking_available / max(1, site.parking_capacity)
+            # LTA does not supply total carpark capacity. A constant neutral
+            # utility avoids presenting available counts as an occupancy ratio.
+            parking_fit = (site.parking_available / max(1, site.parking_capacity)
+                           if site.parking_capacity is not None else 0.5)
             score = .85 * assessment["score"] + .15 * parking_fit
             edges.append({
                 "vehicle_id": vehicle["vehicle_id"], "facility_id": site.facility_id,

@@ -104,8 +104,9 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                      "requires_charging": edge["requires_charging"],
                      "ranked_candidates": [edge["assessment"]], "excluded_candidates": [],
                      "decision_latency_ms": 0.0,
-                     "explanation": "Mock parking-aware candidate; revalidated on approval.",
-                     "assumptions": ["Capacity is not held until approval", "Greedy matching heuristic"]}
+                     "explanation": "Facility-aware simulated relocation; revalidated on approval.",
+                     "assumptions": ["Only local simulated capacity is held on approval",
+                                     "Greedy matching heuristic", "LTA observations do not reserve real bays"]}
             await store.put(child, ttl)
             assignments.append({**{key: edge[key] for key in
                 ("vehicle_id", "facility_id", "facility_name", "target_position",
@@ -119,7 +120,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                   "created_at": now.isoformat(), "expires_at": expires.isoformat(),
                   "assignments": assignments,
                   "explanation": f"Proposed {len(assignments)} of {body.quantity} EV-to-parking assignments (capacity-limited greedy heuristic).",
-                  "assumptions": ["All facilities are simulated", "No space reserved until approval",
+                  "assumptions": [f"Facility source: {snapshot.data_source}", "Only simulated allocations are reserved",
                                   "No road routing or guaranteed real parking"]}
         await batch_store.put({**result, "recommendation_id": identifier}, ttl)
         return result

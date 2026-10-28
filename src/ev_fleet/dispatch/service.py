@@ -116,7 +116,7 @@ class DispatchService:
                 f"{self.settings.facilities_url}/api/v1/facilities/{recommendation.parking_facility_id}",
                 model=Facility)
             if (parking.zone_id != target.zone_id or parking.status != "OPEN"
-                    or parking.parking_available <= 0 or parking.source != "MOCK"
+                    or parking.parking_available <= 0 or not parking.is_fresh(self.clock.now())
                     or parking.position != recommendation.target_position):
                 raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
             destination = parking.position
@@ -130,6 +130,8 @@ class DispatchService:
         if parking:
             requires_charge = (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
                                or recommendation.requires_charging)
+            if parking.facility_type == "CHARGING" and not requires_charge:
+                raise HTTPException(409, "CHARGING_NOT_REQUIRED")
             if requires_charge and parking.charging_available <= 0:
                 raise HTTPException(409, "CHARGING_FULL")
             record.data["parking_facility_id"] = parking.facility_id

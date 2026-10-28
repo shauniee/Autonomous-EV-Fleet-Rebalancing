@@ -20,6 +20,8 @@ services and individual simulators still use one replica and `Recreate`.
 
 ## Reproducible startup
 
+For macOS and optional real parking/charging observations, see [LTA setup](lta-datamall.md).
+
 Use the repository-owned startup command on both the original machine and a new
 laptop:
 

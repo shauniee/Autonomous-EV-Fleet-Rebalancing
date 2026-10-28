@@ -211,4 +211,53 @@ describe('dispatcher dashboard', () => {
     expect(JSON.parse(String(submissions[0][1]!.body))).toHaveProperty('batch_recommendation_id', 'batch-recommendation');
   });
 
+  it('shows LTA provenance and unknown totals and uses a facility destination for one EV', async () => {
+    const fetchedAt = new Date().toISOString();
+    const site = {
+      facility_id: 'lta-parking-LTA-A1', name: 'Real-coordinate fixture carpark', zone_id: 'cbd',
+      position: { latitude: 1.283, longitude: 103.851 }, source: 'LTA_DATAMALL', status: 'OPEN',
+      parking_capacity: null, parking_available: 3, reported_parking_available: 4,
+      charging_bays: null, charging_available: 0, connector_types: [],
+      availability_observed_at: fetchedAt,
+    };
+    const fetch = server({
+      '/api/facilities/facilities': { generated_at: fetchedAt, data_source: 'LTA_DATAMALL', facilities: [site],
+        feeds: [{ name: 'parking', status: 'FRESH', last_success_at: fetchedAt, error_code: null },
+          { name: 'charging', status: 'ERROR', last_success_at: null, error_code: 'LTA_AUTH_FAILED' }] },
+      '/api/rebalancing/batch-recommendations': {
+        batch_recommendation_id: 'batch-lta', target_zone_id: 'cbd', requested_count: 1,
+        recommended_count: 1, unfulfilled_count: 0, created_at: fetchedAt,
+        expires_at: new Date(Date.now() + 30000).toISOString(), explanation: 'LTA destination', assumptions: [],
+        assignments: [{ recommendation_id: 'rec-lta', vehicle_id: 'ev-01', facility_id: site.facility_id,
+          facility_name: site.name, target_position: site.position, requires_charging: false,
+          distance_km: 8, predicted_arrival_soc_pct: 85, score: .8 }],
+      },
+    });
+    render(<App/>);
+    await screen.findByText('LTA DATAMALL · SIMULATED ALLOCATIONS');
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    const card = await screen.findByTestId('facility-lta-parking-LTA-A1');
+    expect(card).toHaveTextContent('3 / total unknown');
+    expect(card).toHaveTextContent('Reported by LTA before simulated allocations4');
+    expect(card).toHaveTextContent('Charging bays availableUnknown');
+    expect(screen.getByText(/LTA charging: ERROR/)).toHaveTextContent('LTA_AUTH_FAILED');
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
+    await screen.findByTestId('batch-recommendation');
+    const requests = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1 });
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/rebalancing/recommendations' && init?.method === 'POST')).toBe(false);
+    expect(fetch.mock.calls.some(([, init]) => JSON.stringify(init ?? {}).includes('AccountKey'))).toBe(false);
+  });
+
+  it('shows missing LTA credentials explicitly without claiming mock data is live', async () => {
+    server({ '/api/facilities/facilities': { generated_at: new Date().toISOString(),
+      data_source: 'LTA_DATAMALL', facilities: [], feeds: [
+        { name: 'parking', status: 'MISSING_KEY', last_success_at: null, error_code: null },
+        { name: 'charging', status: 'MISSING_KEY', last_success_at: null, error_code: null },
+      ] } });
+    render(<App/>);
+    expect(await screen.findByText(/LTA parking: MISSING_KEY/)).toBeInTheDocument();
+    expect(screen.queryByText('MOCK · NOT REAL PARKING')).not.toBeInTheDocument();
+  });
 });

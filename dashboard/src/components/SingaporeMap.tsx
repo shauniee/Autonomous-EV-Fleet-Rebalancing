@@ -44,9 +44,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
     }
     for (const facility of facilities) {
       const label = document.createElement('span');
-      label.textContent = `${facility.name} · MOCK · ${facility.status} · parking ${facility.parking_available}/${facility.parking_capacity} · charging ${facility.charging_available}/${facility.charging_bays}`;
-      const hasChargers = facility.charging_bays > 0;
-      const markerColour = facility.status === 'CLOSED' ? '#76838a' : hasChargers ? '#a96817' : '#287d83';
+      label.textContent = `${facility.name} · ${facility.source} · ${facility.status} · simulated availability ${facility.parking_available} · ${facility.facility_type === 'CHARGING' ? 'chargers' : 'parking spaces'}`;
+      const hasChargers = (facility.charging_bays ?? 0) > 0;
+      const markerColour = facility.status !== 'OPEN' ? '#76838a' : hasChargers ? '#a96817' : '#287d83';
       L.circleMarker([facility.position.latitude, facility.position.longitude], {
         radius: 6, color: '#fff', weight: 2, fillColor: markerColour, fillOpacity: 1,
       }).bindTooltip(label).addTo(layer);
@@ -61,5 +61,5 @@ export function SingaporeMap({ zones, vehicles, facilities = [], selected, onSel
     }
     return () => { layer.remove(); };
   }, [zones, vehicles, facilities, selected, onSelect]);
-  return <><div ref={element} className="map" aria-label="Singapore zones, fleet, and mock parking or charging sites map"/>{tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}</>;
+  return <><div ref={element} className="map" aria-label="Singapore zones, fleet, and parking or charging sites map"/>{tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}</>;
 }

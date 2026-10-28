@@ -1,5 +1,13 @@
 # Implementation roadmap
 
+## LTA DataMall integration — 28 October 2026
+
+Implemented real parking/charging observations, refresh and expiry checks,
+simulated allocations, dashboard provenance and macOS startup. See [LTA setup](lta-datamall.md).
+Authenticated API access and cluster rollout remain unverified pending the key.
+Scope cleanup removed Windows startup changes and unrelated service restarts;
+tests were not rerun during cleanup. The roadmap below is historical.
+
 1. **Backend foundation (implemented):** contracts, Fleet, Demand, Rebalancing, stationary
    simulators, health, unit/API/real HTTP tests and Compose definition. Exit evidence:
    nodes register independently, fresh telemetry ranks correctly, stale nodes are

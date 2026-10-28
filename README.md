@@ -7,7 +7,8 @@ electric vehicles to Singapore zones with insufficient supply.
 The system observes simulated demand and vehicle telemetry, recommends a suitable
 EV, requires explicit dispatcher approval, and then simulates the EV travelling to
 the selected zone. It does not control real vehicles and does not use live demand,
-traffic, road-routing, or charging-station data.
+traffic or road-routing data. Optional LTA DataMall integration supplies real parking
+and charging observations for simulated destinations; see [LTA setup](docs/lta-datamall.md).
 
 ## What the project demonstrates
 
@@ -70,11 +71,24 @@ separate Dispatch approval operation can start a relocation.
 - PowerShell
 - Host ports 8080 and 8090 available
 
-This is the only startup workflow. From the repository root, run one command:
+On Windows, from the repository root, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
+
+On macOS with Docker Desktop Kubernetes (kubeadm), Python 3 and curl available:
+
+```bash
+bash scripts/start-kubernetes.sh
+```
+
+The macOS script loads only the facilities settings from root `.env` into a backend
+Kubernetes Secret. To use real parking and charging observations, set
+`FACILITIES_SOURCE=LTA_DATAMALL` and `LTA_DATAMALL_ACCOUNT_KEY=...` there.
+See [LTA DataMall integration](docs/lta-datamall.md) for modelling and freshness rules.
+Rerunning the macOS script restarts Facilities, Rebalancing, Dispatch and Dashboard
+to load the integration and settings. Run it between demos with no active relocations.
 
 The script validates Docker Desktop, builds the three application images from
 the checked-in dependency lock, deploys PostgreSQL, Redis, every backend, both
@@ -242,9 +256,10 @@ results/                    Preserved Phase 4 evaluation output
   are implemented.
 - There is no authentication or authorization. Internal APIs must not be exposed to
   an untrusted network.
-- Coordinates, demand, charging, movement, and arrival are simulated. There is no
+- Demand, movement and arrival are simulated. Optional LTA facilities retain real
+  coordinates and reported availability with local simulation allocations. There is no
   real-road autonomy, live map routing, ML, maintenance model, real reservation
-  system, or external charging integration.
+  system, or charging-session integration.
 - Public OpenStreetMap tiles require browser network access. The dashboard's zone
   list and service panels continue working if tiles fail.
 
