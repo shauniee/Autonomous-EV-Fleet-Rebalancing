@@ -7,11 +7,14 @@ from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET
 from ev_fleet.rebalancing.policy import assess
 
 
-def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANCE", vehicle_id=None):
+def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANCE", vehicle_id=None,
+               facility_id=None):
     edges = []
     left = {}
     left_charge = {}
     for site in facilities:
+        if facility_id and site.facility_id != facility_id:
+            continue
         if (site.zone_id != zone["zone_id"] or site.status != "OPEN"
                 or not site.is_fresh(now) or site.parking_available < 1):
             continue
