@@ -92,6 +92,8 @@ class TrafficMonitor:
                     raise TrafficDataError("RATE_LIMITED")
                 response.raise_for_status()
                 payload = response.json()
+                if not isinstance(payload, dict):
+                    raise TrafficDataError("INVALID_RESPONSE")
                 page = payload.get("value")
                 if not isinstance(page, list) or len(page) > PAGE_SIZE or any(not isinstance(r, dict) for r in page):
                     raise TrafficDataError("INVALID_RESPONSE")
@@ -137,8 +139,11 @@ class TrafficMonitor:
         while True:
             try:
                 await asyncio.wait_for(self.snapshot(), timeout=75)
-            except (asyncio.TimeoutError, TrafficDataError):
-                pass  # Unknown status remains visible through cached_snapshot.
+            except (asyncio.TimeoutError, TrafficDataError, Exception):
+                # Deliberately omit upstream exception details: credentials can
+                # occur in transport diagnostics. The cached feed retains its
+                # last age/status and becomes visibly stale after expiry.
+                pass
             await asyncio.sleep(30)
 
     async def snapshot(self):
