@@ -156,7 +156,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             assignments.append({**{key: edge[key] for key in
                 ("vehicle_id", "facility_id", "facility_name", "target_position",
                  "requires_charging", "distance_km", "predicted_arrival_soc_pct", "score")},
-                "traffic_assessment": edge.get("traffic_assessment"),,
+                "traffic_assessment": edge.get("traffic_assessment"),
                 "recommendation_id": rec_id})
         identifier = str(uuid4())
         result = {"batch_recommendation_id": identifier,
