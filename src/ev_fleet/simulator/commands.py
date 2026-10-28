@@ -76,6 +76,7 @@ class MovingNode:
 
     async def refresh_parking(self):
         self.parking_verified = False
+        previous_charging = self.movement.charging_state
         self.movement.park(None)
         state = VehicleParking.model_validate(await self.request("GET",
             f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking")).model_dump(mode="json")
@@ -87,6 +88,8 @@ class MovingNode:
             self.parking_verified = self.movement.park(state["parking"])
         else:
             self.parking_verified = True
+        if self.movement.charging_state != previous_charging:
+            self.telemetry_changed.set()
 
     async def send_telemetry(self):
         if self.session is None:
@@ -165,6 +168,10 @@ class MovingNode:
         failures = 0
         while True:
             delay = interval
+            if operation == self.send_telemetry:
+                # Clear BEFORE publishing, so transitions during the network
+                # request cannot be lost when we begin waiting again.
+                self.telemetry_changed.clear()
             try:
                 await operation()
                 failures = 0
@@ -180,7 +187,6 @@ class MovingNode:
             if operation == self.send_telemetry and failures == 0:
                 # Wake immediately on a command/state transition, otherwise
                 # wait 1s in motion, 2s charging or 5s idle by default.
-                self.telemetry_changed.clear()
                 try:
                     await asyncio.wait_for(self.telemetry_changed.wait(), timeout=self.telemetry_delay())
                 except asyncio.TimeoutError:
