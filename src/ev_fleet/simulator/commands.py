@@ -45,7 +45,7 @@ class MovingNode:
             "consumption_kwh_per_km": self.movement.consumption})
         # A new process cannot safely reconstruct an in-flight journey from CLI defaults.
         previous = state.get("telemetry")
-        if not self.initialized and (state.get("active_claim") or state.get("active_rental") or previous and (
+        if not self.initialized and (state.get("active_claim") or state.get("active_rental") or state.get("active_charging_task") or previous and (
             previous.get("active_dispatch_id") or previous["relocation_state"] != "IDLE")):
             raise RuntimeError("Vehicle has an unresolved journey; refusing to overwrite its physical state")
         if not self.initialized and previous:
