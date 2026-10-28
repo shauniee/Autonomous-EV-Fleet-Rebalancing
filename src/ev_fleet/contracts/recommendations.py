@@ -54,11 +54,14 @@ class BatchRecommendationRequest(RecommendationRequest):
     quantity: int = Field(ge=1, le=20)
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     vehicle_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    facility_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def selected_vehicle_quantity(self):
         if self.vehicle_id and self.quantity != 1:
             raise ValueError("a selected vehicle requires quantity one")
+        if self.facility_id and (self.purpose != "CHARGE" or not self.vehicle_id or self.quantity != 1):
+            raise ValueError("a selected charging facility requires one selected EV and CHARGE purpose")
         return self
 
 
