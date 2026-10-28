@@ -10,12 +10,12 @@ from pydantic import BaseModel, SecretStr
 from typing import Literal
 
 from ev_fleet.common.travel import distance_km
+from ev_fleet.common.parking import MAX_FACILITY_ROAD_ACCESS_KM
 from ev_fleet.contracts.common import utcnow
 from ev_fleet.contracts.routing import RoadRoute
 
 # These are search limits, NOT Fleet's 50 m arrival tolerance.
 MAX_INITIAL_ROAD_MATCH_KM = .20
-MAX_FACILITY_ACCESS_KM = .15
 
 
 class RoutingSettings(BaseModel):
@@ -104,7 +104,7 @@ async def driving_route(client, settings, origin, destination, tolerance_km, *, 
     # as the physical target only if it is reasonably close to that facility.
     # Road endpoint is stored in claim/command/parking hold, NOT animated from
     # the route endpoint to the geographic facility centre.
-    limit = MAX_FACILITY_ACCESS_KM if facility else tolerance_km
+    limit = MAX_FACILITY_ROAD_ACCESS_KM if facility else tolerance_km
     if distance_km(destination, route.geometry[-1].model_dump()) > limit:
         raise HTTPException(409, "ONEMAP_FACILITY_NO_ROAD_ACCESS" if facility
                             else "ONEMAP_ENDPOINT_TOO_FAR")
