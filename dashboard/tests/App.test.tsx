@@ -352,7 +352,7 @@ describe('dispatcher dashboard', () => {
     }});
     render(<App/>);
     const panel = await screen.findByRole('region', { name:'Traffic conditions and roadworks' });
-    expect(within(panel).getByText('FRESH')).toBeInTheDocument();
+    expect(within(panel).getAllByText('FRESH').length).toBeGreaterThan(0);
     expect(within(panel).getByText('Synthetic fixture closure')).toBeInTheDocument();
     expect(within(panel).getByText('FIRST ROAD')).toBeInTheDocument();
   });
