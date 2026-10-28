@@ -43,7 +43,7 @@ def test_ingestion_normalises_and_rejects_invalid_records():
     valid = {"LinkID": 1, "RoadName": "First Road", "MinimumSpeed": "10",
              "MaximumSpeed": 18, "StartLat": 1.3, "StartLon": 103.8,
              "EndLat": 1.3, "EndLon": 103.82}
-    assert normalize("speeds", [valid, {**valid, "StartLat": 10}]) == [speed()]
+    assert normalize("speeds", [valid, {**valid, "StartLat": 10}]) == [{**speed(), "id": "1"}]
     assert normalize("incidents", [{"IncidentID": "i", "Type": "Road Block",
         "Latitude": 1.30, "Longitude": 103.8, "Message": "Road closed"}])[0]["type"] == "ROAD BLOCK"
     assert normalize("roadworks", [{"EventID": "w", "RoadName": "First Road",
@@ -135,14 +135,14 @@ def test_traffic_aware_matching_changes_ranking_without_holding_bays(clock):
         async with Cluster(clock) as cluster:
             site = BY_ID["mock-bishan-01"]
             p = site.position.model_dump()
-            near = {**p, "longitude": p["longitude"] - .001}
-            far = {**p, "longitude": p["longitude"] + .005}
+            near = {**p, "longitude": p["longitude"] - .003}
+            far = {**p, "longitude": p["longitude"] + .007}
             await cluster.vehicle("near", soc=60)
             await cluster.vehicle("far", soc=60)
             await cluster.telemetry("near", soc=60, position=near)
             await cluster.telemetry("far", soc=60, position=far)
             fleet = await cluster.fleet.snapshot()
-            zone = (await cluster.demand.get("bishan")).model_dump(mode="json")
+            zone = await cluster.demand.get("bishan")
             settings = Settings()
             base = rank_pairs(fleet, zone, [site], settings, clock.now(), 1)
             assert base[0]["vehicle_id"] == "near"
