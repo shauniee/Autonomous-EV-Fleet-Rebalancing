@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager, suppress
 from uuid import UUID
 import httpx
 from ev_fleet.common.logging import base_app
+from ev_fleet.contracts.common import Position
+from .routing import road_match_spawn
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
 
@@ -28,6 +30,13 @@ def create_app(settings=None, client=None, clock=None, background=True):
                 await service.close()
 
     app.router.lifespan_context = lifespan
+
+    @app.post("/api/v1/road-matches")
+    async def match_idle_spawn(position: Position):
+        # The simulator calls this before its first telemetry/session, never
+        # while an EV is executing a dispatch. Does not change Fleet state.
+        service = app.state.service
+        return await road_match_spawn(service.client, service.routing, position.model_dump())
 
     @app.post("/api/v1/dispatches", status_code=202, response_model=Dispatch)
     async def approve(body: DispatchApproval):
