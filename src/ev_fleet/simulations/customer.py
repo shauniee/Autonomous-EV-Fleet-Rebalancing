@@ -121,7 +121,10 @@ class RentalMovement(Movement):
 
 class RentalVehicle(MovingNode):
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct, **kwargs):
-        super().__init__(fleet_url, dispatch_url, vehicle_id, position, soc_pct, **kwargs)
+        # Customer-rental trips use a separate synthetic straight-line model;
+        # do not falsely claim its initial locations/journeys were road-matched.
+        super().__init__(fleet_url, dispatch_url, vehicle_id, position, soc_pct,
+                         road_match_initial=False, **kwargs)
         self.movement = RentalMovement(position, soc_pct)
         self.telemetry_lock = asyncio.Lock()
 
