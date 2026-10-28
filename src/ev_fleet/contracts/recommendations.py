@@ -23,6 +23,7 @@ class CandidateAssessment(Model):
     weighted_components: dict[str, float] | None = None
     score: float | None = Field(default=None, ge=0, le=1)
     charging_assessment: str | None = None
+    traffic_assessment: dict | None = None
 
 
 class SnapshotReference(Model):
