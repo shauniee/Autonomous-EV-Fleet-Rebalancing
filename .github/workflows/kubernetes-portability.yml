@@ -77,6 +77,31 @@ jobs:
           assert docs['Deployment']['spec']['strategy']['type'] == 'Recreate'
           print('Rental Deployment is preinstalled with zero replicas; job remains opt-in.')
           PY
+      - name: Verify versioned deployment image rendering and preflight hooks
+        shell: pwsh
+        run: |
+          $script = Get-Content -Raw scripts/start-kubernetes.ps1
+          foreach ($required in @('$ConnectOnly', 'Assert-SafeToRedeploy',
+                                  'kubectl kustomize', 'rollout status',
+                                  'dry-run=client', 'customer-rental-demo')) {
+            if (-not $script.Contains($required)) {
+              throw "Missing required deployment safety hook: $required"
+            }
+          }
+          $base = (kubectl kustomize k8s) -join [Environment]::NewLine
+          if ($LASTEXITCODE -ne 0) { throw 'Kustomize failed' }
+          $rendered = $base
+          $tag = 'ci-test-version-123'
+          foreach ($name in @('backend', 'dashboard', 'simulation-console')) {
+            $old = "csc3104/ev-fleet-$($name):k8s-local"
+            $new = "csc3104/ev-fleet-$($name):$tag"
+            if (-not $rendered.Contains($old)) { throw "Template image not found: $old" }
+            $rendered = $rendered.Replace($old, $new)
+            if (-not $rendered.Contains($new)) { throw "Versioned image not rendered: $new" }
+          }
+          if ($rendered.Contains(':k8s-local')) { throw 'Unversioned image remains in rendered manifests' }
+          Write-Host 'All local workload images can be rendered with one unique tag.'
+
       - name: Parse Windows PowerShell deployment scripts
         shell: pwsh
         run: |
