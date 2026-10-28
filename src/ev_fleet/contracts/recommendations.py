@@ -75,6 +75,7 @@ class ParkingAssignment(Model):
     distance_km: float = Field(ge=0)
     predicted_arrival_soc_pct: float
     score: float = Field(ge=0, le=1)
+    traffic_assessment: dict | None = None
 
 
 class BatchRecommendation(Model):
@@ -87,5 +88,7 @@ class BatchRecommendation(Model):
     created_at: AwareDatetime
     expires_at: AwareDatetime
     assignments: list[ParkingAssignment]
+    traffic_status: str | None = None
+    traffic_generated_at: AwareDatetime | None = None
     explanation: str
     assumptions: list[str]
