@@ -34,14 +34,28 @@ async def cluster_request(method, path, payload=None):
         raise HTTPException(503, f"KUBERNETES_CONTROL_UNAVAILABLE:{type(exc).__name__}") from exc
 
 
+def replica_count(scale, section):
+    # Kubernetes Scale API can omit zero-value replica fields from JSON.
+    # That means a paused Deployment may have spec={}, status={} instead
+    # of explicitly containing "replicas": 0.
+    data = scale.get(section) if isinstance(scale, dict) else None
+    if not isinstance(data, dict):
+        raise HTTPException(503, "RENTAL_SCALE_RESPONSE_INVALID")
+    count = data.get("replicas", 0)
+    if type(count) is not int or count < 0:
+        raise HTTPException(503, "RENTAL_SCALE_RESPONSE_INVALID")
+    return count
+
+
 @router.get("/status")
 async def status():
     scale = await cluster_request("GET", SCALE_PATH)
     if scale is None:
         raise HTTPException(503, "RENTAL_DEPLOYMENT_NOT_INSTALLED")
-    return {"running": scale["spec"]["replicas"] > 0,
-            "desired_replicas": scale["spec"]["replicas"],
-            "actual_replicas": scale.get("status", {}).get("replicas", 0)}
+    desired = replica_count(scale, "spec")
+    actual = replica_count(scale, "status")
+    return {"running": desired > 0, "desired_replicas": desired,
+            "actual_replicas": actual}
 
 
 @router.post("/start")
@@ -52,11 +66,11 @@ async def start():
     scale = await cluster_request("GET", SCALE_PATH)
     if scale is None:
         raise HTTPException(503, "RENTAL_DEPLOYMENT_NOT_INSTALLED")
-    if scale["spec"]["replicas"] == 1:
+    if replica_count(scale, "spec") == 1:
         return {"running": True, "desired_replicas": 1}
     scale["spec"]["replicas"] = 1
     updated = await cluster_request("PUT", SCALE_PATH, scale)
-    return {"running": True, "desired_replicas": updated["spec"]["replicas"]}
+    return {"running": True, "desired_replicas": replica_count(updated, "spec")}
 
 
 @router.post("/stop")
@@ -84,8 +98,8 @@ async def stop(request: Request):
     scale = await cluster_request("GET", SCALE_PATH)
     if scale is None:
         raise HTTPException(503, "RENTAL_DEPLOYMENT_NOT_INSTALLED")
-    if scale["spec"]["replicas"] == 0:
+    if replica_count(scale, "spec") == 0:
         return {"running": False, "desired_replicas": 0}
     scale["spec"]["replicas"] = 0
     updated = await cluster_request("PUT", SCALE_PATH, scale)
-    return {"running": False, "desired_replicas": updated["spec"]["replicas"]}
+    return {"running": False, "desired_replicas": replica_count(updated, "spec")}
