@@ -104,10 +104,29 @@ Existing healthy tunnels are reused; extra EV rollouts do not block the web apps
 See the [parking and charging walkthrough](docs/lta-datamall.md#end-to-end-walkthrough)
 to verify real destinations, simulated charging to 80%, and subsequent parking.
 
-The script validates Docker Desktop, builds the three application images from
-the checked-in dependency lock, deploys PostgreSQL, Redis, every backend, both
-dashboards and all 20 EV simulators, waits for readiness, and opens both local
-port-forward tunnels. Keep that PowerShell window open.
+On **Windows**, each normal invocation builds backend, Dashboard and Simulation
+Console images with a **new local version tag**, renders the Kubernetes manifests
+to those tags, applies them, and waits for Pods to roll out. There is **no need**
+to manually run `kubectl rollout restart` after a code change. The unchanged
+`k8s-local` aliases are retained only for optional standalone test Job commands.
+
+Deployment is blocked if Fleet reports an in-progress rental, relocation or
+charging operation, or the customer rental simulator/Job is running. Finish
+those sessions first; the script never resets PostgreSQL or forcibly completes
+a customer journey. Do not issue new dispatches while deploying.
+
+If the system is already deployed and you only want to open the dashboards,
+**without building or restarting anything**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
+```
+
+The original `-SetupMetricsServer -AllowInsecureLocalKubeletTls` command remains
+**Deploy mode**. Metrics Server setup is idempotent but typically only needed
+once on a new cluster. The startup command keeps its terminal open only for
+newly created dashboard tunnels; existing healthy tunnels are reused.
+See [the local deployment guide](docs/kubernetes-local.md) for troubleshooting.
 
 ### Optional HPA for the Dashboard
 
