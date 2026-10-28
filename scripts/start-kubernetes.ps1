@@ -37,8 +37,31 @@ function Assert-SafeToRedeploy {
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the Fleet deployment." }
     if ($fleetExists) {
         # Read-only, fail-closed check from the current Fleet Pod; no port-forward needed.
-        $check = 'import json,sys,urllib.request; vehicles=json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/v1/vehicles",timeout=8))["vehicles"]; busy=[v["vehicle_id"] for v in vehicles if v.get("active_rental") or v.get("active_claim") or v.get("effective_relocation_state") not in (None,"IDLE") or (v.get("telemetry") or {}).get("charging_state")=="CHARGING" or (v.get("active_charging_task") or {}).get("status")=="IN_PROGRESS"]; print("Deployment blocked; active EV workflows: "+", ".join(busy) if busy else "Fleet confirms no active rentals, relocations or charging"); sys.exit(2 if busy else 0)'
-        & kubectl -n ev-fleet exec deployment/fleet -- python -c $check
+        # Encode the inline read-only probe to avoid Windows PowerShell 5.1
+        # swallowing nested quotation marks when passing python -c through kubectl.
+        $probe = @'
+import json
+import sys
+import urllib.request
+
+with urllib.request.urlopen("http://127.0.0.1:8000/api/v1/vehicles", timeout=8) as reply:
+    vehicles = json.load(reply)["vehicles"]
+busy = [
+    vehicle["vehicle_id"]
+    for vehicle in vehicles
+    if vehicle.get("active_rental")
+    or vehicle.get("active_claim")
+    or vehicle.get("effective_relocation_state") not in (None, "IDLE")
+    or (vehicle.get("telemetry") or {}).get("charging_state") == "CHARGING"
+    or (vehicle.get("active_charging_task") or {}).get("status") == "IN_PROGRESS"
+]
+if busy:
+    print("Deployment blocked; active EV workflows: " + ", ".join(busy), file=sys.stderr)
+    sys.exit(2)
+print("Fleet confirms no active rentals, relocations or charging.")
+'@
+        $encodedProbe = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($probe))
+        & kubectl -n ev-fleet exec deployment/fleet -- python -c "import base64;exec(base64.b64decode('$encodedProbe'))"
         if ($LASTEXITCODE -ne 0) {
             throw "Deployment aborted: Fleet is unavailable or has active EV work. Do not restart simulator ownership while a journey may be in progress."
         }
@@ -90,7 +113,9 @@ if ($ConnectOnly) {
     )
     foreach ($image in $images) {
         $imageRef = "csc3104/ev-fleet-$($image.Name):$tag"
-        & docker --context desktop-linux build --platform linux/amd64 -t $imageRef $image.Directory
+        # Keep the fixed local alias for the optional standalone rental Job manifest.
+        $legacyRef = "csc3104/ev-fleet-$($image.Name):k8s-local"
+        & docker --context desktop-linux build --platform linux/amd64 -t $imageRef -t $legacyRef $image.Directory
         if ($LASTEXITCODE -ne 0) { throw "Build failed: $imageRef; Kubernetes was not updated." }
     }
 
@@ -111,12 +136,12 @@ if ($ConnectOnly) {
     $manifestFile = Join-Path ([IO.Path]::GetTempPath()) ("ev-fleet-deploy-" + [guid]::NewGuid().ToString("N") + ".yaml")
     try {
         [IO.File]::WriteAllText($manifestFile, $rendered + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-        & kubectl apply --dry-run=client -f $manifestFile
-        if ($LASTEXITCODE -ne 0) { throw "Rendered manifest validation failed; nothing applied." }
         & kubectl apply -f .\k8s\namespace.yaml
         if ($LASTEXITCODE -ne 0) { throw "Namespace creation failed." }
         & kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
         if ($LASTEXITCODE -ne 0) { throw "Namespace did not become active." }
+        & kubectl apply --dry-run=client -f $manifestFile
+        if ($LASTEXITCODE -ne 0) { throw "Rendered manifest validation failed; nothing else applied." }
         & kubectl apply -f $manifestFile
         if ($LASTEXITCODE -ne 0) { throw "Kubernetes apply failed. Inspect Pod images and events before retrying." }
     } finally {
