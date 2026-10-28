@@ -29,9 +29,36 @@ laptop:
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
 
-It performs the build, deployment, readiness waits, and both dashboard tunnels
-described below. The remaining commands in this document are for inspection and
-troubleshooting rather than an alternative startup workflow.
+The **default mode is Deploy**: a fresh local image tag is created on every run
+(`local-<timestamp>-<unique-id>`), the script builds all three images, renders
+Kustomize with that tag, applies the resources and waits for the new Pods to
+become ready. This prevents mixed old/new backend API versions without requiring
+manual `kubectl rollout restart` commands. Because all backends and simulator
+Pods use the shared backend image, each deploy updates all of them.
+
+To **only connect** to an existing deployment, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
+```
+
+`-ConnectOnly` checks the dashboards and opens/reuses local tunnels, without
+building, applying YAML, setting up metrics, or restarting Pods. Leave the
+terminal open if it creates new tunnels. The flags `-ConnectOnly` and
+`-SetupMetricsServer` cannot be combined.
+
+**Safety gate:** Before building and immediately before applying, Deploy mode
+reads the authoritative Fleet snapshot and checks the optional rental workload
+state. It refuses to deploy while the rental Deployment or Job is active, or
+Fleet reports an active rental, dispatch claim, in-flight relocation or charging
+session. End all rental/relocation/charging work before redeploying; do not
+approve new actions during rollout. If Fleet is unreachable, deployment
+**fails closed**. The guard cannot prevent an operator racing to approve work
+after the final check, so keep the demo quiescent during deploy.
+
+PostgreSQL PVCs and snapshots are preserved; the script does not reset data.
+The remaining manual commands in this document are for diagnostics, not a
+second deployment workflow.
 
 Confirm the target runtimes before building:
 
@@ -59,13 +86,16 @@ powershell -ExecutionPolicy Bypass -File .\\scripts\\start-kubernetes.ps1 `
   -SetupMetricsServer -AllowInsecureLocalKubeletTls
 ```
 
-For an already-deployed cluster (without rebuilding application images):
+For an already-deployed cluster, install or repair Metrics Server **without
+rebuilding the application**:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\\scripts\\setup-local-metrics.ps1 `
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local-metrics.ps1 `
   -AllowInsecureKubeletTls
-kubectl apply -k .\\k8s
 ```
+
+Do **not** follow this with `kubectl apply -k k8s`, because that would
+overwrite the versioned image references with the `k8s-local` template tags.
 
 The installer preserves an existing Metrics Server version and installs
 v0.9.0 only if missing. It requires GitHub access to download the release.
@@ -95,55 +125,34 @@ The single-node Docker Desktop cluster cannot survive host-level failure.
 If metrics are unavailable, inspect `kubectl -n kube-system logs
 deployment/metrics-server --tail=50`.
 
-## Build local images
+## Versioned local image build and deployment
 
-The kubeadm provisioner can use images in Docker Desktop's local image store.
-The manifests use `imagePullPolicy: Never`, so Kubernetes reports a clear image
-error instead of contacting an external registry if either build is missing.
+The startup script automatically builds the backend, dashboard, and simulation
+console images with a unique local tag and updates Kubernetes image references.
+`imagePullPolicy: Never` makes Docker Desktop use the local image store.
+No container registry, `kind load`, AWS or cloud service is required.
+
+The manifests in `k8s/` retain `k8s-local` as **source templates**; the
+deployment script renders them to a temporary YAML file with the new tag and
+removes that file after applying it. If you run plain `kubectl apply -k k8s`
+**after** deploying, Kubernetes may roll services **back** to the unversioned
+template image references. Always use `scripts/start-kubernetes.ps1` for a
+normal redeployment, not `kubectl apply -k` or a series of manual restarts.
+
+You can inspect the installed images with:
 
 ```powershell
-docker --context desktop-linux build --platform linux/amd64 `
-  -t csc3104/ev-fleet-backend:k8s-local .
-
-docker --context desktop-linux build --platform linux/amd64 `
-  -t csc3104/ev-fleet-dashboard:k8s-local .\dashboard
-
-docker --context desktop-linux build --platform linux/amd64 `
-  -t csc3104/ev-fleet-simulation-console:k8s-local .\simulation-console
-
-docker --context desktop-linux image inspect `
-  csc3104/ev-fleet-backend:k8s-local `
-  csc3104/ev-fleet-dashboard:k8s-local `
-  csc3104/ev-fleet-simulation-console:k8s-local
+kubectl -n ev-fleet get deployment fleet dashboard simulation-console `
+  -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'
+kubectl -n ev-fleet get statefulset ev-moving-extra `
+  -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'
+kubectl -n ev-fleet get pods
 ```
 
-No registry, `kind load`, AWS, or other cloud service is involved.
-
-## Validate and deploy
-
-Render and client-validate the namespace-scoped resources before applying them:
+To check source manifests without changing the cluster:
 
 ```powershell
 kubectl kustomize .\k8s
-kubectl apply --dry-run=client -f .\k8s\namespace.yaml
-kubectl apply --dry-run=client -k .\k8s
-```
-
-Create the namespace first and wait until it is Active. The namespace is kept out
-of `kustomization.yaml` deliberately so namespace-scoped objects cannot be applied
-before it exists.
-
-```powershell
-kubectl apply -f .\k8s\namespace.yaml
-kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
-kubectl apply -k .\k8s
-
-kubectl -n ev-fleet rollout status statefulset/postgres --timeout=300s
-kubectl -n ev-fleet wait --for=condition=Available deployment --all --timeout=300s
-kubectl -n ev-fleet rollout status statefulset/ev-moving-extra --timeout=300s
-kubectl -n ev-fleet get deployments,pods,services -o wide
-kubectl -n ev-fleet get statefulsets
-kubectl -n ev-fleet get endpointslices
 ```
 
 At baseline there should be ten `1/1` Deployments, a `1/1` PostgreSQL StatefulSet, one
