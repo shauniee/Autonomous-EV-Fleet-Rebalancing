@@ -38,6 +38,16 @@ class TelemetryUpdate(Observation):
     parked_facility_id: str | None = None
     charging_state: Literal["NOT_CHARGING", "CHARGING", "COMPLETE"] = "NOT_CHARGING"
     charging_power_kw: float | None = Field(default=None, gt=0, le=1000)
+    # Optional simulator-derived digital-twin measurements, not real sensors.
+    speed_kph: float | None = Field(default=None, ge=0, le=250)
+    heading_deg: float | None = Field(default=None, ge=0, lt=360)
+    odometer_km: float | None = Field(default=None, ge=0)
+    battery_temp_c: float | None = Field(default=None, ge=-40, le=120)
+    motor_temp_c: float | None = Field(default=None, ge=-40, le=180)
+    power_kw: float | None = Field(default=None, ge=-1000, le=1000)
+    battery_soh_pct: float | None = Field(default=None, ge=0, le=100)
+    gps_quality: Literal["SIMULATED", "GOOD", "DEGRADED", "INVALID"] | None = None
+    fault_codes: list[str] = Field(default_factory=list, max_length=20)
 
 
 class SessionRequest(Model):
