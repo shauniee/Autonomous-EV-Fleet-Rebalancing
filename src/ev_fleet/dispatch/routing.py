@@ -98,7 +98,10 @@ async def driving_route(client, settings, origin, destination, tolerance_km, *, 
     route = await _onemap_route(client, settings, origin, destination)
     # An EV must already be on the road at journey start. Do not append a
     # connector or enlarge the strict origin/physical-arrival tolerance.
-    if distance_km(origin, route.geometry[0].model_dump()) > tolerance_km:
+    # Once spawn road matching has run, OneMap's first road vertex must
+    # already coincide with the simulator (within 5 metres). Never draw
+    # the 50 m tolerance as a virtual connector at departure.
+    if distance_km(origin, route.geometry[0].model_dump()) > min(tolerance_km, .005):
         raise HTTPException(409, "ONEMAP_ORIGIN_NOT_ON_ROAD")
     # A facility centre is not a road entrance. Use OneMap's drive-route end
     # as the physical target only if it is reasonably close to that facility.
