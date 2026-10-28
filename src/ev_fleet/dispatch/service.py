@@ -128,8 +128,13 @@ class DispatchService:
                 "available_slots": parking.charging_available}
         origin = vehicle.telemetry.position.model_dump() if vehicle.telemetry else None
         route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
-                                    self.settings.arrival_tolerance_km) if origin else None
+                                    self.settings.arrival_tolerance_km,
+                                    facility=parking is not None) if origin else None
         if route:
+            # Physical destination is the road endpoint, NOT the carpark's
+            # off-road map coordinate. Fleet keeps the strict 50 m arrival rule.
+            destination = route.geometry[-1]
+            assessed_target["position"] = destination.model_dump(mode="json")
             # Routing may take longer than a telemetry interval. Revalidate a
             # fresh Fleet version without reusing a route from a moved origin.
             fresh = await request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot)
@@ -160,6 +165,7 @@ class DispatchService:
             record.parking_request = ParkingHoldRequest(
                 dispatch_id=record.data["dispatch_id"], vehicle_id=vehicle.vehicle_id,
                 expected_zone_id=target.zone_id, expected_position=parking.position,
+                access_position=destination if route else None,
                 requires_charging=requires_charge).model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
