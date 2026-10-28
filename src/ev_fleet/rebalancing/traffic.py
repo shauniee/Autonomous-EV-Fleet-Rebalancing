@@ -105,6 +105,42 @@ class TrafficMonitor:
                 raise TrafficDataError("FETCH_FAILED") from None
         raise TrafficDataError("PAGINATION_LIMIT")
 
+    def cached_snapshot(self):
+        """Non-blocking read: never fetch or wait for a provider on a hot path."""
+        now = self.clock()
+        if self.source != "LTA_DATAMALL":
+            return {"source": "DISABLED", "generated_at": now.isoformat(),
+                    "status": "DISABLED", "feeds": {}, "speeds": [], "incidents": [], "roadworks": []}
+        if not self.key:
+            return {"source": "LTA_DATAMALL", "generated_at": now.isoformat(),
+                    "status": "MISSING_KEY", "feeds": {}, "speeds": [], "incidents": [], "roadworks": []}
+        feeds, data = {}, {}
+        for name, (_, _, max_age) in FEEDS.items():
+            entry = self.cache.get(name)
+            observed = entry["observed_at"] if entry else None
+            age = (now - observed).total_seconds() if observed else None
+            fresh = age is not None and 0 <= age < max_age
+            feeds[name] = {
+                "status": "FRESH" if fresh else "STALE" if age is not None else
+                          entry["status"] if entry else "PENDING",
+                "observed_at": observed.isoformat() if observed else None,
+                "count": len(entry["rows"]) if fresh else 0,
+                "error": entry["status"] if entry and entry["status"] != "FRESH" else None,
+            }
+            data[name] = entry["rows"] if entry and fresh else []
+        return {"source": "LTA_DATAMALL", "generated_at": now.isoformat(),
+                "status": "FRESH" if all(f["status"] == "FRESH" for f in feeds.values()) else "PARTIAL",
+                "feeds": feeds, **data}
+
+    async def refresh_loop(self):
+        """Refresh independently of route ranking, dashboards and approvals."""
+        while True:
+            try:
+                await asyncio.wait_for(self.snapshot(), timeout=75)
+            except (asyncio.TimeoutError, TrafficDataError):
+                pass  # Unknown status remains visible through cached_snapshot.
+            await asyncio.sleep(30)
+
     async def snapshot(self):
         now = self.clock()
         if self.source != "LTA_DATAMALL":
