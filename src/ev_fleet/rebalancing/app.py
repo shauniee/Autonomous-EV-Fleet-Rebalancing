@@ -36,7 +36,14 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
                 app.state.client = client or owned
                 app.state.traffic_monitor = TrafficMonitor(app.state.client, clock=clock.now)
-                yield
+                traffic_task = (asyncio.create_task(app.state.traffic_monitor.refresh_loop())
+                                if app.state.traffic_monitor.source == "LTA_DATAMALL" else None)
+                try:
+                    yield
+                finally:
+                    if traffic_task:
+                        traffic_task.cancel()
+                        await asyncio.gather(traffic_task, return_exceptions=True)
         finally:
             await store.close()
             await batch_store.close()
@@ -50,7 +57,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
         now = clock.now()
-        traffic = await app.state.traffic_monitor.snapshot()
+        traffic = app.state.traffic_monitor.cached_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet).model_dump(mode="json")
             target = ZoneState.model_validate(target).model_dump(mode="json")
@@ -95,7 +102,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     @app.get("/api/v1/traffic/conditions")
     async def traffic_conditions():
         # Each feed caches independently. Missing data is explicitly UNKNOWN.
-        return await app.state.traffic_monitor.snapshot()
+        return app.state.traffic_monitor.cached_snapshot()
 
     @app.get("/api/v1/charging-advice")
     async def charging_advice():
@@ -118,7 +125,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
             get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities?zone_id={body.target_zone_id}"))
         now = clock.now()
-        traffic = await app.state.traffic_monitor.snapshot()
+        traffic = app.state.traffic_monitor.cached_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
             target = ZoneState.model_validate(target_raw).model_dump(mode="json")
