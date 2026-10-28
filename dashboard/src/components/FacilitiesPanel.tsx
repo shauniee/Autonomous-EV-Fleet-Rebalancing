@@ -25,6 +25,7 @@ export function FacilitiesPanel({ facilities, selectedZone, error, snapshot }: {
           {site.facility_type !== 'CHARGING' && <div><dt>Parking spaces available for simulation</dt><dd>{site.parking_available} / {site.parking_capacity ?? 'total unknown'}</dd></div>}
           <div><dt>{site.facility_type === 'CHARGING' ? 'Chargers available for simulation' : 'Charging bays available'}</dt><dd>{site.charging_bays == null ? 'Unknown' : `${site.charging_available} / ${site.charging_bays}`}</dd></div>
           {(site.charging_bays ?? 0) > 0 && <div><dt>Connector type</dt><dd>{site.connector_types.join(', ') || 'Unknown'}</dd></div>}
+          {(site.charging_bays ?? 0) > 0 && <div><dt>Simulation charging rate</dt><dd>{site.charging_power_kw ?? 7.4} kW{site.charging_power_kw == null ? ' (assumed)' : ' (minimum advertised)'}</dd></div>}
           {site.source === 'LTA_DATAMALL' && <>
             <div><dt>Reported by LTA before simulated allocations</dt><dd>{site.reported_parking_available ?? site.reported_charging_available ?? 'Unknown'}</dd></div>
             <div><dt>Fetched at</dt><dd>{time(site.availability_observed_at ?? undefined)}</dd></div>

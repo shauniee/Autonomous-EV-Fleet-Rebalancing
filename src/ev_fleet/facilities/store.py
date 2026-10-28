@@ -9,6 +9,7 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.contracts.facilities import FacilitiesSnapshot, FacilityFeed
 from .catalog import CATALOGUE
 from .datamall import FacilitiesSettings
+from ev_fleet.common.parking import CHARGING_TARGET_SOC_PCT, DEFAULT_CHARGING_POWER_KW
 
 
 class FacilitiesStore:
@@ -127,6 +128,8 @@ class FacilitiesStore:
                 raise HTTPException(409, "PARKING_FACILITY_CHANGED")
             if site.status != "OPEN":
                 raise HTTPException(409, "PARKING_CLOSED")
+            if site.facility_type == "CHARGING" and not body.requires_charging:
+                raise HTTPException(409, "CHARGING_NOT_REQUIRED")
             # An OCCUPIED hold is the vehicle's current bay. Keep it allocated
             # while reserving the next destination so a failed relocation does
             # not incorrectly free the bay the vehicle still occupies. Only a
@@ -150,6 +153,7 @@ class FacilitiesStore:
                        "charging_allocated": charging, "status": "RESERVED"}
             self.version += 1
             self.holds[key] = {"facility_id": facility_id, "request": body,
+                               "facility": site,
                                "receipt": receipt, "charging_allocated": charging,
                                "status": "RESERVED"}
             await self.persist()
@@ -183,3 +187,20 @@ class FacilitiesStore:
             if not entry:
                 raise HTTPException(404, "PARKING_HOLD_NOT_FOUND")
             return deepcopy(entry["receipt"])
+
+    async def vehicle_parking(self, vehicle_id):
+        async with self.lock:
+            entries = [entry for entry in self.holds.values()
+                       if entry["receipt"]["vehicle_id"] == vehicle_id]
+            occupied = next((entry for entry in entries if entry["status"] == "OCCUPIED"), None)
+            parking = None
+            if occupied:
+                site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
+                if site:
+                    parking = {"facility_id": site.facility_id, "name": site.name,
+                        "position": site.position, "zone_id": site.zone_id, "source": site.source,
+                        "charging_allocated": occupied["charging_allocated"],
+                        "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
+                        "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
+            return {"vehicle_id": vehicle_id, "parking": parking,
+                    "pending": any(entry["status"] == "RESERVED" for entry in entries)}

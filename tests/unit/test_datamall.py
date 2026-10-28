@@ -118,6 +118,29 @@ def test_batch_download_does_not_forward_account_key():
     asyncio.run(scenario())
 
 
+def test_live_batch_envelope_and_missing_station_ids(clock):
+    async def scenario():
+        station = charging_row()
+        station.pop("locationId")
+        station["postalCode"] = "123456"
+        for charger in station["chargingPoints"]:
+            charger.pop("id")
+            for plug in charger["plugTypes"]:
+                plug["powerRating"] = 11
+        def respond(request):
+            if request.url.host == "datamall2.mytransport.sg":
+                return httpx.Response(200, json={"value": [{"Link":
+                    "https://dm-traffic-flow-data.s3.ap-southeast-1.amazonaws.com/ev-batch/data.json"}]})
+            return httpx.Response(200, json={"LastUpdatedTime": "2026-10-28", "evLocationsData": [station]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            records = await DataMallClient(client, SecretStr("fixture-key")).charging()
+        site = charging_sites(records, clock.now(), 900)[0]
+        assert site.facility_id.startswith("lta-charging-123456-")
+        assert site.charging_power_kw == 11
+        assert site.charging_bays == 3 and site.charging_available == 1
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("link", ["http://example.com/key", "https://localhost/data", 
     "https://dm.s3.amazonaws.com.evil.test/data", "https://user:pass@dm.s3.amazonaws.com/data"])
 def test_untrusted_download_links_are_rejected(link):

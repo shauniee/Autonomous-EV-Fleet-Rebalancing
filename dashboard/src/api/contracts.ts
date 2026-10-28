@@ -18,7 +18,9 @@ export interface Vehicle {
   active_rental?: Rental | null;
   vehicle_id: string; current_zone_id: string | null; stale: boolean; connectivity: string;
   effective_availability: string; effective_relocation_state: string; received_at: string | null;
-  telemetry: { position: Position; soc_pct: number; observed_at: string } | null;
+  telemetry: { position: Position; soc_pct: number; observed_at: string;
+    parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
+    charging_power_kw?: number | null } | null;
 }
 export interface Fleet { instance_id: string; snapshot_at: string; vehicles: Vehicle[] }
 export interface Candidate {
@@ -53,6 +55,7 @@ export interface Facility {
   agency?: string | null; address?: string | null;
   availability_observed_at?: string | null; availability_expires_at?: string | null;
   reported_parking_available?: number | null; reported_charging_available?: number | null;
+  charging_power_kw?: number | null;
 }
 export interface FacilityFeed {
   name: 'parking' | 'charging'; status: 'PENDING' | 'MISSING_KEY' | 'FRESH' | 'STALE' | 'ERROR';
@@ -69,6 +72,7 @@ export interface ParkingAssignment {
 }
 export interface BatchRecommendation {
   batch_recommendation_id: string; target_zone_id: string;
+  purpose?: 'REBALANCE' | 'CHARGE';
   requested_count: number; recommended_count: number; unfulfilled_count: number;
   created_at: string; expires_at: string; explanation: string;
   assignments: ParkingAssignment[]; assumptions: string[];

@@ -22,6 +22,8 @@ class Movement:
         self.distance = 0.0
         self.total = 0.0
         self.origin = deepcopy(position)
+        self.parking = None
+        self.charging_state = "NOT_CHARGING"
 
     def accept(self, command):
         identity = command["command_id"]
@@ -31,6 +33,8 @@ class Movement:
             return self.seen[identity]["accepted"]
         if self.command:
             raise ValueError("another command is active")
+        self.parking = None
+        self.charging_state = "NOT_CHARGING"
         self.command = deepcopy(command)
         self.origin = deepcopy(self.position)
         self.distance = 0.0
@@ -79,7 +83,29 @@ class Movement:
 
     def telemetry(self):
         return {"position": deepcopy(self.position), "soc_pct": self.soc_pct,
-                "availability": "UNAVAILABLE" if self.command else "AVAILABLE",
+                "availability": "UNAVAILABLE" if self.command or self.charging_state == "CHARGING" else "AVAILABLE",
                 "relocation_state": self.state,
                 "distance_travelled_km": self.distance if self.command else None,
-                "active_dispatch_id": self.command["dispatch_id"] if self.command else None}
+                "active_dispatch_id": self.command["dispatch_id"] if self.command else None,
+                "parked_facility_id": self.parking["facility_id"] if self.parking else None,
+                "charging_state": self.charging_state,
+                "charging_power_kw": self.parking["charging_power_kw"] if self.parking and self.parking["charging_allocated"] else None}
+
+    def park(self, parking):
+        self.parking = None
+        self.charging_state = "NOT_CHARGING"
+        if self.command or not parking or distance_km(self.position, parking["position"]) > .05:
+            return False
+        self.parking = deepcopy(parking)
+        if parking["charging_allocated"]:
+            self.charging_state = ("CHARGING" if self.soc_pct < parking["charging_target_soc_pct"] else "COMPLETE")
+        return True
+
+    def charge(self, elapsed_seconds):
+        if self.command or not self.parking or self.charging_state != "CHARGING":
+            return
+        # Same simulated clock as movement; physical EVs and LTA are unaffected.
+        energy_kwh = self.parking["charging_power_kw"] * max(0, elapsed_seconds) / 3600
+        self.soc_pct = min(self.parking["charging_target_soc_pct"], self.soc_pct + 100 * energy_kwh / self.capacity)
+        if self.soc_pct >= self.parking["charging_target_soc_pct"]:
+            self.charging_state = "COMPLETE"

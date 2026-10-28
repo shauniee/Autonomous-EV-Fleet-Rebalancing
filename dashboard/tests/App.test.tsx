@@ -7,6 +7,7 @@ vi.mock('../src/components/SingaporeMap', () => ({ SingaporeMap: () => <div>Map 
 function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
+    '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(), ...overrides,
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -137,13 +138,13 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
-  it('keeps Fleet and Demand controls available during a Facilities outage', async () => {
+  it('keeps observations available but blocks new destinations when the provider is unknown', async () => {
     server({ '/api/facilities/facilities': new Error('Facilities down') });
     render(<App/>);
     expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
     expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled());
   });
   it('marks rented EVs and expected end times from Fleet without breaking zone selection', async () => {
     const snapshot = makeFleet();

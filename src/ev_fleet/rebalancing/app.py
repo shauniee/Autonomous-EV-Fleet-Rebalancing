@@ -85,7 +85,8 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                 raise ValueError("wrong demand zone")
             if any(s.zone_id != body.target_zone_id for s in snapshot.facilities):
                 raise ValueError("wrong facility zone")
-            proposed = rank_pairs(fleet, target, snapshot.facilities, config, now, body.quantity)
+            proposed = rank_pairs(fleet, target, snapshot.facilities, config, now,
+                                  body.quantity, body.purpose, body.vehicle_id)
         except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
         expires = now + timedelta(seconds=max(30, config.recommendation_ttl_seconds))
@@ -102,6 +103,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                      "parking_facility_id": edge["facility_id"],
                      "target_position": edge["target_position"],
                      "requires_charging": edge["requires_charging"],
+                     "purpose": body.purpose,
                      "ranked_candidates": [edge["assessment"]], "excluded_candidates": [],
                      "decision_latency_ms": 0.0,
                      "explanation": "Facility-aware simulated relocation; revalidated on approval.",
@@ -114,6 +116,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
                 "recommendation_id": rec_id})
         identifier = str(uuid4())
         result = {"batch_recommendation_id": identifier,
+                  "purpose": body.purpose,
                   "target_zone_id": body.target_zone_id, "requested_count": body.quantity,
                   "recommended_count": len(assignments),
                   "unfulfilled_count": body.quantity - len(assignments),

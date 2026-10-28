@@ -87,8 +87,17 @@ The macOS script loads only the facilities settings from root `.env` into a back
 Kubernetes Secret. To use real parking and charging observations, set
 `FACILITIES_SOURCE=LTA_DATAMALL` and `LTA_DATAMALL_ACCOUNT_KEY=...` there.
 See [LTA DataMall integration](docs/lta-datamall.md) for modelling and freshness rules.
-Rerunning the macOS script restarts Facilities, Rebalancing, Dispatch and Dashboard
-to load the integration and settings. Run it between demos with no active relocations.
+The macOS script builds native images with unique tags and replaces application
+Pods, including simulators, to load the integration. Run it between demos with no
+active relocations. To reopen both interfaces without reading `.env` or deploying:
+
+```bash
+bash scripts/start-kubernetes.sh --connect-only
+```
+
+Existing healthy tunnels are reused; extra EV rollouts do not block the web apps.
+See the [parking and charging walkthrough](docs/lta-datamall.md#end-to-end-walkthrough)
+to verify real destinations, simulated charging to 80%, and subsequent parking.
 
 The script validates Docker Desktop, builds the three application images from
 the checked-in dependency lock, deploys PostgreSQL, Redis, every backend, both

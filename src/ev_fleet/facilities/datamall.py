@@ -8,6 +8,7 @@ from datetime import timedelta
 import os
 import re
 import logging
+from math import isfinite
 
 import httpx
 from pydantic import BaseModel, Field, SecretStr
@@ -105,7 +106,8 @@ def charging_sites(records, observed_at, max_age):
             # "longtitude" is the spelling in LTA's documented schema.
             position = Position(latitude=float(row["latitude"]),
                                 longitude=float(row["longtitude"]))
-            identifier = str(row["locationId"]).strip()
+            identifier = str(row.get("locationId") or (
+                f"{row['postalCode']}-{position.latitude:.6f}-{position.longitude:.6f}")).strip()
             if not identifier:
                 raise ValueError("missing identity")
             chargers = row["chargingPoints"]
@@ -113,17 +115,21 @@ def charging_sites(records, observed_at, max_age):
                 raise ValueError("invalid chargers")
             units = {}
             connectors = set()
+            powers = []
             for charger in chargers:
-                charger_id = str(charger["id"]).strip()
-                if not charger_id or charger_id in units:
-                    raise ValueError("invalid charger identity")
-                states = {}
-                # Some responses group evIds under plugTypes; retain a single
-                # connector identity when it appears in more than one group.
                 groups = [charger, *charger.get("plugTypes", [])]
+                states = {}
                 for group in groups:
                     if group.get("plugType"):
                         connectors.add(str(group["plugType"]))
+                    try:
+                        # The live batch uses numeric powerRating and current;
+                        # older documented responses use chargingSpeed.
+                        power = float(group.get("chargingSpeed", group.get("powerRating", 0)))
+                        if isfinite(power) and 0 < power <= 1000:
+                            powers.append(power)
+                    except (TypeError, ValueError):
+                        pass
                     for connector in group.get("evIds", []):
                         connector_id = str(connector["evCpId"]).strip()
                         if not connector_id:
@@ -131,10 +137,17 @@ def charging_sites(records, observed_at, max_age):
                         state = str(connector.get("status", ""))
                         previous = states.get(connector_id)
                         states[connector_id] = state if previous is None or previous == state else ""
-                # Conservative simulation: one vehicle per charger, even when
-                # several connectors exist. Aggregate station status is not used.
-                units[charger_id] = any(state == "1" for state in states.values())
-            available = sum(units.values())
+                for connector_id, state in states.items():
+                    # Registration code identifies the charger; its suffix is
+                    # a connector. Multiple free connectors are not extra bays.
+                    unit = connector_id.split("-", 1)[0]
+                    members = units.setdefault(unit, {})
+                    previous = members.get(connector_id)
+                    members[connector_id] = state if previous is None or previous == state else ""
+                if not states and charger.get("id"):
+                    units.setdefault(str(charger["id"]), {})
+            available = sum(any(state == "1" for state in members.values())
+                            for members in units.values())
             site = Facility(
                 facility_id=f"lta-charging-{identifier}",
                 name=str(row.get("name") or identifier),
@@ -143,6 +156,7 @@ def charging_sites(records, observed_at, max_age):
                 facility_type="CHARGING", availability_basis="CHARGERS",
                 parking_capacity=None, parking_available=available,
                 charging_bays=len(units), charging_available=available,
+                charging_power_kw=min(powers) if powers else None,
                 connector_types=sorted(connectors),
                 status="OPEN", source="LTA_DATAMALL",
                 availability_observed_at=observed_at,
@@ -206,7 +220,10 @@ class DataMallClient:
         if (url.scheme != "https" or url.userinfo or url.port not in (None, 443)
                 or not re.fullmatch(r"[a-z0-9.-]+\.s3(?:\.ap-southeast-1)?\.amazonaws\.com", url.host)):
             raise DataMallError("LTA_INVALID_DOWNLOAD_LINK")
-        return rows(await self.get(url))
+        payload = await self.get(url)
+        if isinstance(payload, dict) and "evLocationsData" in payload:
+            return rows(payload["evLocationsData"])
+        return rows(payload)
 
 
 async def refresh_feed(store, provider, name):

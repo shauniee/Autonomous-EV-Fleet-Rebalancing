@@ -18,20 +18,55 @@ With Docker Desktop Kubernetes using **kubeadm**, run from the repository root:
 bash scripts/start-kubernetes.sh
 ```
 
-Docker, kubectl, Python 3 and curl must be available. The script builds three
-images, loads whitelisted facilities settings into the `ev-fleet-facilities`
-Secret, deploys the stack and opens both dashboard tunnels. It restarts only
-Facilities, Rebalancing, Dispatch and Dashboard to load this integration.
-Run it between demos, without active relocations. Existing simulator Pods,
-Fleet, the simulation console, PostgreSQL and Redis are not explicitly restarted.
-AMD64 images use emulation on Apple Silicon, matching the existing deployment.
+Docker, kubectl, Python 3 and curl are required. Startup builds native images with
+unique tags, loads whitelisted facilities settings into a Kubernetes Secret and
+replaces application Pods. Run between demos without active relocations; interrupted
+journeys are not reconstructed. PostgreSQL and Redis remain running.
 
 Open Fleet Dispatch at http://127.0.0.1:8080 and the simulation console at
-http://127.0.0.1:8090. Keep the terminal open; Ctrl+C closes only the tunnels.
-Set demand in the simulation console, select that zone in Fleet Dispatch,
-request 1–20 EVs, review their destinations and approve the relocation.
-Live mode uses facility destinations even for quantity one. Legacy single-EV
-HTTP endpoints remain zone-based.
+http://127.0.0.1:8090. Extra EV rollouts do not block the interfaces. Keep the terminal
+open; healthy existing tunnels are reused and owned tunnels reconnect after Pod
+changes. Ctrl+C closes only owned tunnels.
+
+To reopen both apps **without reading `.env`, building or deploying**:
+
+```bash
+bash scripts/start-kubernetes.sh --connect-only
+```
+
+If another process occupies either port, stop its old tunnel yourself or choose
+unused ports:
+
+```bash
+DASHBOARD_PORT=18080 SIMULATION_CONSOLE_PORT=18090 bash scripts/start-kubernetes.sh --connect-only
+```
+
+## End-to-end walkthrough
+
+1. Run full startup after enabling LTA_DATAMALL. Wait for both LTA feeds to be
+   FRESH and for online, available EVs to appear. Extra Pods can still be updating.
+2. In the simulation console, set CBD demand to 12. In Fleet Dispatch, select CBD
+   and confirm that real parking and charging locations are shown.
+3. Choose **Parking / demand rebalancing**, quantity one, then **Recommend EV**.
+   Review its LTA carpark, approve and watch the relocation reach SUCCEEDED.
+   Fleet overview should then show its `lta-parking-...` parked facility ID.
+4. Choose **Charging — replenish to 80%**. Select an available EV below 80% SOC
+   (or leave Any eligible EV to prioritise the lowest-SOC eligible car). Request
+   and explicitly approve a recommendation to an available LTA charger. If the
+   zone has no free chargers, choose another zone; no mock substitute is used.
+5. After verified arrival, observe **CHARGING (simulated)** in Fleet overview,
+   increasing SOC and UNAVAILABLE status. Charging uses the existing 30x time
+   scale. At 80%, it reports **Charging complete · parked** and becomes available.
+6. Keep that vehicle selected, switch to **Parking / demand rebalancing**, request
+   a destination and approve again. On arrival at a carpark, its old local charger
+   allocation is released. It consumes battery while moving to the carpark.
+
+Live mode uses facility destinations even for quantity one. Initial EVs that have
+not yet been allocated a destination are labelled Unallocated and still start at
+approximate zone coordinates. Legacy single-EV HTTP endpoints remain zone-based.
+Batch requests accept `purpose` (REBALANCE or CHARGE) and optional `vehicle_id`
+(quantity one). Facilities exposes occupied/pending allocations at
+`GET /api/v1/vehicles/{vehicle_id}/parking`.
 
 Compose reads the same `.env` settings. Direct Python execution requires exported
 environment variables. For manual Kubernetes or Windows deployment, load the
@@ -64,9 +99,15 @@ sections 1, 2.12, 2.28 and 2.29. API base:
   Total parking capacity and associated charging facilities remain unknown.
 - Charging locations stay separate from carparks: no shared identifier is supplied.
   Individual connector statuses determine availability; station status is not enough.
-  One simulated vehicle per charger is a conservative assumption, not a claim
-  about physical bays or simultaneous sessions. Connector compatibility and
-  battery replenishment are not modelled. High-SOC cars do not occupy chargers.
+  The live batch wraps stations in `evLocationsData`, omits station/charger IDs,
+  and supplies postal codes plus `evCpId`. Station identities are derived from
+  postal code and coordinates; connector registration prefixes identify chargers.
+  One simulated vehicle per charger is conservative, not a guarantee of bays or
+  simultaneous sessions. Charging uses the minimum advertised station power
+  (numeric `powerRating`, or documented `chargingSpeed`), with 7.4 kW as an explicit
+  fallback assumption. Rate, connector compatibility and charging taper are
+  simplified; no real charger is controlled. Explicit charging requests consider
+  cars below 80%; ordinary rebalancing sends low-arrival-SOC cars to chargers.
 - Each real coordinate is assigned to the nearest existing operating zone;
   this does not represent official geographic boundaries. Unknown total capacity
   receives neutral parking utility rather than a fabricated occupancy ratio.
@@ -79,6 +120,6 @@ sections 1, 2.12, 2.28 and 2.29. API base:
   The dashboard reports each feed's freshness/errors; live mode never silently
   substitutes mock data. Availability does not guarantee a real space on arrival.
 
-Authenticated API responses and actual Kubernetes startup remain unverified until
-the key is supplied. Provider fixtures are illustrative schema-based records;
-batch JSON currently supports a list or a `value` array.
+The new charging cycle awaits user-run deployment and walkthrough; tests were not
+rerun. Idle simulator restarts restore reported position/SOC and allocation.
+Charging pauses while Facilities cannot be verified and accrues no offline energy.

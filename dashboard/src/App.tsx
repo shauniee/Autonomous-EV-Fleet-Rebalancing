@@ -30,6 +30,8 @@ export default function App() {
   const [selected, setSelected] = useState('');
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [quantity, setQuantity] = useState(1);
+  const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
+  const [selectedVehicle, setSelectedVehicle] = useState('');
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
@@ -73,7 +75,8 @@ export default function App() {
   const vehicles = fleet.data?.vehicles ?? [];
   const sites = facilities.data?.facilities ?? [];
   const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
-  const facilityWorkflow = quantity > 1 || liveFacilities;
+  // An unknown provider must not fall back to a zone-only destination.
+  const facilityWorkflow = facilities.data?.data_source !== 'MOCK' || quantity > 1 || purpose === 'CHARGE' || !!selectedVehicle;
   const zone = zones.find(z => z.zone_id === selected);
   const current = recommendation && vehicles.find(v => v.vehicle_id === recommendation.selected_vehicle_id);
   const fresh = !!heat.data && !heat.error && !!fleet.data && !fleet.error && heat.data.fleet_status === 'FRESH'
@@ -96,7 +99,9 @@ export default function App() {
         if (!controller.signal.aborted) setRecommendation(result);
       } else {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
-          method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity }), signal: controller.signal,
+          method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity,
+            ...(purpose === 'CHARGE' ? { purpose } : {}),
+            ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}) }), signal: controller.signal,
         });
         if (!controller.signal.aborted) setBatch(result);
       }
@@ -174,7 +179,18 @@ export default function App() {
       </section>
       <section className="panel relocation-request" aria-labelledby="relocation-request-title"><div className="section-title"><h2 id="relocation-request-title">Relocation request</h2><span className="muted">1–20 EVs</span></div>
         {zone ? <><p>How many EVs should be relocated to <strong>{zone.name}</strong>?</p>
-          <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting} onChange={event => {
+          <label htmlFor="relocation-purpose">Destination purpose </label>
+          <select id="relocation-purpose" value={purpose} disabled={recommending || submitting} onChange={event => {
+            setPurpose(event.target.value as 'REBALANCE' | 'CHARGE');
+            setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
+          }}><option value="REBALANCE">Parking / demand rebalancing</option><option value="CHARGE">Charging — replenish to 80%</option></select>
+          {purpose === 'CHARGE' && <p className="muted">Lower-SOC EVs are prioritised for available chargers in this zone. Charging is simulated after confirmed arrival; charging EVs remain unavailable until 80% SOC.</p>}
+          <label htmlFor="relocation-vehicle">Vehicle </label>
+          <select id="relocation-vehicle" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
+            setSelectedVehicle(event.target.value); if (event.target.value) setQuantity(1);
+            setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
+          }}><option value="">Any eligible EV</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select>
+          <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
             const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
             setQuantity(value); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
           }}/></div>

@@ -114,6 +114,8 @@ services:
     build: .
     init: true
     profiles: [relocation]
+    environment:
+      FACILITIES_URL: http://facilities:8000
     command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-01", "--zone", "bishan", "--soc", "90", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
     depends_on:
       fleet: {condition: service_healthy}
@@ -122,6 +124,8 @@ services:
     build: .
     init: true
     profiles: [relocation]
+    environment:
+      FACILITIES_URL: http://facilities:8000
     command: ["python", "-m", "ev_fleet.simulator.cli", "--fleet-url", "http://fleet:8000", "--dispatch-url", "http://dispatch:8000", "--vehicle-id", "ev-moving-02", "--zone", "tampines", "--soc", "60", "--time-scale", "${SIMULATION_TIME_SCALE:-30}"]
     depends_on:
       fleet: {condition: service_healthy}

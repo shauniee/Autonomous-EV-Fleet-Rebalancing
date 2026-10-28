@@ -6,7 +6,7 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
   batch: BatchRecommendation; remaining: number; disabled: boolean; onReview: () => void;
 }) {
   return <div className="recommendation" data-testid="batch-recommendation">
-    <div className="eyebrow">Parking-aware batch recommendation</div>
+    <div className="eyebrow">{batch.purpose === 'CHARGE' ? 'Charging destination recommendation' : 'Parking-aware batch recommendation'}</div>
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
     <p>{batch.explanation}</p>
     {batch.unfulfilled_count > 0 && <p className="warning" role="status">

@@ -19,6 +19,7 @@ class Facility(Model):
     parking_available: int = Field(ge=0)
     charging_bays: int | None = Field(default=None, ge=0)
     charging_available: int = Field(ge=0)
+    charging_power_kw: float | None = Field(default=None, gt=0, le=1000)
     connector_types: list[str] = Field(default_factory=list)
     status: Literal["OPEN", "CLOSED", "UNKNOWN"]
     source: Literal["MOCK", "LTA_DATAMALL"] = "MOCK"
@@ -85,3 +86,20 @@ class ParkingHold(Model):
     requires_charging: bool
     charging_allocated: bool
     status: Literal["RESERVED", "OCCUPIED", "RELEASED"]
+
+
+class ParkedFacility(Model):
+    facility_id: str
+    name: str
+    position: Position
+    zone_id: str
+    source: Literal["MOCK", "LTA_DATAMALL"]
+    charging_allocated: bool
+    charging_power_kw: float = Field(gt=0, le=1000)
+    charging_target_soc_pct: float = Field(gt=0, le=100)
+
+
+class VehicleParking(Model):
+    vehicle_id: str
+    parking: ParkedFacility | None = None
+    pending: bool = False

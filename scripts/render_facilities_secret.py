@@ -47,10 +47,20 @@ def settings(path):
 
 
 if __name__ == "__main__":
+    arguments = sys.argv[1:]
+    check = "--check" in arguments
+    arguments = [argument for argument in arguments if argument != "--check"]
     try:
-        values = settings(Path(sys.argv[1] if len(sys.argv) > 1 else ".env"))
+        values = settings(Path(arguments[0] if arguments else ".env"))
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
+    if values["FACILITIES_SOURCE"] == "LTA_DATAMALL" and not values["LTA_DATAMALL_ACCOUNT_KEY"].strip():
+        raise SystemExit("LTA_DATAMALL_ACCOUNT_KEY is required when FACILITIES_SOURCE=LTA_DATAMALL")
+    if check:
+        print("Facilities source: " + values["FACILITIES_SOURCE"])
+        if values["FACILITIES_SOURCE"] == "MOCK":
+            print("Real parking/charging is disabled. Set FACILITIES_SOURCE=LTA_DATAMALL to enable it.")
+        raise SystemExit(0)
     print(json.dumps({
         "apiVersion": "v1", "kind": "Secret",
         "metadata": {"name": "ev-fleet-facilities", "namespace": "ev-fleet"},

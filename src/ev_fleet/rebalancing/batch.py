@@ -3,11 +3,11 @@
 Not a guaranteed globally optimal matching. It observes mock capacity but
 does not reserve space until a dispatcher explicitly approves.
 """
-from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.rebalancing.policy import assess
 
 
-def rank_pairs(fleet, zone, facilities, policy, now, quantity):
+def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANCE", vehicle_id=None):
     edges = []
     left = {}
     left_charge = {}
@@ -21,10 +21,14 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity):
                   "charging": {"observed_at": now.isoformat(),
                                "available_slots": site.charging_available}}
         for vehicle in fleet["vehicles"]:
+            if vehicle_id and vehicle["vehicle_id"] != vehicle_id:
+                continue
             assessment = assess(vehicle, target, policy, now)
             if not assessment["eligible"]:
                 continue
-            need_charge = assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+            if purpose == "CHARGE" and assessment["current_soc_pct"] >= CHARGING_TARGET_SOC_PCT:
+                continue
+            need_charge = purpose == "CHARGE" or assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
             if site.facility_type == "CHARGING" and not need_charge:
                 continue  # Do not send high-SOC cars to occupy a charger as ordinary parking.
             if need_charge and site.charging_available <= 0:
@@ -41,7 +45,8 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity):
                 "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"],
                 "score": min(1.0, score), "assessment": assessment,
             })
-    edges.sort(key=lambda e: (-e["score"], -e["predicted_arrival_soc_pct"],
+    edges.sort(key=lambda e: ((e["assessment"]["current_soc_pct"] if purpose == "CHARGE" else 0),
+                               -e["score"], -e["predicted_arrival_soc_pct"],
                                e["distance_km"], e["vehicle_id"], e["facility_id"]))
     assigned_vehicles = set()
     selected = []

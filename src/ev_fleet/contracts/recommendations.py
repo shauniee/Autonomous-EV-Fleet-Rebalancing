@@ -1,5 +1,6 @@
 from uuid import UUID
-from pydantic import AwareDatetime, Field
+from typing import Literal
+from pydantic import AwareDatetime, Field, model_validator
 from .common import Model, Position
 from .demand import ZoneState
 
@@ -42,6 +43,7 @@ class Recommendation(Model):
     parking_facility_id: str | None = None
     target_position: Position | None = None
     requires_charging: bool = False
+    purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     ranked_candidates: list[CandidateAssessment]
     excluded_candidates: list[CandidateAssessment]
     decision_latency_ms: float = Field(ge=0)
@@ -50,6 +52,14 @@ class Recommendation(Model):
 
 class BatchRecommendationRequest(RecommendationRequest):
     quantity: int = Field(ge=1, le=20)
+    purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
+    vehicle_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+    @model_validator(mode="after")
+    def selected_vehicle_quantity(self):
+        if self.vehicle_id and self.quantity != 1:
+            raise ValueError("a selected vehicle requires quantity one")
+        return self
 
 
 class ParkingAssignment(Model):
@@ -67,6 +77,7 @@ class ParkingAssignment(Model):
 class BatchRecommendation(Model):
     batch_recommendation_id: UUID
     target_zone_id: str
+    purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     requested_count: int = Field(ge=1, le=20)
     recommended_count: int = Field(ge=0, le=20)
     unfulfilled_count: int = Field(ge=0, le=20)

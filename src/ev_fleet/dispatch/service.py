@@ -10,7 +10,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
 from ev_fleet.contracts.dispatch import DispatchApproval
-from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
@@ -128,6 +128,8 @@ class DispatchService:
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
         if parking:
+            if recommendation.purpose == "CHARGE" and assessment["current_soc_pct"] >= CHARGING_TARGET_SOC_PCT:
+                raise HTTPException(409, "CHARGING_TARGET_ALREADY_REACHED")
             requires_charge = (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
                                or recommendation.requires_charging)
             if parking.facility_type == "CHARGING" and not requires_charge:

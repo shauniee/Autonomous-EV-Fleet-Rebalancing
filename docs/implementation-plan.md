@@ -2,11 +2,12 @@
 
 ## LTA DataMall integration — 28 October 2026
 
-Implemented real parking/charging observations, refresh and expiry checks,
-simulated allocations, dashboard provenance and macOS startup. See [LTA setup](lta-datamall.md).
-Authenticated API access and cluster rollout remain unverified pending the key.
-Scope cleanup removed Windows startup changes and unrelated service restarts;
-tests were not rerun during cleanup. The roadmap below is historical.
+Implemented real LTA destinations, charging requests and vehicle selection,
+allocated parking telemetry and simulated charging to 80%. macOS startup supports
+native images, tunnel reuse and connection-only mode. See [LTA setup](lta-datamall.md).
+Live parsing, connection-only startup, build and syntax checks passed; the updated
+charging cycle awaits user-run deployment and verification. Tests were not rerun.
+The roadmap below is historical.
 
 1. **Backend foundation (implemented):** contracts, Fleet, Demand, Rebalancing, stationary
    simulators, health, unit/API/real HTTP tests and Compose definition. Exit evidence:
