@@ -77,6 +77,8 @@ class ParkingHoldRequest(Model):
     vehicle_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     expected_zone_id: str
     expected_position: Position
+    # Road-only arrival endpoint; centre remains the immutable facility identity.
+    access_position: Position | None = None
     requires_charging: bool = False
 
 class ParkingHold(Model):
