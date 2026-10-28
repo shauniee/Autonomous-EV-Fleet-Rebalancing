@@ -9,13 +9,15 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
     <div className="eyebrow">{batch.purpose === 'CHARGE' ? 'Charging destination recommendation' : 'Automatic facility recommendation'}</div>
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
     <p>{batch.explanation}</p>
+    {batch.traffic_status && <p className="muted">Traffic feed: <strong>{batch.traffic_status}</strong> · Preliminary straight-corridor estimates only. Actual route is validated on approval.</p>}
     {batch.unfulfilled_count > 0 && <p className="warning" role="status">
       {batch.unfulfilled_count} requested EV(s) could not be matched to eligible vehicles and parking spaces.</p>}
     <div className="table-scroll"><table aria-label="Batch vehicle-to-parking assignments">
-      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Score</th></tr></thead>
+      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Traffic ETA</th><th>Score</th></tr></thead>
       <tbody>{batch.assignments.map(item => <tr key={item.recommendation_id}>
         <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ' · parking'}</td>
         <td>{number(item.distance_km, ' km')}</td><td>{number(item.predicted_arrival_soc_pct, '%')}</td>
+        <td>{item.traffic_assessment?.estimated_duration_seconds != null ? number(item.traffic_assessment.estimated_duration_seconds / 60, ' min') : 'Unknown'}</td>
         <td>{number(item.score)}</td>
       </tr>)}</tbody>
     </table></div>

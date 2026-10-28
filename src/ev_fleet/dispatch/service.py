@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
@@ -16,6 +17,9 @@ from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
 from .routing import RoutingSettings, driving_route
+from .traffic_routes import choose_traffic_route
+from ev_fleet.rebalancing.traffic import assess_traffic
+from ev_fleet.common.travel import distance_km
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
@@ -33,6 +37,7 @@ class DispatchService:
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.routing = RoutingSettings.from_env()
+        self.traffic_enabled = os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
 
     async def start(self):
         await self.repository.start()
@@ -128,8 +133,21 @@ class DispatchService:
                 "available_slots": parking.charging_available}
         origin = vehicle.telemetry.position.model_dump() if vehicle.telemetry else None
         route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
-                                    self.settings.arrival_tolerance_km) if origin else None
+                                    self.settings.arrival_tolerance_km,
+                                    facility=parking is not None) if origin else None
+        if route and self.traffic_enabled:
+            traffic = await request_json(self.client, "GET",
+                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions")
+            # A confirmed, geolocated closure must not be bypassed. Missing
+            # traffic feeds are visible as UNKNOWN, not an all-clear.
+            route = await choose_traffic_route(self.client, route, origin,
+                destination.model_dump(), self.settings.arrival_tolerance_km,
+                traffic, self.clock.now(), facility=parking is not None)
         if route:
+            # Physical destination is the road endpoint, NOT the carpark's
+            # off-road map coordinate. Fleet keeps the strict 50 m arrival rule.
+            destination = route.geometry[-1]
+            assessed_target["position"] = destination.model_dump(mode="json")
             # Routing may take longer than a telemetry interval. Revalidate a
             # fresh Fleet version without reusing a route from a moved origin.
             fresh = await request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot)
@@ -160,10 +178,14 @@ class DispatchService:
             record.parking_request = ParkingHoldRequest(
                 dispatch_id=record.data["dispatch_id"], vehicle_id=vehicle.vehicle_id,
                 expected_zone_id=target.zone_id, expected_position=parking.position,
+                access_position=destination if route else None,
                 requires_charging=requires_charge).model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
-            expected_version=vehicle.state_version, target_zone_id=target.zone_id,
+            expected_version=vehicle.state_version,
+            expected_control_version=vehicle.control_version,
+            route_origin=route.geometry[0] if route else None,
+            target_zone_id=target.zone_id,
             target_position=destination, approve_before=recommendation.expires_at,
             min_reserve_pct=max(policy.min_reserve_pct, self.settings.min_reserve_pct),
             route_factor=max(policy.route_factor, self.settings.route_factor),
@@ -237,6 +259,46 @@ class DispatchService:
         except HTTPException as exc:
             logging.warning("parking finalisation pending dispatch=%s error=%s",
                             record.data["dispatch_id"], exc.detail)
+
+    async def traffic_check(self, dispatch_id):
+        """Read-only active-journey condition check; never alters command identity."""
+        record = await self.get(dispatch_id)
+        cmd = record.get("command")
+        if not self.traffic_enabled or not cmd or not cmd.get("route"):
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "NO_LIVE_ROAD_ROUTE"}
+        if record["state"] in TERMINAL:
+            return {"status": "FINISHED", "action": "NONE", "reason": "JOURNEY_TERMINAL"}
+        traffic, fleet = await asyncio.gather(
+            request_json(self.client, "GET",
+                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions"),
+            request_json(self.client, "GET",
+                f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == record["vehicle_id"]), None)
+        if vehicle is None or vehicle.stale or vehicle.telemetry is None:
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "TELEMETRY_UNAVAILABLE"}
+        points = cmd["route"]["geometry"]
+        location = vehicle.telemetry.position.model_dump()
+        closest = min(range(len(points)), key=lambda i: distance_km(location, points[i]))
+        if distance_km(location, points[closest]) > .05:
+            return {"status": "UNKNOWN", "action": "NONE", "reason": "VEHICLE_NOT_ON_RECORDED_ROUTE"}
+        remaining = points[closest:]
+        if len(remaining) < 2:
+            return {"status": "ARRIVING", "action": "NONE", "reason": "NEAR_DESTINATION"}
+        estimated_length = sum(distance_km(p, q) for p, q in zip(remaining, remaining[1:]))
+        total_geometry_length = sum(distance_km(p, q) for p, q in zip(points, points[1:]))
+        baseline = cmd["route"]["duration_seconds"] * estimated_length / max(.001, total_geometry_length)
+        report = assess_traffic(remaining, estimated_length, baseline, traffic, self.clock.now())
+        if report["blocked"]:
+            return {"status": "BLOCKED_AHEAD", "action": "OPERATOR_REVIEW_REQUIRED",
+                    "reason": "CLOSURE_ON_REMAINING_ROUTE", "assessment": report}
+        if report["status"] != "FRESH":
+            return {"status": "UNKNOWN", "action": "NONE",
+                    "reason": "TRAFFIC_COVERAGE_INCOMPLETE", "assessment": report}
+        if report["delay_factor"] is not None and report["delay_factor"] >= 1.5:
+            return {"status": "CONGESTED_AHEAD", "action": "OPERATOR_REVIEW_REQUIRED",
+                    "reason": "SIGNIFICANT_DELAY", "assessment": report}
+        return {"status": "MONITORED", "action": "NONE", "reason": "NO_RECORDED_DISRUPTION",
+                "assessment": report}
 
     async def approve(self, body):
         record = await self.store.begin(body)

@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import type { ChargingTask, Fleet, Vehicle } from '../api/contracts';
+import type { ChargerAdvice, ChargingAdvice, ChargingTask, Fleet, Vehicle } from '../api/contracts';
 import { api, message } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 
-export function ChargingOperations({ vehicles, onUpdated }: {
+export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, adviceFresh, canPrepare, onPrepare }: {
   vehicles: Vehicle[]; onUpdated: () => void;
+  advice?: ChargingAdvice; adviceError?: string; adviceFresh: boolean;
+  canPrepare: boolean; onPrepare: (item: ChargerAdvice) => void;
 }) {
   const tasks = usePolling<{ tasks: ChargingTask[] }>('/api/fleet/charging-tasks');
   const [staff, setStaff] = useState('Ground Team A');
@@ -65,6 +67,23 @@ export function ChargingOperations({ vehicles, onUpdated }: {
               onClick={() => void create(v)}>Create charging task</button>}</td>
       </tr>)}</tbody></table></div>
     {!low.length && <p className="muted">No fresh online EV telemetry below the alert threshold.</p>}
+    <h3>Suggested charging destinations (25% SOC or lower)</h3>
+    <p className="muted">Read-only backend advice ranks reachable chargers using current battery, estimated travel energy, 20% default arrival reserve, and simulated available charging capacity. The recommendation is not a reservation or dispatch; the operator must request, review and approve a fresh route.</p>
+    {(!adviceFresh || adviceError) && <p className="warning" role="status">Charging advice unavailable or stale. Do not assume there are no low-battery vehicles.</p>}
+    {!advice && <p className="muted">Awaiting battery advice from Rebalancing.</p>}
+    {adviceFresh && advice?.vehicles.length === 0 && <p className="muted">No EVs at or below the advisory threshold in the current Fleet snapshot.</p>}
+    {advice && advice.vehicles.length > 0 && <div className="table-scroll"><table aria-label="Suggested chargers for low-battery vehicles">
+      <thead><tr><th>EV / SOC</th><th>Suggested charging destination</th><th>Distance estimate</th><th>Arrival SOC estimate</th><th>Action</th></tr></thead>
+      <tbody>{advice.vehicles.map(item => <tr key={item.vehicle_id}>
+        <td>{item.vehicle_id} · {item.current_soc_pct.toFixed(1)}%</td>
+        <td>{item.charger ? <>{item.charger.facility_name} ({item.charger.zone_id})<small>{item.charger.charging_available} simulated charging slot(s) currently available</small></>
+          : <span className="warning">{item.status === 'INELIGIBLE' ? 'EV not eligible' : 'No safe reachable charger'} · {item.reasons.join(', ')}</span>}</td>
+        <td>{item.charger ? item.charger.distance_km.toFixed(2) + ' km' : '—'}</td>
+        <td>{item.charger ? item.charger.predicted_arrival_soc_pct.toFixed(1) + '%' : '—'}</td>
+        <td>{item.charger && <button disabled={!adviceFresh || !canPrepare} onClick={() => onPrepare(item)}>Prepare charger route</button>}</td>
+      </tr>)}</tbody>
+    </table></div>}
+    <p className="muted">A prepared route selects this exact charger in the Relocation request form. Press Recommend EV, check the new recommendation, then approve separately. No automatic dispatch.</p>
     <h3>Ground-staff task log</h3>
     <label>Assigned staff or team <input value={staff} maxLength={64} onChange={e => setStaff(e.target.value)} /></label>
     <div className="table-scroll"><table><thead><tr><th>EV</th><th>Task status</th><th>Staff</th><th>Action</th></tr></thead>

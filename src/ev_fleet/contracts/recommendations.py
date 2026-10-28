@@ -23,6 +23,7 @@ class CandidateAssessment(Model):
     weighted_components: dict[str, float] | None = None
     score: float | None = Field(default=None, ge=0, le=1)
     charging_assessment: str | None = None
+    traffic_assessment: dict | None = None
 
 
 class SnapshotReference(Model):
@@ -46,6 +47,7 @@ class Recommendation(Model):
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     ranked_candidates: list[CandidateAssessment]
     excluded_candidates: list[CandidateAssessment]
+    traffic_assessment: dict | None = None
     decision_latency_ms: float = Field(ge=0)
     explanation: str
     assumptions: list[str]
@@ -54,11 +56,14 @@ class BatchRecommendationRequest(RecommendationRequest):
     quantity: int = Field(ge=1, le=20)
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     vehicle_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    facility_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def selected_vehicle_quantity(self):
         if self.vehicle_id and self.quantity != 1:
             raise ValueError("a selected vehicle requires quantity one")
+        if self.facility_id and (self.purpose != "CHARGE" or not self.vehicle_id or self.quantity != 1):
+            raise ValueError("a selected charging facility requires one selected EV and CHARGE purpose")
         return self
 
 
@@ -72,6 +77,7 @@ class ParkingAssignment(Model):
     distance_km: float = Field(ge=0)
     predicted_arrival_soc_pct: float
     score: float = Field(ge=0, le=1)
+    traffic_assessment: dict | None = None
 
 
 class BatchRecommendation(Model):
@@ -84,5 +90,7 @@ class BatchRecommendation(Model):
     created_at: AwareDatetime
     expires_at: AwareDatetime
     assignments: list[ParkingAssignment]
+    traffic_status: str | None = None
+    traffic_generated_at: AwareDatetime | None = None
     explanation: str
     assumptions: list[str]

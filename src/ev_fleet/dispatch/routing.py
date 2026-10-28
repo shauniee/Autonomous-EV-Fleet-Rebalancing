@@ -1,4 +1,8 @@
-"""Optional OneMap REST adapter. Never logs tokens or silently substitutes routes."""
+"""Optional OneMap REST adapter. Road endpoints are physical EV coordinates.
+
+Road-only movement never introduces an off-road connector segment. Road matching
+is an *idle simulator spawn-time* operation, never an in-flight correction.
+"""
 import os
 import httpx
 from fastapi import HTTPException
@@ -6,8 +10,12 @@ from pydantic import BaseModel, SecretStr
 from typing import Literal
 
 from ev_fleet.common.travel import distance_km
+from ev_fleet.common.parking import MAX_FACILITY_ROAD_ACCESS_KM
 from ev_fleet.contracts.common import utcnow
 from ev_fleet.contracts.routing import RoadRoute
+
+# These are search limits, NOT Fleet's 50 m arrival tolerance.
+MAX_INITIAL_ROAD_MATCH_KM = .20
 
 
 class RoutingSettings(BaseModel):
@@ -48,9 +56,7 @@ def decode_polyline(encoded):
     return points
 
 
-async def driving_route(client, settings, origin, destination, tolerance_km):
-    if settings.provider == "SIMULATED":
-        return None
+async def _onemap_route(client, settings, origin, destination):
     if not settings.access_token.get_secret_value():
         raise HTTPException(503, "ONEMAP_TOKEN_MISSING")
     try:
@@ -74,9 +80,6 @@ async def driving_route(client, settings, origin, destination, tolerance_km):
                 {"text": str(step[9] or step[1] or step[0]), "distance_m": float(step[2])}
                 for step in payload.get("route_instructions", [])])
         geometry = [point.model_dump() for point in route.geometry]
-        if (distance_km(origin, geometry[0]) > tolerance_km
-                or distance_km(destination, geometry[-1]) > tolerance_km):
-            raise HTTPException(409, "ONEMAP_ENDPOINT_TOO_FAR")
         length = sum(distance_km(a, b) for a, b in zip(geometry, geometry[1:]))
         if (route.distance_km > 0 and length <= 0) or (route.distance_km == 0 and length > .000001):
             raise ValueError("empty route path")
@@ -87,3 +90,51 @@ async def driving_route(client, settings, origin, destination, tolerance_km):
         raise HTTPException(503, "ONEMAP_UNAVAILABLE") from None
     except (ValueError, TypeError, KeyError, IndexError, AttributeError):
         raise HTTPException(503, "ONEMAP_INVALID_RESPONSE") from None
+
+
+async def driving_route(client, settings, origin, destination, tolerance_km, *, facility=False):
+    if settings.provider == "SIMULATED":
+        return None
+    route = await _onemap_route(client, settings, origin, destination)
+    # An EV must already be on the road at journey start. Do not append a
+    # connector or enlarge the strict origin/physical-arrival tolerance.
+    # Once spawn road matching has run, OneMap's first road vertex must
+    # already coincide with the simulator (within 5 metres). Never draw
+    # the 50 m tolerance as a virtual connector at departure.
+    if distance_km(origin, route.geometry[0].model_dump()) > min(tolerance_km, .005):
+        raise HTTPException(409, "ONEMAP_ORIGIN_NOT_ON_ROAD")
+    # A facility centre is not a road entrance. Use OneMap's drive-route end
+    # as the physical target only if it is reasonably close to that facility.
+    # Road endpoint is stored in claim/command/parking hold, NOT animated from
+    # the route endpoint to the geographic facility centre.
+    limit = MAX_FACILITY_ROAD_ACCESS_KM if facility else tolerance_km
+    if distance_km(destination, route.geometry[-1].model_dump()) > limit:
+        raise HTTPException(409, "ONEMAP_FACILITY_NO_ROAD_ACCESS" if facility
+                            else "ONEMAP_ENDPOINT_TOO_FAR")
+    return route
+
+
+async def road_match_spawn(client, settings, origin):
+    """Resolve an idle simulated EV's initial position to a OneMap drive road.
+
+    This is deliberately separate from driving_route and never invoked after
+    the EV has begun an active journey. Return an error instead of retaining a
+    known off-road position or inserting an artificial road connector.
+    """
+    if settings.provider == "SIMULATED":
+        return {"position": origin, "source": "SIMULATED"}
+    # Multiple small probes increase the odds of a routable road without
+    # silently expanding the maximum permissible initial placement offset.
+    for offset in ((.002, 0), (0, .002), (-.002, 0)):
+        target = {"latitude": origin["latitude"] + offset[0],
+                  "longitude": origin["longitude"] + offset[1]}
+        try:
+            route = await _onemap_route(client, settings, origin, target)
+        except HTTPException as exc:
+            if exc.detail == "ONEMAP_NO_ROUTE":
+                continue
+            raise
+        matched = route.geometry[0].model_dump()
+        if distance_km(origin, matched) <= MAX_INITIAL_ROAD_MATCH_KM:
+            return {"position": matched, "source": "ONEMAP"}
+    raise HTTPException(409, "ONEMAP_NO_SAFE_SPAWN_ROAD")

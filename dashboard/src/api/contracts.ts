@@ -1,7 +1,21 @@
 // Wire fields consumed from the existing Pydantic contracts; no business rules here.
 export interface Position { latitude: number; longitude: number }
+export interface TrafficRouteAssessment {
+  status: string; blocked: boolean; delay_factor: number | null;
+  estimated_duration_seconds: number | null; risk: number | null;
+  matched_speed_segments: number; roadworks: number; incidents: number;
+}
+export interface TrafficSegment { id: string; road: string; start: Position; end: Position; min_kph: number; max_kph: number }
+export interface TrafficIncident { id: string; type: string; position: Position; message: string }
+export interface TrafficSnapshot {
+  source: string; status: string; generated_at: string;
+  feeds: Record<string, {status: string; observed_at: string | null; count: number; error: string | null}>;
+  speeds: TrafficSegment[]; incidents: TrafficIncident[];
+  roadworks: {id: string; road: string; start_date: string; end_date: string}[];
+}
 export interface RoadRoute {
-  source: 'ONEMAP'; fetched_at: string; geometry: Position[];
+  source: 'ONEMAP' | 'OSRM'; fetched_at: string; geometry: Position[];
+  rerouted?: boolean; traffic_assessment?: TrafficRouteAssessment | null;
   distance_km: number; duration_seconds: number;
   instructions: { text: string; distance_m: number }[];
 }
@@ -18,6 +32,21 @@ export interface HeatMap {
   generated_at: string; demand_snapshot_at: string; fleet_snapshot_at: string | null;
   status: string; issues: string[]; fleet_status: string; zones: Zone[];
 }
+export interface ChargerAdvice {
+  vehicle_id: string; current_soc_pct: number;
+  status: 'RECOMMENDED' | 'NO_SAFE_CHARGER' | 'INELIGIBLE';
+  reasons: string[];
+  charger: {
+    facility_id: string; facility_name: string; zone_id: string;
+    source: 'MOCK' | 'LTA_DATAMALL'; distance_km: number;
+    energy_required_kwh: number; predicted_arrival_soc_pct: number;
+    charging_available: number; charging_power_kw: number | null;
+  } | null;
+}
+export interface ChargingAdvice {
+  generated_at: string; trigger_soc_pct: number; min_arrival_reserve_pct: number;
+  vehicles: ChargerAdvice[]; assumptions: string[];
+}
 export interface ChargingTask {
   task_id: string; vehicle_id: string;
   status: 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
@@ -33,9 +62,15 @@ export interface Vehicle {
   vehicle_id: string; current_zone_id: string | null; stale: boolean; connectivity: string;
   effective_availability: string; effective_relocation_state: string; received_at: string | null;
   telemetry: { position: Position; soc_pct: number; observed_at: string;
+    session_id: string; sequence: number;
     active_dispatch_id?: string | null; distance_travelled_km?: number | null;
     parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
-    charging_power_kw?: number | null } | null;
+    charging_power_kw?: number | null;
+    speed_kph?: number | null; heading_deg?: number | null;
+    odometer_km?: number | null; battery_temp_c?: number | null;
+    motor_temp_c?: number | null; power_kw?: number | null;
+    battery_soh_pct?: number | null; gps_quality?: string | null;
+    fault_codes?: string[] } | null;
 }
 export interface Fleet { instance_id: string; snapshot_at: string; vehicles: Vehicle[] }
 export interface Candidate {
@@ -83,12 +118,13 @@ export interface FacilitiesSnapshot {
 export interface ParkingAssignment {
   recommendation_id: string; vehicle_id: string; facility_id: string; facility_name: string;
   target_position: Position; requires_charging: boolean; distance_km: number;
-  predicted_arrival_soc_pct: number; score: number;
+  predicted_arrival_soc_pct: number; score: number; traffic_assessment?: TrafficRouteAssessment | null;
 }
 export interface BatchRecommendation {
   batch_recommendation_id: string; target_zone_id: string;
   purpose?: 'REBALANCE' | 'CHARGE';
   requested_count: number; recommended_count: number; unfulfilled_count: number;
+  traffic_status?: string; traffic_generated_at?: string;
   created_at: string; expires_at: string; explanation: string;
   assignments: ParkingAssignment[]; assumptions: string[];
 }
