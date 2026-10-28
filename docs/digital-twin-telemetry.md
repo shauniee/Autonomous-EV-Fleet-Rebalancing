@@ -38,6 +38,20 @@ The odometer and heading restore from the last accepted *idle* reading
 when an EV simulator restarts. An unresolved journey is never resumed
 by guessing physical location or generating new browser motion.
 
+## Frequent telemetry and safe dispatch concurrency
+
+At 1 Hz, Fleet increments the observation `state_version` for every accepted
+sample. Comparing that field during dispatch approval would cause continual
+`VEHICLE_VERSION_CONFLICT` errors. Fleet therefore also maintains a
+`control_version`, incremented for session ownership changes, availability
+or charging/relocation transitions, and rental/claim/task operations.
+Dispatch binds its claim to that epoch, while Fleet **still rechecks** current
+availability, rental/claim ownership, battery reserve and the claimed
+OneMap route's start against the latest accepted physical position (strict
+5 m origin match). Legacy callers that omit `expected_control_version`
+retain their strict original `state_version` locking semantics. The
+updated epoch is safely initialised when restoring older Fleet snapshots.
+
 ## PostgreSQL history and current state
 
 The operational state remains the latest accepted telemetry stored
