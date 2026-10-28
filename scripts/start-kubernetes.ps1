@@ -80,7 +80,7 @@ try {
         $dashboardReady = $false
         $simulationReady = $false
         try { $dashboardReady = (Invoke-WebRequest http://127.0.0.1:8080/health -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
-        try { $simulationReady = (Invoke-WebRequest http://127.0.0.1:8090/health -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
+        try { $simulationReady = (Invoke-WebRequest http://127.0.0.1:8090/health/live -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
     } until (($dashboardReady -and $simulationReady) -or (Get-Date) -ge $deadline)
 
     if (-not ($dashboardReady -and $simulationReady)) {
