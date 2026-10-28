@@ -18,6 +18,21 @@ export interface HeatMap {
   generated_at: string; demand_snapshot_at: string; fleet_snapshot_at: string | null;
   status: string; issues: string[]; fleet_status: string; zones: Zone[];
 }
+export interface ChargerAdvice {
+  vehicle_id: string; current_soc_pct: number;
+  status: 'RECOMMENDED' | 'NO_SAFE_CHARGER' | 'INELIGIBLE';
+  reasons: string[];
+  charger: {
+    facility_id: string; facility_name: string; zone_id: string;
+    source: 'MOCK' | 'LTA_DATAMALL'; distance_km: number;
+    energy_required_kwh: number; predicted_arrival_soc_pct: number;
+    charging_available: number; charging_power_kw: number | null;
+  } | null;
+}
+export interface ChargingAdvice {
+  generated_at: string; trigger_soc_pct: number; min_arrival_reserve_pct: number;
+  vehicles: ChargerAdvice[]; assumptions: string[];
+}
 export interface ChargingTask {
   task_id: string; vehicle_id: string;
   status: 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
