@@ -5,7 +5,7 @@ import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
-import { interpolateConfirmedRoute } from './routeInterpolation';
+import { prepareConfirmedRoute } from './routeInterpolation';
 import { mapIcon, mapSymbols } from './mapIcons';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
@@ -244,14 +244,13 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         const sameJourney = !!path && !vehicle.stale && !vehicle.active_rental &&
           t.active_dispatch_id === journey?.dispatch_id && previous &&
           previous.session === t.session_id && t.sequence > previous.sequence;
-        const start = sameJourney ? interpolateConfirmedRoute(path!, previous.position, t.position, 0) : null;
-        const finish = sameJourney ? interpolateConfirmedRoute(path!, previous.position, t.position, 1) : null;
+        const tween = sameJourney ? prepareConfirmedRoute(path!, previous.position, t.position) : null;
         const active = displayAnimations.current.get(vehicle.vehicle_id);
         if (active !== undefined) {
           cancelAnimationFrame(active);
           displayAnimations.current.delete(vehicle.vehicle_id);
         }
-        if (start && finish) {
+        if (tween) {
           // This is only visual easing between two *observed* road positions.
           // No position is extrapolated past the newer Fleet observation.
           marker.setIcon(icon);
@@ -261,7 +260,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           const begin = performance.now();
           const animate = (now: number) => {
             const t = Math.max(0, Math.min(1, (now - begin) / 800));
-            const road = interpolateConfirmedRoute(path!, previous!.position, vehicle.telemetry!.position, t);
+            const road = tween(t);
             if (road) pin.setLatLng([road.latitude, road.longitude]);
             if (t < 1) displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
             else { pin.setLatLng(position); displayAnimations.current.delete(vehicle.vehicle_id); }
