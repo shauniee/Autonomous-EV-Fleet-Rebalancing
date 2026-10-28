@@ -51,6 +51,32 @@ jobs:
           assert objects['StatefulSet', 'ev-moving-extra']['spec']['replicas'] == 18
           print('Kustomize, HPA target, dashboard CPU request and singleton service checks passed.')
           PY
+      - name: Validate optional customer simulation workloads
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          docs = {}
+          for kind, name, filename in (
+              ('Job', 'customer-rental-simulation', 'customer-job.yaml'),
+              ('Deployment', 'customer-rental-demo', 'customer-deployment.yaml'),
+          ):
+              obj = yaml.safe_load(Path('k8s/simulations', filename).read_text())
+              assert obj['kind'] == kind and obj['metadata']['name'] == name
+              assert obj['metadata']['namespace'] == 'ev-fleet'
+              if kind == 'Job':
+                  assert obj['spec']['template']['spec']['restartPolicy'] == 'Never'
+              else:
+                  assert obj['spec']['template']['spec'].get('restartPolicy', 'Always') == 'Always'
+              assert obj['spec']['template']['spec']['containers'][0]['imagePullPolicy'] == 'Never'
+              assert obj['spec']['template']['metadata']['labels']['app.kubernetes.io/group'] == 'simulations'
+              docs[kind] = obj
+          assert docs['Job']['spec']['parallelism'] == 1
+          assert docs['Job']['spec']['backoffLimit'] == 0
+          assert docs['Deployment']['spec']['replicas'] == 1
+          assert docs['Deployment']['spec']['strategy']['type'] == 'Recreate'
+          print('Optional simulation workloads are namespace-scoped, single-owner and opt-in.')
+          PY
       - name: Parse Windows PowerShell deployment scripts
         shell: pwsh
         run: |
