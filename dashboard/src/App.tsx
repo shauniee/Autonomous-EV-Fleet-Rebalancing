@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
@@ -29,6 +29,7 @@ export default function App() {
   const fleet = usePolling<Fleet>('/api/fleet/vehicles');
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
+  const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const mapPanel = useRef<HTMLElement>(null);
@@ -36,6 +37,7 @@ export default function App() {
   const [quantity, setQuantity] = useState(1);
   const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
   const [selectedVehicle, setSelectedVehicle] = useState('');
+  const [selectedFacility, setSelectedFacility] = useState('');
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
@@ -73,7 +75,7 @@ export default function App() {
   }, [dispatches.data, pending, setPending]);
   const choose = useCallback((id: string) => {
     recommendationRequest.current?.abort(); setRecommending(false);
-    setSelected(id); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false); setError('');
+    setSelected(id); setSelectedFacility(''); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false); setError('');
   }, []);
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
@@ -89,6 +91,8 @@ export default function App() {
   const batchRemaining = batch ? Math.max(0, Math.ceil((Date.parse(batch.expires_at) - now) / 1000)) : 0;
   const facilitiesFresh = !!facilities.data && !facilities.error && !!facilities.updatedAt
     && now - Date.parse(facilities.updatedAt) < 30000;
+  const chargingAdviceFresh = !!chargingAdvice.data && !chargingAdvice.error && !!chargingAdvice.updatedAt
+    && now - Date.parse(chargingAdvice.updatedAt) < 30000 && now - Date.parse(chargingAdvice.data.generated_at) < 30000;
   const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0;
   const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
   async function recommend() {
@@ -105,7 +109,8 @@ export default function App() {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
           method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity,
             ...(purpose === 'CHARGE' ? { purpose } : {}),
-            ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}) }), signal: controller.signal,
+            ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
+            ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
         });
         if (!controller.signal.aborted) setBatch(result);
       }
@@ -189,7 +194,7 @@ export default function App() {
           <div className="request-fields"><div className="request-field">
           <label htmlFor="relocation-purpose">Destination purpose</label>
           <div className="select-wrap"><select className="form-select" id="relocation-purpose" aria-describedby="relocation-purpose-help" value={purpose} disabled={recommending || submitting} onChange={event => {
-            setPurpose(event.target.value as 'REBALANCE' | 'CHARGE');
+            setPurpose(event.target.value as 'REBALANCE' | 'CHARGE'); setSelectedFacility('');
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
           }}><option value="REBALANCE">{facilityWorkflow ? 'Automatic — parking or charging' : 'Parking / demand rebalancing'}</option><option value="CHARGE">Charging only — replenish to 80%</option></select></div>
           <p id="relocation-purpose-help" className="muted">{purpose === 'CHARGE'
@@ -199,10 +204,11 @@ export default function App() {
           </div><div className="request-field">
           <label htmlFor="relocation-vehicle">Vehicle</label>
           <div className="select-wrap"><select className="form-select" id="relocation-vehicle" aria-describedby="relocation-vehicle-help" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
-            setSelectedVehicle(event.target.value); if (event.target.value) setQuantity(1);
+            setSelectedVehicle(event.target.value); setSelectedFacility(''); if (event.target.value) setQuantity(1);
             setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
           }}><option value="">Any eligible EV</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
           <p id="relocation-vehicle-help" className="muted">{selectedVehicle ? 'One relocation for the selected EV.' : 'Let the system select, or choose an EV for a single relocation.'}</p>
+          {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => { setSelectedFacility(''); setRecommendation(null); setBatch(null); }}>Clear advised charger</button></p>}
           </div></div>
           <div className="quantity-picker"><label htmlFor="ev-count">Number of EVs needed</label><input id="ev-count" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
             const value = Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1)));
@@ -221,7 +227,21 @@ export default function App() {
       <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
       <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/>
-      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}/>
+      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}
+        advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
+        canPrepare={!!fresh && facilitiesFresh && !pending && !pendingBatch && !submitting && !recommending}
+        onPrepare={(item: ChargerAdvice) => {
+          if (!item.charger || !chargingAdviceFresh || !fresh || !facilitiesFresh
+              || pending || pendingBatch || submitting || recommending) return;
+          // Prefill only; the operator must explicitly request and review the
+          // live backend batch recommendation, then approve the dispatch.
+          choose(item.charger.zone_id);
+          setSelectedVehicle(item.vehicle_id);
+          setSelectedFacility(item.charger.facility_id);
+          setPurpose('CHARGE');
+          setQuantity(1);
+          mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }}/>
       <FleetPanel vehicles={vehicles}/><RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
         const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
         if (target && target !== selected) choose(target);
