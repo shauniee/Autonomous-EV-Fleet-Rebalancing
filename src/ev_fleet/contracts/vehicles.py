@@ -56,6 +56,7 @@ class SessionRequest(Model):
 
 class VehicleState(VehicleRegistration):
     state_version: int = Field(ge=1)
+    control_version: int = Field(default=1, ge=1)
     telemetry: TelemetryUpdate | None
     received_at: AwareDatetime | None
     telemetry_age_seconds: float | None = Field(ge=0)
