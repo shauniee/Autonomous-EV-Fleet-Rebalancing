@@ -3,6 +3,7 @@ import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, Charg
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { SingaporeMap } from './components/SingaporeMap';
+import { HotspotToasts } from './components/HotspotToasts';
 import { ChargingOperations } from './components/ChargingOperations';
 import { TrafficConditions } from './components/TrafficConditions';
 import { TrafficJourneyCheck } from './components/TrafficJourneyCheck';
@@ -176,6 +177,7 @@ export default function App() {
     }
   }
   return <div className="app">
+    <HotspotToasts zones={heat.data?.zones}/>
     <header><div className="brand-icon" aria-hidden="true">↗</div><div><div className="eyebrow">Operations / Singapore</div><h1>Fleet Dispatch</h1></div><span className="simulation">SIMULATION</span></header>
     <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name={liveFacilities ? 'Facilities (LTA)' : 'Facilities (mock)'} resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
     <main>
