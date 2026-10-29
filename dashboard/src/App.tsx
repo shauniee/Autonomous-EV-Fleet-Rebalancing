@@ -29,7 +29,7 @@ function readPendingBatch(): BatchApproval | null {
 }
 export default function App() {
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
-  const fleet = usePolling<Fleet>('/api/fleet/vehicles');
+  const fleet = usePolling<Fleet>('/api/fleet/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
