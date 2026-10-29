@@ -30,7 +30,7 @@ function readPendingBatch(): BatchApproval | null {
 }
 export default function App() {
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
-  const fleet = usePolling<Fleet>('/api/fleet/vehicles');
+  const fleet = usePolling<Fleet>('/api/fleet/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
@@ -92,6 +92,7 @@ export default function App() {
   const facilityWorkflow = facilities.data?.data_source !== 'MOCK' || quantity > 1 || purpose === 'CHARGE' || !!selectedVehicle;
   const zone = zones.find(z => z.zone_id === selected);
   const current = recommendation && vehicles.find(v => v.vehicle_id === recommendation.selected_vehicle_id);
+  const fleetFeedHealthy = !!fleet.updatedAt && !fleet.error && now - Date.parse(fleet.updatedAt) < 4500;
   const fresh = !!heat.data && !heat.error && !!fleet.data && !fleet.error && heat.data.fleet_status === 'FRESH'
     && !!heat.updatedAt && now - Date.parse(heat.updatedAt) < 10000 && !!fleet.updatedAt && now - Date.parse(fleet.updatedAt) < 10000;
   const remaining = recommendation ? Math.max(0, Math.ceil((Date.parse(recommendation.expires_at) - now) / 1000)) : 0;
@@ -191,7 +192,7 @@ export default function App() {
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <div className="workspace"><div className="workspace-main"><section ref={mapPanel} className="panel map-panel"><div className="section-title"><h2>Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
-        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
+        <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} telemetryFeedHealthy={fleetFeedHealthy} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}

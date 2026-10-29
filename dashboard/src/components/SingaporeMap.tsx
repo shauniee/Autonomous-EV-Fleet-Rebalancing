@@ -5,7 +5,7 @@ import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
-import { prepareConfirmedRoute } from './routeInterpolation';
+import { planConfirmedMotion, routeForVehicle, type MotionSample } from './confirmedMotion';
 import { mapIcon, mapSymbols } from './mapIcons';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
@@ -32,18 +32,22 @@ function removeHiddenPins(group: L.MarkerClusterGroup, pins: Map<string, L.Marke
   if (removed.length) group.removeLayers(removed);
 }
 
+function pinIconNeedsUpdate(pin: L.Marker, icon: L.DivIcon) {
+  return pin.options.icon?.options.className !== icon.options.className;
+}
+
 function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, label: HTMLElement) {
   const reported = L.latLng(position);
   // Expanded clusters temporarily move icons; compare reported coordinates so
   // an unchanged refresh does not pull those icons back into a stack.
   if (!reportedPositions.get(pin)?.equals(reported)) pin.setLatLng(reported);
   reportedPositions.set(pin, reported);
-  if (pin.options.icon?.options.className !== icon.options.className) pin.setIcon(icon);
+  if (pinIconNeedsUpdate(pin, icon)) pin.setIcon(icon);
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, selected, onSelect, selectedDispatch, onSelectDispatch }: {
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
@@ -52,7 +56,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const facilityPins = useRef(new Map<string, L.Marker>());
   const vehiclePins = useRef(new Map<string, L.Marker>());
   const displayAnimations = useRef(new Map<string, number>());
-  const lastConfirmed = useRef(new Map<string, { position: Position; session: string; sequence: number }>());
+  const lastConfirmed = useRef(new Map<string, MotionSample>());
   const fitted = useRef(false);
   const [tileError, setTileError] = useState(false);
   const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: false });
@@ -231,60 +235,85 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     for (const vehicle of shownVehicles) {
       if (!visible.vehicles || !vehicle.telemetry) continue;
       const label = document.createElement('span');
-      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
+      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${telemetryFeedHealthy ? vehicle.connectivity : 'TELEMETRY CONNECTION LOST'}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
       const focused = vehicle.vehicle_id === journey?.vehicle_id;
       const position: L.LatLngTuple = [vehicle.telemetry.position.latitude, vehicle.telemetry.position.longitude];
-      const icon = mapIcon('ev', { muted: vehicle.stale, selected: focused, rented: !!vehicle.active_rental });
+      const icon = mapIcon('ev', { muted: vehicle.stale || !telemetryFeedHealthy, selected: focused, rented: !!vehicle.active_rental });
       ids.add(vehicle.vehicle_id);
       let marker = vehiclePins.current.get(vehicle.vehicle_id);
+      const current: MotionSample = vehicle.telemetry;
+      const previous = lastConfirmed.current.get(vehicle.vehicle_id);
+      const newObservation = !previous ||
+        previous.session_id !== current.session_id ||
+        previous.sequence !== current.sequence ||
+        previous.observed_at !== current.observed_at;
+      const roadPath = telemetryFeedHealthy ? routeForVehicle(vehicle, dispatches) : null;
+      const active = displayAnimations.current.get(vehicle.vehicle_id);
+      // A stale/offline/route-less observation must cancel any incomplete
+      // easing, but an unrelated dashboard refresh must NOT restart it.
+      const mustFreeze = !roadPath || !telemetryFeedHealthy || vehicle.stale || vehicle.connectivity !== 'ONLINE';
       if (marker) {
-        const previous = lastConfirmed.current.get(vehicle.vehicle_id);
-        const t = vehicle.telemetry;
-        const path = journey?.command?.route?.geometry;
-        const sameJourney = !!path && !vehicle.stale && !vehicle.active_rental &&
-          t.active_dispatch_id === journey?.dispatch_id && previous &&
-          previous.session === t.session_id && t.sequence > previous.sequence;
-        const tween = sameJourney ? prepareConfirmedRoute(path!, previous.position, t.position) : null;
-        const active = displayAnimations.current.get(vehicle.vehicle_id);
-        if (active !== undefined) {
-          cancelAnimationFrame(active);
-          displayAnimations.current.delete(vehicle.vehicle_id);
-        }
-        if (tween) {
-          // This is only visual easing between two *observed* road positions.
-          // No position is extrapolated past the newer Fleet observation.
-          marker.setIcon(icon);
+        if (newObservation || (mustFreeze && active !== undefined)) {
+          if (active !== undefined) {
+            cancelAnimationFrame(active);
+            displayAnimations.current.delete(vehicle.vehicle_id);
+          }
+          const plan = !mustFreeze ? planConfirmedMotion(previous, current, roadPath) : null;
+          if (plan) {
+            // Both endpoints are confirmed by Fleet and the path comes from
+            // THIS vehicle's immutable Dispatch command, not the selected EV.
+            marker.setIcon(icon);
+            marker.setTooltipContent(label);
+            reportedPositions.set(marker, L.latLng(position));
+            const pin = marker;
+            const begin = performance.now();
+            const animate = (now: number) => {
+              const progress = Math.min(1, Math.max(0, (now - begin) / plan.durationMs));
+              const road = plan.positionAt(progress);
+              if (road) pin.setLatLng([road.latitude, road.longitude]);
+              if (progress < 1) {
+                displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
+              } else {
+                pin.setLatLng(position);
+                displayAnimations.current.delete(vehicle.vehicle_id);
+              }
+            };
+            displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
+          } else {
+            // Stale, off-route, new session, missing geometry or a long
+            // network gap: show the LAST confirmed position without guessing.
+            updatePin(marker, position, icon, label);
+          }
+        } else {
+          // Display-only state changes (zone, route selection, demand polling)
+          // may update icons/labels but never restart a running animation.
+          if (pinIconNeedsUpdate(marker, icon)) marker.setIcon(icon);
           marker.setTooltipContent(label);
-          reportedPositions.set(marker, L.latLng(position));
-          const pin = marker;
-          const begin = performance.now();
-          const animate = (now: number) => {
-            const t = Math.max(0, Math.min(1, (now - begin) / 800));
-            const road = tween(t);
-            if (road) pin.setLatLng([road.latitude, road.longitude]);
-            if (t < 1) displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
-            else { pin.setLatLng(position); displayAnimations.current.delete(vehicle.vehicle_id); }
-          };
-          displayAnimations.current.set(vehicle.vehicle_id, requestAnimationFrame(animate));
-        } else updatePin(marker, position, icon, label);
+          if (active === undefined) updatePin(marker, position, icon, label);
+        }
       } else {
         marker = L.marker(position, { icon, title: vehicle.vehicle_id }).bindTooltip(label, { direction: 'top' });
         reportedPositions.set(marker, L.latLng(position));
         vehiclePins.current.set(vehicle.vehicle_id, marker); added.push(marker);
       }
-      lastConfirmed.current.set(vehicle.vehicle_id, {
-        position: vehicle.telemetry.position, session: vehicle.telemetry.session_id,
-        sequence: vehicle.telemetry.sequence,
-      });
+      if (newObservation) lastConfirmed.current.set(vehicle.vehicle_id, { ...current });
       marker.off('click').on('click', () => {
         const dispatch = activeRoutes.find(item => item.vehicle_id === vehicle.vehicle_id);
         if (dispatch) onSelectDispatch(dispatch.dispatch_id);
       });
     }
+    for (const id of vehiclePins.current.keys()) {
+      if (!ids.has(id)) {
+        const frame = displayAnimations.current.get(id);
+        if (frame !== undefined) cancelAnimationFrame(frame);
+        displayAnimations.current.delete(id);
+        lastConfirmed.current.delete(id);
+      }
+    }
     removeHiddenPins(group, vehiclePins.current, ids);
     if (added.length) group.addLayers(added);
     group.refreshClusters();
-  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, journey?.command?.route, journeyId, activeRoutes, onSelectDispatch]);
+  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch, telemetryFeedHealthy]);
   return <>
     <div className="map-toolbar">
       <fieldset className="map-filters"><legend>Show on map</legend><div className="map-filter-options">
@@ -336,6 +365,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
     {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
     {!Object.values(visible).some(Boolean) && <p className="map-filter-note" role="status">All layers are hidden. Select a layer above to show map items.</p>}
+    {!telemetryFeedHealthy && <p className="warning" role="status">Fleet telemetry connection is stale or unavailable. Map markers show the last confirmed positions; visual interpolation is suspended.</p>}
     {tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}
   </>;
 }
