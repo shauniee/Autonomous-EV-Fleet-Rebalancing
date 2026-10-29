@@ -1,14 +1,19 @@
 name: Phase 5C checks
 
 on:
-  push:
-    branches: [feat/phase5a-mock-parking-charging]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+# Only the newest revision of a pull request needs an expensive validation run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   telemetry-postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -35,6 +40,7 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,35 +52,31 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            simulation-console/frontend/package-lock.json
+      - name: Install dashboard dependencies
         working-directory: dashboard
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
-      - run: npm ci
-      - run: npm test -- --run
-      - run: npm run build
-
-
-  simulation-console-frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+        run: npm ci
+      - name: Run dashboard tests
+        working-directory: dashboard
+        run: npm test -- --run
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm run build
+      - name: Install simulation console dependencies
         working-directory: simulation-console/frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: simulation-console/frontend/package-lock.json
-      - run: npm ci
-      - run: npm run build
+        run: npm ci
+      - name: Build simulation console
+        working-directory: simulation-console/frontend
+        run: npm run build
 
   compose-smoke:
     runs-on: ubuntu-latest

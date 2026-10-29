@@ -15,9 +15,15 @@ on:
       - 'scripts/setup-local-metrics.ps1'
       - '.github/workflows/kubernetes-portability.yml'
 
+# Only the newest revision of a pull request needs an expensive validation run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   manifests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-kubectl@v4
