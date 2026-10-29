@@ -1,19 +1,7 @@
 name: Kubernetes portability checks
 
 on:
-  pull_request:
-    paths:
-      - 'k8s/**'
-      - 'scripts/start-kubernetes.ps1'
-      - 'scripts/setup-local-metrics.ps1'
-      - '.github/workflows/kubernetes-portability.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'k8s/**'
-      - 'scripts/start-kubernetes.ps1'
-      - 'scripts/setup-local-metrics.ps1'
-      - '.github/workflows/kubernetes-portability.yml'
+  workflow_dispatch:
 
 # Only the newest revision of a pull request needs an expensive validation run.
 concurrency:

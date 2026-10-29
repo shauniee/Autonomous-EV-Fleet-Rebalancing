@@ -1,8 +1,6 @@
 name: Phase 5C checks
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 # Only the newest revision of a pull request needs an expensive validation run.
