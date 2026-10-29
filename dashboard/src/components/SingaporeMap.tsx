@@ -46,8 +46,8 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, selected, onSelect, selectedDispatch, onSelectDispatch }: {
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; selected: string; onSelect: (id: string) => void;
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch }: {
+  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
@@ -235,10 +235,10 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     for (const vehicle of shownVehicles) {
       if (!visible.vehicles || !vehicle.telemetry) continue;
       const label = document.createElement('span');
-      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${vehicle.connectivity}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
+      label.textContent = `${vehicle.vehicle_id} · ${vehicle.telemetry.soc_pct.toFixed(1)}% · ${telemetryFeedHealthy ? vehicle.connectivity : 'TELEMETRY CONNECTION LOST'}${vehicle.stale ? ' · STALE' : ''}${vehicle.active_rental ? ' · RENTED' : ''}`;
       const focused = vehicle.vehicle_id === journey?.vehicle_id;
       const position: L.LatLngTuple = [vehicle.telemetry.position.latitude, vehicle.telemetry.position.longitude];
-      const icon = mapIcon('ev', { muted: vehicle.stale, selected: focused, rented: !!vehicle.active_rental });
+      const icon = mapIcon('ev', { muted: vehicle.stale || !telemetryFeedHealthy, selected: focused, rented: !!vehicle.active_rental });
       ids.add(vehicle.vehicle_id);
       let marker = vehiclePins.current.get(vehicle.vehicle_id);
       const current: MotionSample = vehicle.telemetry;
@@ -247,11 +247,11 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         previous.session_id !== current.session_id ||
         previous.sequence !== current.sequence ||
         previous.observed_at !== current.observed_at;
-      const roadPath = routeForVehicle(vehicle, dispatches);
+      const roadPath = telemetryFeedHealthy ? routeForVehicle(vehicle, dispatches) : null;
       const active = displayAnimations.current.get(vehicle.vehicle_id);
       // A stale/offline/route-less observation must cancel any incomplete
       // easing, but an unrelated dashboard refresh must NOT restart it.
-      const mustFreeze = !roadPath || vehicle.stale || vehicle.connectivity !== 'ONLINE';
+      const mustFreeze = !roadPath || !telemetryFeedHealthy || vehicle.stale || vehicle.connectivity !== 'ONLINE';
       if (marker) {
         if (newObservation || (mustFreeze && active !== undefined)) {
           if (active !== undefined) {
@@ -313,7 +313,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     removeHiddenPins(group, vehiclePins.current, ids);
     if (added.length) group.addLayers(added);
     group.refreshClusters();
-  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch]);
+  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch, telemetryFeedHealthy]);
   return <>
     <div className="map-toolbar">
       <fieldset className="map-filters"><legend>Show on map</legend><div className="map-filter-options">
@@ -365,6 +365,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
     {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
     {!Object.values(visible).some(Boolean) && <p className="map-filter-note" role="status">All layers are hidden. Select a layer above to show map items.</p>}
+    {!telemetryFeedHealthy && <p className="warning" role="status">Fleet telemetry connection is stale or unavailable. Map markers show the last confirmed positions; visual interpolation is suspended.</p>}
     {tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}
   </>;
 }
