@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+from math import fsum
 from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
@@ -13,7 +14,7 @@ from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsMetadata, CrdsMove,
                                    CrdsMoveOutcome, CrdsRouteEstimate, CrdsRouteRequest)
-from .crds import evaluate_moves
+from .crds import apply_move, evaluate_moves, shortage_by_zone
 from .crds_futures import MODEL_VERSION, build_futures, parameters_for
 from .crds_inputs import collect_inputs
 from .crds_routes import travel_minutes
@@ -161,6 +162,9 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             moves.append(move)
             assessments[move.vehicle_id] = assessment
             sites[(move.vehicle_id, move.facility_id)] = site
+    metadata.input_fingerprint = hashlib.sha256(json.dumps({
+        "observations": fingerprint, "futures": [f.model_dump(mode="json") for f in futures],
+        "moves": [m.model_dump(mode="json") for m in moves]}, sort_keys=True).encode()).hexdigest()
     result = evaluate_moves(futures, moves, params)
     if result.selected_vehicle_id:
         vehicle = next(v for v in inputs.fleet.vehicles if v.vehicle_id == result.selected_vehicle_id)
@@ -177,6 +181,62 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
         metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
     return CrdsPlan(inputs, result, futures, moves, assessments, sites, metadata)
+
+
+def plan_batch(plan, quantity):
+    """Greedy supported prefix; all steps use the same complete future set."""
+    if plan.metadata.decision == "DEFER":
+        return [], plan.metadata, plan.metadata.reason_code
+    params = plan.metadata.parameters
+    futures = plan.futures
+    remaining = list(plan.moves)
+    parking = {s.facility_id: s.parking_available for s in plan.sites.values()}
+    chargers = {s.facility_id: s.charging_available for s in plan.sites.values()}
+    children = []
+    stop_reason = "REQUESTED_QUANTITY_REACHED"
+    while len(children) < quantity:
+        eligible = [m for m in remaining if parking[m.facility_id] > 0 and
+                    (plan.assessments[m.vehicle_id]["predicted_arrival_soc_pct"] >= CHARGE_ON_ARRIVAL_BELOW_PCT
+                     or chargers[m.facility_id] > 0) and
+                    all(min(f.zones[m.origin_zone_id].usable_stock) >= 1 for f in futures)]
+        result = evaluate_moves(futures, eligible, params)
+        if result.decision != "MOVE":
+            stop_reason = "CAPACITY_OR_STOCK_LIMIT" if not eligible and remaining else result.reason_code
+            break
+        gain = result.ranked_candidates[0]
+        move = next(m for m in eligible if (m.vehicle_id, m.facility_id) == (gain.vehicle_id, gain.facility_id))
+        metadata = plan.metadata.model_copy(deep=True)
+        metadata.decision, metadata.reason_code = "MOVE", "USEFUL_SHORTAGE_REDUCTION"
+        metadata.worst_case_gain_vehicle_minutes = gain.worst_case_gain_vehicle_minutes
+        metadata.worst_case_future_id = gain.worst_case_future_id
+        metadata.shortage_changes_by_zone = gain.shortage_changes_by_zone
+        metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
+        metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
+        metadata.source_references["virtual_prefix"] = [c.evaluation.selected_vehicle_id for c in children]
+        children.append(CrdsPlan(plan.inputs, result, futures, eligible, plan.assessments, plan.sites, metadata))
+        need_charge = plan.assessments[move.vehicle_id]["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+        if need_charge or parking[move.facility_id] == chargers[move.facility_id]:
+            chargers[move.facility_id] -= 1
+        parking[move.facility_id] -= 1
+        futures = [apply_move(f, params, move) for f in futures]
+        remaining = [m for m in remaining if m.vehicle_id != move.vehicle_id]
+    metadata = plan.metadata.model_copy(deep=True)
+    if children:
+        effects = []
+        for original, final in zip(plan.futures, futures):
+            before, after = shortage_by_zone(original, params), shortage_by_zone(final, params)
+            changes = {z: after[z] - before[z] for z in before}
+            effects.append((-fsum(changes.values()), original.future_id, changes))
+        gain, future_id, changes = min(effects, key=lambda row: (row[0], row[1]))
+        metadata.worst_case_gain_vehicle_minutes = gain
+        metadata.worst_case_future_id = future_id
+        metadata.shortage_changes_by_zone = changes
+        metadata.arrival_minutes_min = min(c.metadata.arrival_minutes_min for c in children)
+        metadata.arrival_minutes_max = max(c.metadata.arrival_minutes_max for c in children)
+        metadata.decision = "MOVE"
+    else:
+        metadata.decision, metadata.reason_code, metadata.approval_allowed = "HOLD", stop_reason, False
+    return children, metadata, stop_reason
 
 
 def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=None):

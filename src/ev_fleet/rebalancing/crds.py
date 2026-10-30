@@ -15,40 +15,43 @@ from ev_fleet.contracts.crds import (
 )
 
 
-def shortage_by_zone(future: CrdsFuture, parameters: CrdsParameters,
-                     move: CrdsMove | None = None) -> dict[str, float]:
-    """Return J by zone, optionally applying one immediate departure.
-
-    Destination stock is credited at the first slot boundary at or after
-    arrival plus availability delay. Inputs are read without being changed.
-    """
+def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -> CrdsFuture:
+    """Copy a future with one departure and conservatively rounded usable arrival."""
     for trajectory in future.zones.values():
         if len(trajectory.desired_stock) != parameters.slot_count:
             raise ValueError("future trajectories must match the configured horizon")
     arrival_slot = parameters.slot_count
-    if move is not None:
-        if move.origin_zone_id not in future.zones or move.target_zone_id not in future.zones:
-            raise ValueError("move origin and target must exist in the future")
-        if future.future_id not in move.outcomes:
-            raise ValueError("move requires an outcome for the future")
-        if any(stock < 1 for stock in future.zones[move.origin_zone_id].usable_stock):
-            raise ValueError("baseline origin stock must include the candidate EV in every slot")
-        outcome = move.outcomes[future.future_id]
-        ready_minutes = outcome.arrival_minutes + outcome.availability_delay_minutes
-        if ready_minutes < parameters.horizon_minutes:
-            arrival_slot = ceil(ready_minutes / parameters.slot_minutes)
-
-    shortages = {}
+    if move.origin_zone_id not in future.zones or move.target_zone_id not in future.zones:
+        raise ValueError("move origin and target must exist in the future")
+    if future.future_id not in move.outcomes:
+        raise ValueError("move requires an outcome for the future")
+    if any(stock < 1 for stock in future.zones[move.origin_zone_id].usable_stock):
+        raise ValueError("baseline origin stock must include the candidate EV in every slot")
+    outcome = move.outcomes[future.future_id]
+    ready_minutes = outcome.arrival_minutes + outcome.availability_delay_minutes
+    if ready_minutes < parameters.horizon_minutes:
+        arrival_slot = ceil(ready_minutes / parameters.slot_minutes)
+    zones = {}
     for zone_id, trajectory in future.zones.items():
         usable = list(trajectory.usable_stock)
-        if move is not None:
-            if zone_id == move.origin_zone_id:
-                usable = [stock - 1 for stock in usable]
-            if zone_id == move.target_zone_id:
-                usable = [stock + int(slot >= arrival_slot) for slot, stock in enumerate(usable)]
-        shortages[zone_id] = parameters.slot_minutes * fsum(
-            max(0, desired - stock) for desired, stock in zip(trajectory.desired_stock, usable))
-    return shortages
+        if zone_id == move.origin_zone_id:
+            usable = [stock - 1 for stock in usable]
+        if zone_id == move.target_zone_id:
+            usable = [stock + int(slot >= arrival_slot) for slot, stock in enumerate(usable)]
+        zones[zone_id] = trajectory.model_copy(update={"usable_stock": usable})
+    return future.model_copy(update={"zones": zones})
+
+
+def shortage_by_zone(future: CrdsFuture, parameters: CrdsParameters,
+                     move: CrdsMove | None = None) -> dict[str, float]:
+    """Return J by zone without changing the caller's trajectories."""
+    if any(len(t.desired_stock) != parameters.slot_count for t in future.zones.values()):
+        raise ValueError("future trajectories must match the configured horizon")
+    if move is not None:
+        future = apply_move(future, parameters, move)
+    return {zone: parameters.slot_minutes * fsum(max(0, desired - usable)
+            for desired, usable in zip(t.desired_stock, t.usable_stock))
+            for zone, t in future.zones.items()}
 
 
 def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],

@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.logging import base_app
 from ev_fleet.common.settings import Settings, CrdsSettings
-from .crds_service import plan_one, recommendation_record
+from .crds_service import plan_one, plan_batch, recommendation_record
 from .crds_futures import MODEL_VERSION, parameters_for
 from ev_fleet.contracts.crds import CrdsRevalidationRequest, CrdsRevalidationResult
 from ev_fleet.contracts.recommendations import RecommendationRequest, Recommendation, BatchRecommendationRequest, BatchRecommendation
@@ -265,6 +265,44 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
 
     @app.post("/api/v1/batch-recommendations", status_code=201, response_model=BatchRecommendation)
     async def batch_recommend(body: BatchRecommendationRequest):
+        if body.purpose == "REBALANCE" and crds_config.mode != "DISABLED":
+            start = clock.monotonic()
+            try:
+                plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
+                    body.target_zone_id, vehicle_id=body.vehicle_id)
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+            except ValueError:
+                raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+            children, metadata, stop_reason = plan_batch(plan, body.quantity)
+            now = clock.now()
+            expires = now + timedelta(seconds=config.recommendation_ttl_seconds)
+            assignments = []
+            for child in children:
+                record = recommendation_record(child, config, clock, body.target_zone_id, started_at=start)
+                record["expires_at"] = expires.isoformat()
+                await store.put(record, config.recommendation_ttl_seconds)
+                gain = child.evaluation.ranked_candidates[0]
+                site = child.sites[(gain.vehicle_id, gain.facility_id)]
+                assessment = child.assessments[gain.vehicle_id]
+                assignments.append({"recommendation_id": record["recommendation_id"],
+                    "vehicle_id": gain.vehicle_id, "facility_id": gain.facility_id, "facility_name": site.name,
+                    "target_position": site.position.model_dump(mode="json"),
+                    "requires_charging": record["requires_charging"], "distance_km": assessment["distance_km"],
+                    "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"], "score": None,
+                    "traffic_assessment": assessment["traffic_assessment"], "crds_gain": gain.model_dump(mode="json")})
+            result = {"batch_recommendation_id": str(uuid4()), "target_zone_id": body.target_zone_id,
+                "purpose": "REBALANCE", "requested_count": body.quantity, "recommended_count": len(assignments),
+                "unfulfilled_count": body.quantity - len(assignments), "assignments": assignments,
+                "created_at": now.isoformat(), "expires_at": expires.isoformat(),
+                "crds": metadata.model_dump(mode="json"),
+                "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
+                "explanation": f"CRDS proposes {len(assignments)} of {body.quantity} EVs. {metadata.reason_code}.",
+                "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
+                    "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
+            await batch_store.put({**result, "recommendation_id": result["batch_recommendation_id"]},
+                                  config.recommendation_ttl_seconds)
+            return result
         fleet_raw, target_raw, sites_raw = await asyncio.gather(
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
