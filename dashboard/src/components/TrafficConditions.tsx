@@ -35,7 +35,7 @@ export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapsh
         missing alternatives are rejected.</p>
     </>}
     {!simulated && !live && <p className="muted">
-      No traffic provider active. Use the local Simulation Console for synthetic route disruptions
+      Live LTA traffic ranking is disabled. Use the local Simulation Console for synthetic route disruptions
       (requires enabled operator control), or configure LTA DataMall for observed traffic.
       No conditions are assumed clear when data is unavailable.</p>}
     {live && <>
