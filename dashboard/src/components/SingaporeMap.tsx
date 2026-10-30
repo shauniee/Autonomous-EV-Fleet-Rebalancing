@@ -59,7 +59,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const lastConfirmed = useRef(new Map<string, MotionSample>());
   const fitted = useRef(false);
   const [tileError, setTileError] = useState(false);
-  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: false });
+  const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: true });
   const [selectedZoneOnly, setSelectedZoneOnly] = useState(true);
   const areaZone = selectedZoneOnly ? selected : '';
   const area = zones.find(zone => zone.zone_id === areaZone);
@@ -86,7 +86,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
     { key: 'routes', label: 'Routes', colour: '#326995', count: routes.length },
-    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count: traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length : 0 },
+    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count: traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length
+      : traffic?.source === 'SIMULATION' ? (traffic.simulated_events?.length ?? 0) : 0 },
   ] as const;
   useEffect(() => { setSelectedZoneOnly(true); setFollowEV(false); }, [selected]);
   useEffect(() => {
@@ -206,8 +207,21 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     return () => { layer.remove(); };
   }, [routes, journeyId, onSelectDispatch, visible.routes, areaZone, zones]);
   useEffect(() => {
-    if (!map.current || !visible.traffic || traffic?.source !== 'LTA_DATAMALL') return;
+    if (!map.current || !visible.traffic || !traffic || !['LTA_DATAMALL', 'SIMULATION'].includes(traffic.source)) return;
     const layer = L.layerGroup().addTo(map.current);
+    // Show full synthetic approved road segments, independently of LTA's
+    // point-to-link observation overlay. No guessed geometry is plotted.
+    if (traffic.source === 'SIMULATION') {
+      for (const item of (traffic.simulated_events ?? []).slice(0, 30)) {
+        const colour = item.kind === 'ROAD_CLOSED' ? '#c43332' : item.kind === 'ROADWORKS' ? '#e1a127' : '#eb762c';
+        const description = document.createElement('span');
+        description.textContent = `SIMULATED ${item.kind.replaceAll('_', ' ')} · ${item.speed_kph == null ? 'Road closed' : item.speed_kph + ' km/h'} · route ${item.dispatch_id.slice(0,8)} · segment ${item.segment_index} · expires ${new Date(item.expires_at).toLocaleTimeString('en-SG', {timeZone:'Asia/Singapore'})} SGT`;
+        L.polyline([[item.start.latitude, item.start.longitude], [item.end.latitude, item.end.longitude]],
+          { color: colour, weight: 9, opacity: .95, dashArray: item.kind === 'ROAD_CLOSED' ? '4,6' : undefined })
+          .bindTooltip(description).bindPopup(description.cloneNode(true) as HTMLElement).addTo(layer);
+      }
+      return () => { layer.remove(); };
+    }
     // Rendering bound: show at most 500 observed road segments at a time.
     // This layer is descriptive only; geometry is not a routable network.
     for (const segment of traffic.speeds.slice(0, 500)) {
