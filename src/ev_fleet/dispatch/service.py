@@ -39,6 +39,7 @@ class DispatchService:
         self.routing = RoutingSettings.from_env()
         self.planning_instance_id = uuid4()
         self.planning_revision = 0
+        self.route_estimates = {}
         self.traffic_enabled = (os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
             or os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true")
 
@@ -110,6 +111,37 @@ class DispatchService:
                 observed_at=self.clock.now(), dispatches=[
                     record.view() for record in self.store.records.values()
                     if record.data["state"] not in TERMINAL or record.data["claim_held"] is not False])
+
+    async def estimate_route(self, body):
+        from ev_fleet.contracts.crds import CrdsRouteEstimate
+
+        fleet, facility = await asyncio.gather(
+            request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot),
+            request_json(self.client, "GET", f"{self.settings.facilities_url}/api/v1/facilities/{body.facility_id}", model=Facility))
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == body.vehicle_id), None)
+        if (fleet.instance_id != body.expected_fleet_instance_id or vehicle is None
+                or vehicle.control_version != body.expected_control_version or vehicle.telemetry is None
+                or vehicle.stale or vehicle.connectivity != "ONLINE"):
+            raise HTTPException(409, "ROUTE_ESTIMATE_INPUT_CHANGED")
+        if facility.status != "OPEN" or not facility.is_fresh(self.clock.now()):
+            raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
+        origin = vehicle.telemetry.position
+        key = (vehicle.vehicle_id, facility.facility_id, str(fleet.instance_id), vehicle.control_version,
+               origin.latitude, origin.longitude, facility.position.latitude, facility.position.longitude)
+        cached = self.route_estimates.get(key)
+        if cached and self.clock.monotonic() - cached[0] < 15:
+            return cached[1]
+        route = await driving_route(self.client, self.routing, origin.model_dump(),
+                                    facility.position.model_dump(), self.settings.arrival_tolerance_km,
+                                    facility=True)
+        if route is None or route.source != "ONEMAP":
+            raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
+        result = CrdsRouteEstimate(vehicle_id=vehicle.vehicle_id, facility_id=facility.facility_id,
+            fleet_instance_id=fleet.instance_id, control_version=vehicle.control_version, origin=origin, route=route)
+        if len(self.route_estimates) >= 256:
+            self.route_estimates.pop(next(iter(self.route_estimates)))
+        self.route_estimates[key] = (self.clock.monotonic(), result)
+        return result
 
     def claim_url(self, record):
         return f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}/claims/{record.data['dispatch_id']}"

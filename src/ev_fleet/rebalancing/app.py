@@ -42,6 +42,11 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     app.state.persistence = (store.repository, batch_store.repository)
     app.state.traffic_monitor = None
     app.state.traffic_scenarios = TrafficScenarios(clock)
+    app.state.traffic_instance_id = str(uuid4())
+
+    def traffic_snapshot():
+        return {**app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot()),
+                "instance_id": app.state.traffic_instance_id}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -89,7 +94,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
+        traffic = traffic_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet).model_dump(mode="json")
             target = ZoneState.model_validate(target).model_dump(mode="json")
@@ -221,7 +226,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
             get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities?zone_id={body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
+        traffic = traffic_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
             target = ZoneState.model_validate(target_raw).model_dump(mode="json")

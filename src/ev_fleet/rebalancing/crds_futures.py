@@ -2,6 +2,7 @@
 from math import ceil
 
 from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajectory
+from .crds_routes import travel_minutes
 
 
 MODEL_VERSION = "crds-futures-v1"
@@ -68,8 +69,8 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True):
                 continue
             if vehicle.telemetry.soc_pct < 20:
                 continue
-            remaining = max(0, route.distance_km - dispatch.distance_travelled_km)
-            minutes = route.duration_seconds / 60 * remaining / max(route.distance_km, .000001)
+            minutes = travel_minutes(route, inputs.traffic, inputs.evaluated_at,
+                                     distance_travelled_km=dispatch.distance_travelled_km)
             credit(command.target_zone_id, minutes + journey_delay)
         if not omit_returns:
             for vehicle in vehicles.values():

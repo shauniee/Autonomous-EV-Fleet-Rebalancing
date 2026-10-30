@@ -4,7 +4,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field, NonNegativeInt, model_validator
 
-from .common import Model
+from .common import Model, Position
+from .routing import RoadRoute
 from .demand import ZoneState
 from .dispatch import Dispatch
 from .facilities import FacilitiesSnapshot
@@ -108,3 +109,19 @@ class CrdsInputs(Model):
     available_by_zone: dict[str, int]
     vehicle_zones: dict[str, str]
     issues: list[str] = Field(default_factory=list)
+
+
+class CrdsRouteRequest(Model):
+    vehicle_id: str = Field(min_length=1)
+    facility_id: str = Field(min_length=1)
+    expected_fleet_instance_id: UUID
+    expected_control_version: int = Field(ge=1)
+
+
+class CrdsRouteEstimate(Model):
+    vehicle_id: str
+    facility_id: str
+    fleet_instance_id: UUID
+    control_version: int
+    origin: Position
+    route: RoadRoute

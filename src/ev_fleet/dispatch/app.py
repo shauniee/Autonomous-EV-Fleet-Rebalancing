@@ -5,6 +5,7 @@ import httpx
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
 from .routing import road_match_spawn
+from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
 
@@ -59,6 +60,10 @@ def create_app(settings=None, client=None, clock=None, background=True):
     @app.get("/api/v1/dispatch-planning-state")
     async def planning_state():
         return await app.state.service.planning_snapshot()
+
+    @app.post("/api/v1/route-estimates", response_model=CrdsRouteEstimate)
+    async def route_estimates(body: CrdsRouteRequest):
+        return await app.state.service.estimate_route(body)
 
     @app.get("/api/v1/dispatches/{dispatch_id}/traffic-check")
     async def traffic_check(dispatch_id: UUID):
