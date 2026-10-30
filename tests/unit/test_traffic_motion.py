@@ -10,7 +10,7 @@ C = {"latitude":1.305,"longitude":103.81}
 def moving():
     model = Movement(A, 80)
     model.state = "RELOCATING"
-    model.command = {"dispatch_id":"dispatch-a", "route":{"geometry":[A,B,C]}}
+    model.command = {"dispatch_id":"dispatch-a", "route":{"geometry":[A,B,C], "duration_seconds": 240}}
     model.path_lengths = [0, distance_km(A,B), distance_km(A,B) + distance_km(B,C)]
     model.total = model.path_lengths[-1]
     model.distance = 0
@@ -24,7 +24,7 @@ def feed(kind="CONGESTION", speed=12, start=A, end=B):
 def test_simulated_congestion_caps_real_movement_speed_only_on_affected_segment():
     m = moving()
     assert segment_speed(m,30,feed()) == 12
-    m.advance(30, segment_speed(m,30,feed()))
+    m.advance(30, 30, traffic_speed_cap_kph=segment_speed(m,30,feed()))
     assert m.speed_kph == 12
     assert m.odometer_km > 0
     m.distance = m.path_lengths[1] + .05
