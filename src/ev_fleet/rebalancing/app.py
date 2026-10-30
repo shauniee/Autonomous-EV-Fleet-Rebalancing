@@ -12,6 +12,8 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.common.logging import base_app
 from ev_fleet.common.settings import Settings, CrdsSettings
 from .crds_service import plan_one, recommendation_record
+from .crds_futures import MODEL_VERSION, parameters_for
+from ev_fleet.contracts.crds import CrdsRevalidationRequest, CrdsRevalidationResult
 from ev_fleet.contracts.recommendations import RecommendationRequest, Recommendation, BatchRecommendationRequest, BatchRecommendation
 from ev_fleet.contracts.vehicles import FleetSnapshot
 from ev_fleet.contracts.demand import ZoneState
@@ -152,6 +154,35 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
     @app.get("/api/v1/traffic/scenarios")
     async def list_traffic_scenarios():
         return app.state.traffic_scenarios.list()
+
+    @app.post("/api/v1/crds/revalidate", response_model=CrdsRevalidationResult)
+    async def revalidate_crds(body: CrdsRevalidationRequest):
+        record = Recommendation.model_validate(await store.get(str(body.recommendation_id)))
+        if (crds_config.mode != "ACTIVE" or record.crds is None
+                or not record.crds.approval_allowed or record.crds.decision != "MOVE"):
+            raise HTTPException(409, "CRDS_APPROVAL_DISABLED")
+        if record.expires_at <= clock.now():
+            raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+        if (record.crds.parameters != parameters_for(crds_config)
+                or record.crds.scenario_model_version != MODEL_VERSION):
+            raise HTTPException(409, "CRDS_POLICY_CHANGED")
+        policy = Settings(**{**config.model_dump(), **record.policy_settings})
+        try:
+            plan = await plan_one(app.state.client, policy, crds_config, clock,
+                traffic_snapshot(), record.target.zone_id, vehicle_id=record.selected_vehicle_id,
+                facility_id=record.parking_facility_id, route_override=body.route,
+                exclude_dispatch_id=str(body.dispatch_id))
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+        except ValueError:
+            raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+        if (plan.inputs.planning.instance_id != body.expected_planning_instance_id
+                or plan.inputs.planning.revision != body.expected_planning_revision):
+            raise HTTPException(409, "CRDS_PLANNING_CHANGED")
+        allowed = (plan.metadata.approval_allowed and
+                   plan.evaluation.selected_vehicle_id == record.selected_vehicle_id and
+                   plan.evaluation.selected_facility_id == record.parking_facility_id)
+        return CrdsRevalidationResult(allowed=allowed, metadata=plan.metadata)
 
     @app.post("/api/v1/traffic/scenarios", status_code=201)
     async def create_traffic_scenario(

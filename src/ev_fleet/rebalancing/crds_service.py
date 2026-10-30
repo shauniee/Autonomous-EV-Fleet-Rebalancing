@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
+from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsMetadata, CrdsMove,
                                    CrdsMoveOutcome, CrdsRouteEstimate, CrdsRouteRequest)
 from .crds import evaluate_moves
@@ -95,6 +96,9 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         async with semaphore:
             if route_override is not None:
                 route = route_override
+                if route.source != "ONEMAP" or distance_km(
+                        vehicle.telemetry.position.model_dump(), route.geometry[0].model_dump()) > .005:
+                    raise ValueError("ROUTE_ORIGIN_CHANGED")
             else:
                 body = CrdsRouteRequest(vehicle_id=vehicle.vehicle_id, facility_id=site.facility_id,
                     expected_fleet_instance_id=inputs.fleet.instance_id,
@@ -163,6 +167,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         if (clock.now() - vehicle.telemetry.observed_at).total_seconds() >= policy.stale_seconds:
             result = CrdsEvaluation(decision="DEFER", reason_code="STALE_AFTER_ROUTE_LOOKUP")
     metadata.decision, metadata.reason_code = result.decision, result.reason_code
+    metadata.approval_allowed = settings.mode == "ACTIVE" and result.decision == "MOVE"
     if result.decision == "MOVE":
         winner = result.ranked_candidates[0]
         move = next(m for m in moves if m.vehicle_id == winner.vehicle_id and m.facility_id == winner.facility_id)

@@ -142,3 +142,16 @@ class CrdsMetadata(Model):
     shortage_changes_by_zone: dict[str, float] = Field(default_factory=dict)
     arrival_minutes_min: float | None = Field(default=None, ge=0)
     arrival_minutes_max: float | None = Field(default=None, ge=0)
+
+
+class CrdsRevalidationRequest(Model):
+    recommendation_id: UUID
+    dispatch_id: UUID
+    route: RoadRoute
+    expected_planning_instance_id: UUID
+    expected_planning_revision: int = Field(ge=0)
+
+
+class CrdsRevalidationResult(Model):
+    allowed: bool
+    metadata: CrdsMetadata
