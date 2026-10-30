@@ -22,6 +22,7 @@ test('select hotspot, recommend, explicitly approve, observe real relocation and
   await expect(page.getByRole('dialog')).toContainText('Predicted arrival SOC');
   await page.screenshot({ path: 'test-results/dashboard-confirmation.png', fullPage: true });
   await page.getByRole('button', { name: 'Approve 1 EV', exact: true }).click();
+  await page.getByRole('tab', { name: /Relocations/ }).click();
   const card = page.locator('[data-testid^="dispatch-"]').first();
   await expect(card).toBeVisible();
   await expect(card).toContainText('IN PROGRESS');
@@ -36,6 +37,7 @@ test('select hotspot, recommend, explicitly approve, observe real relocation and
   expect(samples.at(-1)).not.toEqual(original.telemetry.position);
   expect(samples.at(-1)).not.toEqual(active.command.target_position);
   await expect(card).toContainText('SUCCEEDED', { timeout: 60000 });
+  await page.getByRole('tab', { name: 'Fleet', exact: true }).click();
   await expect(page.getByTestId(`vehicle-${active.vehicle_id}`)).toContainText('cbd');
   await expect(page.getByTestId(`vehicle-${active.vehicle_id}`)).toContainText('AVAILABLE');
   const arrived = await (await request.get(`/api/fleet/vehicles/${active.vehicle_id}`)).json();
@@ -64,5 +66,6 @@ test('tile and Demand failures preserve working Fleet and dispatch panels', asyn
   await expect(page.getByText('Map tiles unavailable.', { exact: false })).toBeVisible();
   await expect(page.getByText('Demand · unavailable', { exact: false })).toBeVisible();
   await expect(page.getByTestId('vehicle-ev-browser-01')).toBeVisible();
+  await page.getByRole('tab', { name: /Relocations/ }).click();
   await expect(page.getByRole('heading', { name: 'Relocations', exact: true })).toBeVisible();
 });

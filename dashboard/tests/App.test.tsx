@@ -65,6 +65,7 @@ describe('dispatcher dashboard', () => {
   it('shows backend relocation, acknowledgement and uncertainty without inventing progress', async () => {
     const dispatch = makeDispatch(); dispatch.state = 'UNKNOWN'; dispatch.failure_reason = 'PROGRESS_TIMEOUT';
     server({ '/api/dispatch/dispatches': { dispatches: [dispatch] } }); render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
     const card = await screen.findByTestId('dispatch-dispatch-1');
     expect(card).toHaveTextContent('PROGRESS_TIMEOUT'); expect(card).toHaveTextContent('2 km');
     expect(card).toHaveTextContent('Acknowledged / execution confirmed'); expect(card).toHaveTextContent('retains ownership');
@@ -134,6 +135,7 @@ describe('dispatcher dashboard', () => {
     };
     server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
     fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
     const facility = await screen.findByTestId('facility-mock-cbd-01');
     expect(facility).toHaveTextContent('CBD simulated parking 1');
@@ -239,6 +241,7 @@ describe('dispatcher dashboard', () => {
       },
     });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
     await screen.findByText('LTA DATAMALL · SIMULATED ALLOCATIONS');
     fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
     const card = await screen.findByTestId('facility-lta-parking-LTA-A1');
@@ -262,6 +265,7 @@ describe('dispatcher dashboard', () => {
         { name: 'charging', status: 'MISSING_KEY', last_success_at: null, error_code: null },
       ] } });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
     expect(await screen.findByText(/LTA parking: MISSING_KEY/)).toBeInTheDocument();
     expect(screen.queryByText('MOCK · NOT REAL PARKING')).not.toBeInTheDocument();
   });
@@ -298,6 +302,7 @@ describe('dispatcher dashboard', () => {
       '/api/rebalancing/batch-recommendations': proposed,
     });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Charging/ }));
     const action = await screen.findByRole('button', { name: 'Prepare charger route' });
     await waitFor(() => expect(action).toBeEnabled());
     fireEvent.click(action);
@@ -327,11 +332,13 @@ describe('dispatcher dashboard', () => {
       },
     });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Charging/ }));
     expect(await screen.findByText(/BELOW_OPERATIONAL_RESERVE/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Prepare charger route' })).not.toBeInTheDocument();
   });
   it('shows disabled LTA traffic without implying clear roads', async () => {
     server(); render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Traffic/ }));
     const panel = await screen.findByRole('region', { name: 'Traffic conditions and roadworks' });
     expect(within(panel).getByText(/Live LTA traffic ranking is disabled/)).toBeInTheDocument();
     expect(within(panel).getByText('DISABLED')).toBeInTheDocument();
@@ -351,6 +358,7 @@ describe('dispatcher dashboard', () => {
         start_date:'2020-01-01', end_date:'2099-01-01' }],
     }});
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Traffic/ }));
     const panel = await screen.findByRole('region', { name:'Traffic conditions and roadworks' });
     expect(within(panel).getAllByText('FRESH').length).toBeGreaterThan(0);
     expect(within(panel).getByText('Synthetic fixture closure')).toBeInTheDocument();
@@ -373,6 +381,7 @@ describe('dispatcher dashboard', () => {
     const fetch = server({ '/api/fleet/vehicles': fleet,
       '/api/fleet/vehicles/ev-01/telemetry-history?limit=100': history });
     render(<App/>);
+    fireEvent.click(await screen.findByText('EV digital twin diagnostics', { exact: true }));
     const panel = await screen.findByRole('region', { name: 'EV digital twin diagnostics' });
     expect(within(panel).getByText('28 km/h')).toBeInTheDocument();
     expect(within(panel).getByText('32°C')).toBeInTheDocument();
@@ -396,6 +405,7 @@ describe('dispatcher dashboard', () => {
       }],
     }});
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Traffic/ }));
     const panel = await screen.findByRole('region', {name:'Traffic conditions and roadworks'});
     expect(within(panel).getByText('SIMULATION MODE')).toBeInTheDocument();
     expect(within(panel).getByText('ROAD CLOSED')).toBeInTheDocument();
