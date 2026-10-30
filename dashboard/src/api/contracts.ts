@@ -94,11 +94,22 @@ export interface Candidate {
   vehicle_id: string; current_soc_pct: number | null; predicted_arrival_soc_pct: number | null;
   distance_km: number | null; energy_required_kwh: number | null; score: number | null;
   charging_assessment: string | null; exclusion_reasons: string[];
+  crds_gain?: { worst_case_gain_vehicle_minutes: number; worst_case_future_id: string } | null;
+}
+export interface CrdsMetadata {
+  decision: 'MOVE' | 'HOLD' | 'DEFER'; reason_code: string; approval_allowed: boolean;
+  worst_case_gain_vehicle_minutes: number | null; worst_case_future_id: string | null;
+  shortage_changes_by_zone: Record<string, number>;
+  arrival_minutes_min: number | null; arrival_minutes_max: number | null;
+  scenario_count: number; scenario_model_version: string; epoch_id: string; input_fingerprint: string;
+  source_references: Record<string, unknown>;
+  parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number };
 }
 export interface Recommendation {
   recommendation_id: string; expires_at: string; created_at: string;
   selected_vehicle_id: string | null; target: { zone_id: string; name: string };
   ranked_candidates: Candidate[]; excluded_candidates: Candidate[]; explanation: string; assumptions: string[];
+  crds?: CrdsMetadata | null;
 }
 export interface Dispatch {
   dispatch_id: string; request_id: string; vehicle_id: string | null; state: string;

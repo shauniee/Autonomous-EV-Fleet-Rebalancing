@@ -3,6 +3,7 @@ import type { Candidate, Claim, Dispatch, Recommendation, Vehicle, Zone } from '
 import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { RouteDetails } from './RouteDetails';
+import { CrdsSummary } from './CrdsSummary';
 
 export function ServiceStatus({ name, resource }: { name: string; resource: Resource<unknown> }) {
   return <span className={`service ${resource.error ? 'broken' : resource.data ? '' : 'loading'}`}>
@@ -28,7 +29,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Estimated energy</dt><dd>{number(candidate.energy_required_kwh, ' kWh')}</dd></div>
     <div><dt>SOC at recommendation</dt><dd>{number(candidate.current_soc_pct, '%')}</dd></div>
     <div><dt>Predicted arrival SOC</dt><dd>{number(candidate.predicted_arrival_soc_pct, '%')}</dd></div>
-    <div><dt>Backend score</dt><dd>{number(candidate.score)}</dd></div>
+    <div><dt>{candidate.crds_gain ? 'Minimum shortage reduction' : 'Backend score'}</dt><dd>{candidate.crds_gain ? number(candidate.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(candidate.score)}</dd></div>
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
@@ -37,12 +38,13 @@ export function RecommendationPanel({ recommendation, remaining, onReview, disab
 }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
-    <div className="eyebrow">Backend recommendation</div><h3>{recommendation.selected_vehicle_id ?? 'No eligible EV'}</h3>
+    <div className="eyebrow">Backend recommendation</div><h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
+    {recommendation.crds && <CrdsSummary result={recommendation.crds}/>}
     <p>{recommendation.explanation}</p>{candidate && <CandidateDetails candidate={candidate}/>}
     <p className={remaining > 0 ? 'muted' : 'warning'}>{remaining > 0 ? `Expires in ${remaining}s` : 'Recommendation expired. Request a new recommendation.'}</p>
-    <button className="primary" disabled={disabled || !candidate || remaining <= 0} onClick={onReview}>Review dispatch</button>
+    <button className="primary" disabled={disabled || !candidate || remaining <= 0 || (!!recommendation.crds && (!recommendation.crds.approval_allowed || recommendation.crds.decision !== 'MOVE'))} onClick={onReview}>Review dispatch</button>
     <details><summary>Ranking, exclusions & assumptions</summary>
-      <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · score {number(c.score)}</li>)}</ol>
+      <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol>
       {recommendation.excluded_candidates.map(c => <p key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</p>)}
       {recommendation.excluded_candidates.length === 0 && <p>No excluded vehicles.</p>}
       {recommendation.assumptions.map((text, i) => <p key={i}>{text}</p>)}
