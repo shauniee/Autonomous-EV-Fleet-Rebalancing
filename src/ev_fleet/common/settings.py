@@ -1,4 +1,5 @@
 import os
+from typing import Literal
 from pydantic import Field, model_validator
 from ev_fleet.contracts.common import Model
 
@@ -34,3 +35,30 @@ class DispatchSettings(Settings):
     progress_timeout_seconds: float = Field(default=30, gt=0)
     reconcile_interval_seconds: float = Field(default=1, gt=0)
     arrival_tolerance_km: float = Field(default=.05, gt=0, le=1)
+
+
+class CrdsSettings(Model):
+    mode: Literal["DISABLED", "ADVISORY", "ACTIVE"] = "DISABLED"
+    horizon_minutes: int = Field(default=30, gt=0, le=120)
+    slot_minutes: int = Field(default=1, gt=0)
+    minimum_gain_vehicle_minutes: float = Field(default=1, ge=0)
+    demand_step: int = Field(default=1, ge=0, le=20)
+    return_delay_minutes: float = Field(default=10, ge=0, le=120)
+    journey_delay_minutes: float = Field(default=5, ge=0, le=120)
+    age_step_seconds: float = Field(default=30, gt=0)
+    max_age_levels: int = Field(default=3, ge=0, le=10)
+    deadline_seconds: float = Field(default=30, gt=0, le=120)
+    dispatch_url: str = "http://localhost:8004"
+
+    @model_validator(mode="after")
+    def whole_slots(self):
+        if self.horizon_minutes % self.slot_minutes:
+            raise ValueError("CRDS horizon must contain whole slots")
+        return self
+
+    @classmethod
+    def from_env(cls):
+        values = {name: os.environ["CRDS_" + name.upper()] for name in cls.model_fields
+                  if "CRDS_" + name.upper() in os.environ}
+        values.setdefault("dispatch_url", os.getenv("DISPATCH_URL", "http://localhost:8004"))
+        return cls(**values)
