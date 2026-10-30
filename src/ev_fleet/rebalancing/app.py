@@ -1,7 +1,9 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from uuid import uuid4
+from uuid import uuid4, UUID
+import os
+from fastapi import Header, Query
 import httpx
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
@@ -14,6 +16,8 @@ from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
 from .charging_advice import build_charging_advice
 from .traffic import TrafficMonitor, assess_traffic, rank_cost
+from .scenarios import TrafficScenarios, TrafficScenarioInput, allowed_control
+from ev_fleet.contracts.dispatch import Dispatch
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
@@ -27,6 +31,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     batch_store = RecommendationStore(clock, "rebalancing.batches")
     app.state.persistence = (store.repository, batch_store.repository)
     app.state.traffic_monitor = None
+    app.state.traffic_scenarios = TrafficScenarios(clock)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -57,14 +62,14 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_monitor.cached_snapshot()
+        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
         try:
             fleet = FleetSnapshot.model_validate(fleet).model_dump(mode="json")
             target = ZoneState.model_validate(target).model_dump(mode="json")
             if target["zone_id"] != body.target_zone_id:
                 raise ValueError("target identity mismatch")
             eligible, excluded = strategy.rank(fleet, target, config, now)
-            if traffic["source"] == "LTA_DATAMALL":
+            if traffic["source"] in ("LTA_DATAMALL", "SIMULATION"):
                 by_id = {vehicle["vehicle_id"]: vehicle for vehicle in fleet["vehicles"]}
                 for candidate in eligible:
                     vehicle = by_id[candidate["vehicle_id"]]
@@ -99,10 +104,49 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         await store.put(record, config.recommendation_ttl_seconds)
         return record
 
+    @app.get("/api/v1/traffic/scenarios")
+    async def list_traffic_scenarios():
+        return app.state.traffic_scenarios.list()
+
+    @app.post("/api/v1/traffic/scenarios", status_code=201)
+    async def create_traffic_scenario(
+        body: TrafficScenarioInput,
+        x_traffic_simulation_key: str | None = Header(default=None),
+    ):
+        allowed_control(x_traffic_simulation_key)
+        # Only real road geometry emitted in an approved Dispatch command can
+        # become a simulation segment. No arbitrary lines on the road map.
+        url = os.getenv("DISPATCH_URL", "http://dispatch:8000").rstrip("/")
+        try:
+            raw = await get_json(app.state.client, f"{url}/api/v1/dispatches/{body.dispatch_id}")
+            dispatch = Dispatch.model_validate(raw)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(503, "DISPATCH_ROUTE_INVALID") from exc
+        if dispatch.command is None or dispatch.command.route is None or (
+            dispatch.state.value in ("REJECTED", "FAILED")):
+            raise HTTPException(409, "APPROVED_ROAD_GEOMETRY_REQUIRED")
+        return app.state.traffic_scenarios.create(body, dispatch.command.route)
+
+    @app.delete("/api/v1/traffic/scenarios/{scenario_id}")
+    async def delete_traffic_scenario(
+        scenario_id: UUID, expected_version: int = Query(ge=0),
+        x_traffic_simulation_key: str | None = Header(default=None),
+    ):
+        allowed_control(x_traffic_simulation_key)
+        return app.state.traffic_scenarios.delete(str(scenario_id), expected_version)
+
+    @app.delete("/api/v1/traffic/scenarios")
+    async def clear_traffic_scenarios(
+        expected_version: int = Query(ge=0),
+        x_traffic_simulation_key: str | None = Header(default=None),
+    ):
+        allowed_control(x_traffic_simulation_key)
+        return app.state.traffic_scenarios.clear(expected_version)
+
     @app.get("/api/v1/traffic/conditions")
     async def traffic_conditions():
         # Each feed caches independently. Missing data is explicitly UNKNOWN.
-        return app.state.traffic_monitor.cached_snapshot()
+        return app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
 
     @app.get("/api/v1/charging-advice")
     async def charging_advice():
@@ -125,7 +169,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
             get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities?zone_id={body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_monitor.cached_snapshot()
+        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
         try:
             fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
             target = ZoneState.model_validate(target_raw).model_dump(mode="json")
