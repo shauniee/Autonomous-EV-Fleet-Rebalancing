@@ -116,7 +116,8 @@ export default function App() {
     && now - Date.parse(chargingAdvice.updatedAt) < 30000 && now - Date.parse(chargingAdvice.data.generated_at) < 30000;
   const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0
     || (!!recommendation?.crds && (recommendation.crds.decision !== 'MOVE' || !recommendation.crds.approval_allowed));
-  const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
+  const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0
+    || (!!batch?.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed));
   async function recommend() {
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;

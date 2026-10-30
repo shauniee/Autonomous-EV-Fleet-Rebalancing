@@ -146,9 +146,12 @@ export interface FacilitiesSnapshot {
 export interface ParkingAssignment {
   recommendation_id: string; vehicle_id: string; facility_id: string; facility_name: string;
   target_position: Position; requires_charging: boolean; distance_km: number;
-  predicted_arrival_soc_pct: number; score: number; traffic_assessment?: TrafficRouteAssessment | null;
+  predicted_arrival_soc_pct: number; score: number | null; traffic_assessment?: TrafficRouteAssessment | null;
+  crds_gain?: { worst_case_gain_vehicle_minutes: number; worst_case_future_id: string } | null;
 }
 export interface BatchRecommendation {
+  crds?: CrdsMetadata | null;
+  unfulfilled_reason?: string | null;
   batch_recommendation_id: string; target_zone_id: string;
   purpose?: 'REBALANCE' | 'CHARGE';
   requested_count: number; recommended_count: number; unfulfilled_count: number;
