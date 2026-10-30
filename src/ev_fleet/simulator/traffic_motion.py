@@ -3,6 +3,7 @@
 No in-flight rerouting, off-road movement or dashboard-written positions.
 """
 from bisect import bisect_right
+from datetime import datetime, timezone
 from ev_fleet.common.travel import distance_km
 
 def segment_speed(movement, nominal_speed_kph, snapshot):
@@ -18,7 +19,14 @@ def segment_speed(movement, nominal_speed_kph, snapshot):
     geometry_progress = movement.distance / max(.00001, movement.total) * cumulative[-1]
     index = min(len(points)-2, max(0, bisect_right(cumulative, geometry_progress) - 1))
     speed = nominal_speed_kph
+    now = datetime.now(timezone.utc)
     for e in snapshot.get("simulated_events", []):
+        if e.get("expires_at"):
+            try:
+                if datetime.fromisoformat(e["expires_at"]) <= now:
+                    continue
+            except (ValueError, TypeError):
+                continue
         if e["kind"] not in ("CONGESTION", "ROADWORKS", "ROAD_CLOSED"):
             continue
         # No cross-lane or arbitrary nearby road effects: both event vertices
