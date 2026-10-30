@@ -384,7 +384,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       }}>Fit route</button>
     </div>
     <div ref={element} className="map" aria-label="Singapore zones, fleet, and parking or charging sites map"/>
-    <p className="map-marker-help">Nearby parking and charging sites are grouped by count. Select a group to zoom in or spread overlapping sites apart. EVs remain at their geographic positions; the selected EV is outlined.</p>
+    <details className="map-help"><summary>Map controls & marker help</summary>
+      <p className="map-marker-help">Nearby parking and charging sites are grouped by count. Select a group to zoom in or spread overlapping sites apart. EVs remain at their geographic positions; the selected EV is outlined.</p>
+    </details>
     {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
     {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
     {!Object.values(visible).some(Boolean) && <p className="map-filter-note" role="status">All layers are hidden. Select a layer above to show map items.</p>}

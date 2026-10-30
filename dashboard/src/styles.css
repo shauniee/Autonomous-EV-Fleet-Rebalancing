@@ -33,12 +33,28 @@ main{padding:20px var(--page-gutter)}
 .page-intro h2{font-size:23px;margin-bottom:4px}
 .page-intro p{color:#708281;margin:0}
 .panel{background:#fff;border:1px solid #dbe5e1;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 3px 12px #123d4205}
-.workspace{display:grid;grid-template-columns:minmax(0,1fr) clamp(340px,24vw,400px);gap:20px;align-items:start}
+.workspace{display:grid;grid-template-columns:minmax(0,1fr) clamp(340px,24vw,400px);gap:20px;align-items:stretch}
 .workspace-main{min-width:0}
+.map-panel{display:flex;flex-direction:column}
+.map-panel .map{flex:1;min-height:clamp(440px,60dvh,760px)}
+.target-panel{min-width:0}
+.map-panel:focus-visible,.target-panel:focus-visible{outline:3px solid #327dd1;outline-offset:3px}
+.target-panel .zone-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+.target-panel .zone-list button{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;padding:8px}
+.target-panel .section-title{margin-bottom:10px}
+.destination-details>summary{font-weight:600}
+.destination-details[open]>.section-title{margin-top:12px}
+.target-panel .metrics{gap:8px;margin:12px 0}
+.target-panel .metrics div{padding:8px}
+.target-panel .metrics dd{font-size:20px}
+.target-panel .relocation-request{min-height:0;margin-top:16px;padding-top:16px;border-top:1px solid #dbe5e1}
+.target-panel .request-fields{grid-template-columns:1fr;gap:12px;margin:12px 0}
+.target-panel .relocation-request .quantity-picker{padding:8px;margin:8px 0}
+.target-panel .relocation-request .quantity-picker input{width:74px;font-size:20px}
 .section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
 .section-title h2,.section-title h3{margin:0}
 .map{height:clamp(440px,60dvh,760px);border-radius:8px;background:#e0eae5;z-index:0}
-.map-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:14px}
+.map-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .map-filters{flex:1 1 280px;min-width:0;padding:0;margin:0;border:0}
 .map-filters legend{padding:0;margin-bottom:8px;font-size:11px;font-weight:650;color:#617b73}
 .map-filter-options{display:flex;flex-wrap:wrap;gap:7px}
@@ -109,7 +125,7 @@ small{display:block;font-size:10px;color:#74887c}
 .dispatch-card{border:1px solid #e0e8e3;border-radius:8px;padding:16px}
 .route-directions ol{max-height:240px;overflow:auto;padding-left:22px}
 .route-directions li{padding:6px 0;border-bottom:1px solid #edf2ee;overflow-wrap:anywhere}
-.route-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.route-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .route-toolbar .map-scope{flex:1 1 200px;min-width:0}
 .route-toolbar .form-select{max-width:none}
 .route-details{margin-top:16px;padding:14px;border:1px solid #dce7e4;border-radius:8px;background:#f5f8f6}
@@ -124,6 +140,7 @@ dialog::backdrop{background:#10353680;backdrop-filter:blur(3px)}
 .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
 
 @media(max-width:1199px){.workspace{grid-template-columns:1fr}
+.map-panel .map{flex:none;min-height:0}
 .target-panel{min-height:0}
 .service-bar{gap:10px}
 .refresh-note{margin-left:0}
