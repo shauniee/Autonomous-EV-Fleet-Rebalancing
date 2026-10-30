@@ -39,6 +39,10 @@ spec:
               value: http://rebalancing:8000
             - name: DISPATCH_URL
               value: http://dispatch:8000
+          envFrom:
+            - secretRef:
+                name: ev-fleet-traffic-control
+                optional: true
           ports:
             - name: http
               containerPort: 8090
