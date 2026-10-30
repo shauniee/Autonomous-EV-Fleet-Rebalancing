@@ -5,6 +5,7 @@ metadata:
 data:
   CRDS_MODE: "DISABLED"
   CRDS_EXECUTION_MODE: "LOCAL"
+  CRDS_EXPAND_AGE: "true"
   CRDS_WORKER_URLS: "http://crds-worker:8000,http://crds-worker:8000"
   FLEET_URL: http://fleet:8000
   DEMAND_URL: http://demand:8000

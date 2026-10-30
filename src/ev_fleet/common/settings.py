@@ -47,6 +47,7 @@ class CrdsSettings(Model):
     journey_delay_minutes: float = Field(default=5, ge=0, le=120)
     age_step_seconds: float = Field(default=30, gt=0)
     max_age_levels: int = Field(default=3, ge=0, le=10)
+    expand_age: bool = True
     deadline_seconds: float = Field(default=30, gt=0, le=120)
     dispatch_url: str = "http://localhost:8004"
     execution_mode: Literal["LOCAL", "HTTP"] = "LOCAL"

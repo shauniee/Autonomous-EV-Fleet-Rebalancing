@@ -37,8 +37,9 @@ class CrdsPlan:
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                    vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
-                   expand_age=True):
+                   expand_age=None):
     start = clock.monotonic()
+    expand_age = settings.expand_age if expand_age is None else expand_age
     inputs = await collect_inputs(client, policy, settings.dispatch_url, clock, traffic,
                                   timeout_seconds=settings.deadline_seconds,
                                   exclude_dispatch_id=exclude_dispatch_id)
@@ -56,7 +57,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "demand_versions": {z.zone_id: z.demand_version for z in inputs.demand.zones},
             "planning_instance_id": str(inputs.planning.instance_id), "planning_revision": inputs.planning.revision,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
-            "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat()})
+            "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat(),
+            "expand_age": expand_age})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
                      [], [], {}, {}, metadata, start + settings.deadline_seconds)
     if inputs.issues:
