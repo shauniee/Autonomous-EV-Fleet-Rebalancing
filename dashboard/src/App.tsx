@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, Dispatch, DispatchList, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
+import { OperationalTabs } from './components/OperationalTabs';
 import { SingaporeMap } from './components/SingaporeMap';
 import { HotspotToasts } from './components/HotspotToasts';
 import { ChargingOperations } from './components/ChargingOperations';
@@ -234,37 +235,53 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
-      {selectedDispatch && dispatches.data?.dispatches.some(d => d.dispatch_id === selectedDispatch && d.command?.route && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)) &&
-        <TrafficJourneyCheck dispatchId={selectedDispatch}/>}
-      <TrafficConditions snapshot={traffic.data} error={traffic.error}/>
-      <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/>
       {batchResult && <BatchResult result={batchResult}/>}
-      <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/>
-      <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}
-        advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
-        canPrepare={!!fresh && facilitiesFresh && !pending && !pendingBatch && !submitting && !recommending}
-        onPrepare={(item: ChargerAdvice) => {
-          if (!item.charger || !chargingAdviceFresh || !fresh || !facilitiesFresh
-              || pending || pendingBatch || submitting || recommending) return;
-          // Prefill only; the operator must explicitly request and review the
-          // live backend batch recommendation, then approve the dispatch.
-          choose(item.charger.zone_id);
-          setSelectedVehicle(item.vehicle_id);
-          setSelectedFacility(item.charger.facility_id);
-          setPurpose('CHARGE');
-          setQuantity(1);
-          inspector.current?.focus({ preventScroll: true });
-          inspector.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-        }}/>
-      <FleetPanel vehicles={vehicles}/>
-      {twinVehicle && <TwinHistoryPanel key={twinVehicle.vehicle_id} vehicle={twinVehicle}/>}
-      <RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
-        const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
-        if (target && target !== selected) choose(target);
-        setSelectedDispatch(id);
-        mapPanel.current?.focus({ preventScroll: true });
-        mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }}/>
+      <OperationalTabs tabs={[
+        { id: 'fleet', label: 'Fleet', content: <>
+          <FleetPanel vehicles={vehicles}/>
+          {twinVehicle && <details className="twin-history"><summary>EV digital twin diagnostics</summary>
+            <TwinHistoryPanel key={twinVehicle.vehicle_id} vehicle={twinVehicle}/>
+          </details>}
+        </> },
+        { id: 'relocations', label: 'Relocations',
+          summary: dispatches.updatedAt && !dispatches.error && now - Date.parse(dispatches.updatedAt) < 10000
+            ? `${dispatches.data?.dispatches.filter(d => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).length ?? 0} unfinished`
+            : 'unavailable',
+          content: <RelocationPanel dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+            const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
+            if (target && target !== selected) choose(target);
+            setSelectedDispatch(id);
+            mapPanel.current?.focus({ preventScroll: true });
+            mapPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}/> },
+        { id: 'charging', label: 'Charging',
+          summary: fleetFeedHealthy
+            ? `EVs ≤30% SOC: ${vehicles.filter(v => !v.stale && v.connectivity === 'ONLINE' && v.telemetry && v.telemetry.soc_pct <= 30).length}`
+            : 'unavailable',
+          content: <ChargingOperations vehicles={vehicles} onUpdated={() => fleet.refresh()}
+            advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
+            canPrepare={!!fresh && facilitiesFresh && !pending && !pendingBatch && !submitting && !recommending}
+            onPrepare={(item: ChargerAdvice) => {
+              if (!item.charger || !chargingAdviceFresh || !fresh || !facilitiesFresh
+                  || pending || pendingBatch || submitting || recommending) return;
+              // Prefill only; the operator must explicitly request and review the
+              // live backend batch recommendation, then approve the dispatch.
+              choose(item.charger.zone_id);
+              setSelectedVehicle(item.vehicle_id);
+              setSelectedFacility(item.charger.facility_id);
+              setPurpose('CHARGE');
+              setQuantity(1);
+              inspector.current?.focus({ preventScroll: true });
+              inspector.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+            }}/> },
+        { id: 'facilities', label: 'Facilities', content: <FacilitiesPanel key={selected} facilities={sites} selectedZone={selected} error={facilities.error} snapshot={facilities.data}/> },
+        { id: 'traffic', label: 'Traffic', content: <>
+          {selectedDispatch && dispatches.data?.dispatches.some(d => d.dispatch_id === selectedDispatch && d.command?.route && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)) &&
+            <TrafficJourneyCheck dispatchId={selectedDispatch}/>}
+          <TrafficConditions snapshot={traffic.data} error={traffic.error}/>
+        </> },
+        { id: 'rentals', label: 'Rentals', content: <RentalOutlook vehicles={vehicles} zones={heat.data?.zones ?? []}/> },
+      ]}/>
       <footer>Human-approved relocation · Backend-owned decisions · In-memory simulation</footer>
     </main>{confirming && recommendation && <DispatchConfirmation recommendation={recommendation} vehicle={current || undefined} expired={!!approvalBlocked} onClose={() => setConfirming(false)} onApprove={() => void approve()}/>}
     {batchConfirming && batch && <BatchConfirmation batch={batch} expired={batchBlocked} onClose={() => setBatchConfirming(false)} onApprove={() => void approveBatch()}/>}

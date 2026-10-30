@@ -35,6 +35,14 @@ main{padding:20px var(--page-gutter)}
 .panel{background:#fff;border:1px solid #dbe5e1;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 3px 12px #123d4205}
 .workspace{display:grid;grid-template-columns:minmax(0,1fr) clamp(340px,24vw,400px);gap:20px;align-items:stretch}
 .workspace-main{min-width:0}
+.operational-tabs{min-width:0}
+.operational-tablist{display:flex;gap:8px;overflow-x:auto;padding:4px;margin-bottom:16px}
+.operational-tablist button{display:flex;align-items:center;gap:8px;flex-shrink:0;white-space:nowrap}
+.operational-tablist button[aria-selected=true]{background:#176d62;border-color:#176d62;color:#fff}
+.tab-count{font-size:11px;font-weight:400}
+.operational-panel:focus-visible{outline:3px solid #327dd1;outline-offset:3px}
+.twin-history{margin-bottom:20px}
+.twin-history>summary{margin-bottom:12px}
 .map-panel{display:flex;flex-direction:column}
 .map-panel .map{flex:1;min-height:clamp(440px,60dvh,760px)}
 .target-panel{min-width:0}
