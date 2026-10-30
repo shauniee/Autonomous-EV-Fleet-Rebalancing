@@ -39,6 +39,15 @@ class Movement:
             return self.seen[identity]["accepted"]
         if self.command:
             raise ValueError("another command is active")
+        route = command.get("route")
+        if not route or route.get("source", "ONEMAP") != "ONEMAP":
+            self.command = deepcopy(command)
+            self.accepted = False
+            self.reason = "ONEMAP_ROUTE_REQUIRED"
+            self.state = "IDLE"
+            self.distance = 0.0
+            self.seen[identity] = {"command": deepcopy(command), "accepted": False, "completed": False}
+            return False
         if command.get("route") and distance_km(self.position, command["route"]["geometry"][0]) > .005:
             raise ValueError("route starts away from the road-aligned EV position")
         self.parking = None
