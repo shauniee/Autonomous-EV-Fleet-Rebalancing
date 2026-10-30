@@ -53,7 +53,8 @@ class TrafficScenarios:
 
     def list(self):
         return {"version": self.version, "enabled":
-                os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true",
+                (os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true"
+                 and len(os.getenv("TRAFFIC_SIMULATION_CONTROL_KEY", "")) >= 16),
                 "scenarios": self._active(), "generated_at": self.clock.now().isoformat()}
 
     def create(self, body, route):
