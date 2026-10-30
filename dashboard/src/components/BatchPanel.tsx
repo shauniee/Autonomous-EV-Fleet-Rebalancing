@@ -13,14 +13,19 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
     {batch.unfulfilled_count > 0 && <p className="warning" role="status">
       {batch.unfulfilled_count} requested EV(s) could not be matched to eligible vehicles and parking spaces.</p>}
     <div className="table-scroll"><table aria-label="Batch vehicle-to-parking assignments">
-      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Traffic ETA</th><th>Score</th></tr></thead>
+      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>Score</th></tr></thead>
       <tbody>{batch.assignments.map(item => <tr key={item.recommendation_id}>
         <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ' · parking'}</td>
         <td>{number(item.distance_km, ' km')}</td><td>{number(item.predicted_arrival_soc_pct, '%')}</td>
-        <td>{item.traffic_assessment?.estimated_duration_seconds != null ? number(item.traffic_assessment.estimated_duration_seconds / 60, ' min') : 'Unknown'}</td>
+        <td>{number(item.distance_km / 30 * 60, ' min')}</td>
+        <td>{item.traffic_assessment?.estimated_duration_seconds != null ?
+          <>{number(item.traffic_assessment.estimated_duration_seconds / 60, ' min')}
+            {item.traffic_assessment.blocked ? ' · BLOCKED' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
+          </> : 'Unknown'}</td>
         <td>{number(item.score)}</td>
       </tr>)}</tbody>
     </table></div>
+    <p className="muted">*Baseline uses the synthetic 30 km/h screening assumption; actual OneMap route and safe battery reserve are revalidated by Dispatch at approval. Traffic ETA is an estimate, not a real travel-time promise. Predicted arrival SOC currently reflects route distance, not queuing energy.</p>
     <p className={remaining ? 'muted' : 'warning'}>{remaining ? `Expires in ${remaining}s` : 'Batch recommendation expired.'}</p>
     <p className="muted">No EV or parking space is claimed until an operator explicitly approves. Allocations may change if capacity becomes unavailable.</p>
     <button className="primary" disabled={disabled || batch.recommended_count === 0 || remaining <= 0} onClick={onReview}>Review dispatch</button>
