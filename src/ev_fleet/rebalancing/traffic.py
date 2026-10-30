@@ -202,11 +202,30 @@ def _near_route(point, geometry, threshold_km=.12):
 def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
     """Pure scoring: assessed routes only, unknown feed != clear road."""
     when = when or datetime.now(timezone.utc)
-    active = traffic.get("source") == "LTA_DATAMALL"
+    active = traffic.get("source") in ("LTA_DATAMALL", "SIMULATION")
     if not active or len(geometry) < 2:
         return {"status": "UNKNOWN", "blocked": False, "delay_factor": None,
                 "estimated_duration_seconds": None, "risk": None,
                 "matched_speed_segments": 0, "roadworks": 0, "incidents": 0}
+    if traffic.get("source") == "SIMULATION":
+        # Match BOTH endpoints of a validated route segment to the assessed
+        # geometry. A nearby parallel street must not count as affected.
+        affected = [e for e in traffic.get("simulated_events", [])
+                    if _near_route(e["start"], geometry, .025)
+                    and _near_route(e["end"], geometry, .025)]
+        blocked = any(e["kind"] == "ROAD_CLOSED" for e in affected)
+        controlled = [e for e in affected if e["kind"] != "ROAD_CLOSED"]
+        normal_speed = 40.0  # Explicit synthetic baseline, not measured LTA speed
+        factor = max((normal_speed / e["speed_kph"] for e in controlled), default=1)
+        risk = min(1, .25 * sum(e["kind"] == "ROADWORKS" for e in affected)
+                      + .4 * sum(e["kind"] == "ROAD_CLOSED" for e in affected))
+        return {"status": "FRESH", "blocked": blocked,
+                "delay_factor": round(factor, 3),
+                "estimated_duration_seconds": round(duration_seconds * factor, 1),
+                "risk": risk, "matched_speed_segments": len(controlled),
+                "roadworks": sum(e["kind"] == "ROADWORKS" for e in affected),
+                "incidents": sum(e["kind"] == "ROAD_CLOSED" for e in affected),
+                "affected_simulation_ids": [e["id"] for e in affected]}
     matched = [row for row in traffic.get("speeds", []) if
                _near_route(row["start"], geometry, .10) or _near_route(row["end"], geometry, .10)]
     road_names = {item["road"] for item in matched if item["road"]}
