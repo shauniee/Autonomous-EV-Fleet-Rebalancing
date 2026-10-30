@@ -37,7 +37,8 @@ class DispatchService:
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.routing = RoutingSettings.from_env()
-        self.traffic_enabled = os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
+        self.traffic_enabled = (os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
+            or os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true")
 
     async def start(self):
         await self.repository.start()
