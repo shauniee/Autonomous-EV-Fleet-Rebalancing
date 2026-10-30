@@ -122,8 +122,9 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
             dispatch = Dispatch.model_validate(raw)
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(503, "DISPATCH_ROUTE_INVALID") from exc
-        if dispatch.command is None or dispatch.command.route is None or (
-            dispatch.state.value in ("REJECTED", "FAILED")):
+        if (dispatch.command is None or dispatch.command.route is None
+                or dispatch.state.value in ("REJECTED", "FAILED")
+                or (dispatch.claim_held is not True and dispatch.state.value != "SUCCEEDED")):
             raise HTTPException(409, "APPROVED_ROAD_GEOMETRY_REQUIRED")
         return app.state.traffic_scenarios.create(body, dispatch.command.route)
 
