@@ -24,12 +24,16 @@ function nearestZone(position: Position, zones: Zone[]) {
   return closest?.zone_id;
 }
 
-function removeHiddenPins(group: L.MarkerClusterGroup, pins: Map<string, L.Marker>, visibleIds: Set<string>) {
+function removeHiddenPins(group: L.LayerGroup, pins: Map<string, L.Marker>, visibleIds: Set<string>) {
   const removed: L.Marker[] = [];
   for (const [id, pin] of pins) {
     if (!visibleIds.has(id)) { removed.push(pin); pins.delete(id); }
   }
-  if (removed.length) group.removeLayers(removed);
+  if (group instanceof L.MarkerClusterGroup) {
+    if (removed.length) group.removeLayers(removed);
+  } else {
+    for (const pin of removed) group.removeLayer(pin);
+  }
 }
 
 function pinIconNeedsUpdate(pin: L.Marker, icon: L.DivIcon) {
@@ -53,6 +57,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const markers = useRef<L.MarkerClusterGroup | null>(null);
+  const vehicleLayer = useRef<L.LayerGroup | null>(null);
   const facilityPins = useRef(new Map<string, L.Marker>());
   const vehiclePins = useRef(new Map<string, L.Marker>());
   const displayAnimations = useRef(new Map<string, number>());
@@ -93,15 +98,16 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   useEffect(() => {
     const instance = L.map(element.current!, { preferCanvas: true, maxZoom: 18 }).setView([1.35, 103.82], 11);
     map.current = instance;
+    instance.createPane('evPane').style.zIndex = '625';
+    vehicleLayer.current = L.layerGroup().addTo(instance);
     markers.current = L.markerClusterGroup({
       maxClusterRadius: 48, showCoverageOnHover: false, spiderfyDistanceMultiplier: 1.7,
       animate: false,
       iconCreateFunction: cluster => {
-        const selectedEV = cluster.getAllChildMarkers().some(marker => marker.options.icon?.options.className?.includes('is-selected'));
         const count = cluster.getChildCount().toLocaleString();
         return L.divIcon({
-          className: `map-cluster${selectedEV ? ' is-selected' : ''}`,
-          html: `${selectedEV ? mapSymbols.ev : ''}<strong>${count}</strong><span>items</span>`,
+          className: 'map-cluster',
+          html: `<strong>${count}</strong><span>sites</span>`,
           iconSize: [44, 44], iconAnchor: [22, 22],
         });
       },
@@ -114,8 +120,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     });
     resize.observe(element.current!);
     return () => {
-      resize.disconnect(); instance.remove(); map.current = null; markers.current = null;
       for (const handle of displayAnimations.current.values()) cancelAnimationFrame(handle);
+      resize.disconnect(); instance.remove(); map.current = null; markers.current = null; vehicleLayer.current = null;
       displayAnimations.current.clear(); lastConfirmed.current.clear();
       facilityPins.current.clear(); vehiclePins.current.clear(); fitted.current = false; fittedJourney.current = '';
     };
@@ -242,7 +248,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     return () => { layer.remove(); };
   }, [visible.traffic, traffic]);
   useEffect(() => {
-    const group = markers.current;
+    const group = vehicleLayer.current;
     if (!group) return;
     const added: L.Marker[] = [];
     const ids = new Set<string>();
@@ -272,7 +278,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
             cancelAnimationFrame(active);
             displayAnimations.current.delete(vehicle.vehicle_id);
           }
-          const plan = !mustFreeze ? planConfirmedMotion(previous, current, roadPath) : null;
+          const displayed = active !== undefined ? marker.getLatLng() : undefined;
+          const plan = !mustFreeze ? planConfirmedMotion(previous, current, roadPath,
+            displayed && { latitude: displayed.lat, longitude: displayed.lng }) : null;
           if (plan) {
             // Both endpoints are confirmed by Fleet and the path comes from
             // THIS vehicle's immutable Dispatch command, not the selected EV.
@@ -296,6 +304,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           } else {
             // Stale, off-route, new session, missing geometry or a long
             // network gap: show the LAST confirmed position without guessing.
+            marker.setLatLng(position);
             updatePin(marker, position, icon, label);
           }
         } else {
@@ -306,10 +315,11 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           if (active === undefined) updatePin(marker, position, icon, label);
         }
       } else {
-        marker = L.marker(position, { icon, title: vehicle.vehicle_id }).bindTooltip(label, { direction: 'top' });
+        marker = L.marker(position, { icon, title: vehicle.vehicle_id, pane: 'evPane' }).bindTooltip(label, { direction: 'top' });
         reportedPositions.set(marker, L.latLng(position));
         vehiclePins.current.set(vehicle.vehicle_id, marker); added.push(marker);
       }
+      marker.setZIndexOffset(focused ? 1000 : 0);
       if (newObservation) lastConfirmed.current.set(vehicle.vehicle_id, { ...current });
       marker.off('click').on('click', () => {
         const dispatch = activeRoutes.find(item => item.vehicle_id === vehicle.vehicle_id);
@@ -325,8 +335,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       }
     }
     removeHiddenPins(group, vehiclePins.current, ids);
-    if (added.length) group.addLayers(added);
-    group.refreshClusters();
+    for (const pin of added) group.addLayer(pin);
   }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch, telemetryFeedHealthy]);
   return <>
     <div className="map-toolbar">
@@ -375,7 +384,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       }}>Fit route</button>
     </div>
     <div ref={element} className="map" aria-label="Singapore zones, fleet, and parking or charging sites map"/>
-    <p className="map-marker-help">Nearby EVs, parking and chargers are grouped by count. Select a group to zoom in or spread overlapping locations apart. A car symbol in a group marks your selected EV.</p>
+    <p className="map-marker-help">Nearby parking and charging sites are grouped by count. Select a group to zoom in or spread overlapping sites apart. EVs remain at their geographic positions; the selected EV is outlined.</p>
     {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
     {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
     {!Object.values(visible).some(Boolean) && <p className="map-filter-note" role="status">All layers are hidden. Select a layer above to show map items.</p>}

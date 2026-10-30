@@ -136,6 +136,8 @@ class DispatchService:
         route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
                                     self.settings.arrival_tolerance_km,
                                     facility=parking is not None) if origin else None
+        if route is None or route.source != "ONEMAP":
+            raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
         if route and self.traffic_enabled:
             traffic = await request_json(self.client, "GET",
                 f"{self.settings.rebalancing_url}/api/v1/traffic/conditions")
@@ -143,7 +145,7 @@ class DispatchService:
             # traffic feeds are visible as UNKNOWN, not an all-clear.
             route = await choose_traffic_route(self.client, route, origin,
                 destination.model_dump(), self.settings.arrival_tolerance_km,
-                traffic, self.clock.now(), facility=parking is not None)
+                traffic, self.clock.now(), facility=parking is not None, osrm_url="")
         if route:
             # Physical destination is the road endpoint, NOT the carpark's
             # off-road map coordinate. Fleet keeps the strict 50 m arrival rule.
