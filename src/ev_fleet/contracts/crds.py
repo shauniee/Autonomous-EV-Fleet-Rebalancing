@@ -125,3 +125,20 @@ class CrdsRouteEstimate(Model):
     control_version: int
     origin: Position
     route: RoadRoute
+
+
+class CrdsMetadata(Model):
+    decision: Literal["MOVE", "HOLD", "DEFER"]
+    reason_code: str
+    approval_allowed: bool = False
+    parameters: CrdsParameters
+    scenario_model_version: str
+    scenario_count: int = Field(ge=0)
+    epoch_id: UUID
+    input_fingerprint: str
+    source_references: dict
+    worst_case_gain_vehicle_minutes: float | None = None
+    worst_case_future_id: str | None = None
+    shortage_changes_by_zone: dict[str, float] = Field(default_factory=dict)
+    arrival_minutes_min: float | None = Field(default=None, ge=0)
+    arrival_minutes_max: float | None = Field(default=None, ge=0)

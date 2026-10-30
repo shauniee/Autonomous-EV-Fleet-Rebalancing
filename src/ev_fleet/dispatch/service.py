@@ -161,6 +161,8 @@ class DispatchService:
             raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
         if recommendation.expires_at <= self.clock.now():
             raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+        if recommendation.crds is not None:
+            raise HTTPException(409, "CRDS_ADVISORY_ONLY")
         if not recommendation.selected_vehicle_id:
             raise HTTPException(409, "NO_RECOMMENDED_VEHICLE")
         target, fleet = await asyncio.gather(

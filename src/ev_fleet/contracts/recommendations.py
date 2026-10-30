@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, model_validator
 from .common import Model, Position
 from .demand import ZoneState
+from .crds import CrdsCandidateGain, CrdsMetadata
 
 
 class RecommendationRequest(Model):
@@ -24,6 +25,7 @@ class CandidateAssessment(Model):
     score: float | None = Field(default=None, ge=0, le=1)
     charging_assessment: str | None = None
     traffic_assessment: dict | None = None
+    crds_gain: CrdsCandidateGain | None = None
 
 
 class SnapshotReference(Model):
@@ -51,6 +53,7 @@ class Recommendation(Model):
     decision_latency_ms: float = Field(ge=0)
     explanation: str
     assumptions: list[str]
+    crds: CrdsMetadata | None = None
 
 class BatchRecommendationRequest(RecommendationRequest):
     quantity: int = Field(ge=1, le=20)

@@ -10,7 +10,8 @@ import httpx
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.logging import base_app
-from ev_fleet.common.settings import Settings
+from ev_fleet.common.settings import Settings, CrdsSettings
+from .crds_service import plan_one, recommendation_record
 from ev_fleet.contracts.recommendations import RecommendationRequest, Recommendation, BatchRecommendationRequest, BatchRecommendation
 from ev_fleet.contracts.vehicles import FleetSnapshot
 from ev_fleet.contracts.demand import ZoneState
@@ -33,9 +34,10 @@ class TrafficRouteQuery(BaseModel):
     duration_seconds: float = Field(ge=0, le=86400)
 
 
-def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
+def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, crds_settings=None):
     app = base_app("EV Rebalancing Service")
     config = settings or Settings.from_env()
+    crds_config = crds_settings or CrdsSettings.from_env()
     clock = clock or Clock()
     store = RecommendationStore(clock, "rebalancing.recommendations")
     batch_store = RecommendationStore(clock, "rebalancing.batches")
@@ -90,6 +92,17 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     @app.post("/api/v1/recommendations", status_code=201, response_model=Recommendation)
     async def recommend(body: RecommendationRequest):
         start = clock.monotonic()
+        if crds_config.mode != "DISABLED":
+            try:
+                plan = await plan_one(app.state.client, config, crds_config, clock,
+                                      traffic_snapshot(), body.target_zone_id)
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+            except ValueError:
+                raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+            record = recommendation_record(plan, config, clock, body.target_zone_id, started_at=start)
+            await store.put(record, config.recommendation_ttl_seconds)
+            return record
         fleet, target = await asyncio.gather(
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
