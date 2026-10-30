@@ -34,7 +34,7 @@ export default function App() {
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
-  const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 30000);
+  const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 5000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const mapPanel = useRef<HTMLElement>(null);
