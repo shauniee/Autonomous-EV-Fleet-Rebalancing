@@ -76,7 +76,7 @@ class Movement:
         if self.command and self.accepted and self.state == "DISPATCHED":
             self.state = "RELOCATING"
 
-    def advance(self, elapsed_seconds, speed_kph):
+    def advance(self, elapsed_seconds, speed_kph, *, traffic_speed_cap_kph=None):
         if not isfinite(elapsed_seconds) or not isfinite(speed_kph) or elapsed_seconds < 0 or speed_kph <= 0:
             raise ValueError("invalid simulation step")
         if self.state != "RELOCATING":
@@ -86,6 +86,13 @@ class Movement:
         possible = self.soc_pct / 100 * self.capacity / self.consumption
         route = self.command.get("route")
         speed = self.total / route["duration_seconds"] if route and route["duration_seconds"] > 0 else speed_kph / 3600
+        # A road route normally follows its OneMap/OSRM average journey speed.
+        # A *simulated* traffic cap may only SLOW that authoritative speed;
+        # it never makes a vehicle faster or creates an off-road shortcut.
+        if traffic_speed_cap_kph is not None:
+            if not isfinite(traffic_speed_cap_kph) or traffic_speed_cap_kph < 0:
+                raise ValueError("invalid synthetic traffic speed cap")
+            speed = min(speed, traffic_speed_cap_kph / 3600)
         step = min(remaining, speed * elapsed_seconds, possible)
         previous_position = deepcopy(self.position)
         self.distance += step
