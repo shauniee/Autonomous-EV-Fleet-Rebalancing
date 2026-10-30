@@ -44,7 +44,7 @@ def rank_pairs(fleet, zone, facilities, policy, now, quantity, purpose="REBALANC
             score = .85 * assessment["score"] + .15 * parking_fit
             evaluation = None
             traffic_scored = False
-            if traffic and traffic.get("source") == "LTA_DATAMALL":
+            if traffic and traffic.get("source") in ("LTA_DATAMALL", "SIMULATION"):
                 # Pre-approval heuristic uses a direct origin-to-site corridor.
                 # No claim is made that this line is the eventual road route.
                 origin = vehicle["telemetry"]["position"]
