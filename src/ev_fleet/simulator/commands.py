@@ -216,7 +216,9 @@ class MovingNode:
             speed = segment_speed(self.movement, self.speed_kph, self.traffic_snapshot)
             blocked = speed == 0 and self.movement.state == "RELOCATING"
             if not blocked:
-                self.movement.advance((now - last) * self.time_scale, speed)
+                self.movement.advance(
+                    (now - last) * self.time_scale, self.speed_kph,
+                    traffic_speed_cap_kph=speed if speed < self.speed_kph else None)
             else:
                 self.movement.speed_kph = 0
             if blocked != self.traffic_blocked:
