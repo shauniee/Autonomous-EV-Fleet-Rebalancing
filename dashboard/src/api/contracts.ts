@@ -7,8 +7,16 @@ export interface TrafficRouteAssessment {
 }
 export interface TrafficSegment { id: string; road: string; start: Position; end: Position; min_kph: number; max_kph: number }
 export interface TrafficIncident { id: string; type: string; position: Position; message: string }
+export interface SimulatedTrafficEvent {
+  id: string; dispatch_id: string; segment_index: number;
+  kind: 'CONGESTION' | 'ROADWORKS' | 'ROAD_CLOSED'; speed_kph: number | null;
+  source: 'SIMULATION'; start: Position; end: Position;
+  created_at: string; expires_at: string;
+}
 export interface TrafficSnapshot {
-  source: string; status: string; generated_at: string;
+  source: string; mode?: 'LIVE' | 'SIMULATION' | 'DISABLED';
+  status: string; generated_at: string;
+  simulated_events?: SimulatedTrafficEvent[]; scenario_version?: number;
   feeds: Record<string, {status: string; observed_at: string | null; count: number; error: string | null}>;
   speeds: TrafficSegment[]; incidents: TrafficIncident[];
   roadworks: {id: string; road: string; start_date: string; end_date: string}[];

@@ -179,6 +179,9 @@ spec:
             - secretRef:
                 name: ev-fleet-facilities
                 optional: true
+            - secretRef:
+                name: ev-fleet-traffic-control
+                optional: true
           ports:
             - name: http
               containerPort: 8000

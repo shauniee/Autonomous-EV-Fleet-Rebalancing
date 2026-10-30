@@ -2,6 +2,8 @@ import asyncio
 import logging
 import random
 import time
+import os
+from .traffic_motion import segment_speed
 from contextlib import suppress
 from uuid import uuid4
 import httpx
@@ -34,6 +36,10 @@ class MovingNode:
         self.road_match_initial = road_match_initial
         self.parking_verified = not bool(facilities_url)
         self.telemetry_changed = asyncio.Event()
+        self.traffic_enabled = os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true"
+        self.rebalancing_url = os.getenv("REBALANCING_URL", "http://rebalancing:8000").rstrip("/")
+        self.traffic_snapshot = None
+        self.traffic_blocked = False
 
     async def request(self, method, url, body=None):
         response = await self.client.request(method, url, json=body)
@@ -157,6 +163,13 @@ class MovingNode:
             "sequence": sequence, "observed_at": utcnow().isoformat(), "kind": kind,
             "distance_travelled_km": self.movement.distance, "reason": self.movement.reason})
 
+    async def refresh_traffic(self):
+        latest = await self.request("GET", self.rebalancing_url + "/api/v1/traffic/conditions")
+        if latest.get("source") == "SIMULATION" and latest.get("status") == "FRESH":
+            self.traffic_snapshot = latest
+        else:
+            self.traffic_snapshot = None
+
     def telemetry_delay(self):
         if self.movement.state in ("DISPATCHED", "RELOCATING", "ARRIVED", "FAILED"):
             return min(self.telemetry_interval, 1.0)
@@ -200,7 +213,17 @@ class MovingNode:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
             previous = (self.movement.state, self.movement.charging_state)
-            self.movement.advance((now - last) * self.time_scale, self.speed_kph)
+            speed = segment_speed(self.movement, self.speed_kph, self.traffic_snapshot)
+            blocked = speed == 0 and self.movement.state == "RELOCATING"
+            if not blocked:
+                self.movement.advance(
+                    (now - last) * self.time_scale, self.speed_kph,
+                    traffic_speed_cap_kph=speed if speed < self.speed_kph else None)
+            else:
+                self.movement.speed_kph = 0
+            if blocked != self.traffic_blocked:
+                self.traffic_blocked = blocked
+                self.telemetry_changed.set()
             if self.parking_verified:
                 self.movement.charge((now - last) * self.time_scale)
             if previous != (self.movement.state, self.movement.charging_state):
@@ -213,6 +236,8 @@ class MovingNode:
             tasks = [asyncio.create_task(self.network_loop(self.send_telemetry, self.telemetry_interval)),
                      asyncio.create_task(self.network_loop(self.command_step, self.poll_interval)),
                      asyncio.create_task(self.movement_loop())]
+            if self.traffic_enabled:
+                tasks.append(asyncio.create_task(self.network_loop(self.refresh_traffic, 2)))
             try:
                 await asyncio.gather(*tasks)
             finally:
