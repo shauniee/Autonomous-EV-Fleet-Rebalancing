@@ -1,9 +1,14 @@
 """Internal inputs and results for the pure CRDS calculation."""
 from typing import Literal
+from uuid import UUID
 
-from pydantic import Field, NonNegativeInt, model_validator
+from pydantic import AwareDatetime, Field, NonNegativeInt, model_validator
 
 from .common import Model
+from .demand import ZoneState
+from .dispatch import Dispatch
+from .facilities import FacilitiesSnapshot
+from .vehicles import FleetSnapshot
 
 
 class CrdsParameters(Model):
@@ -72,3 +77,34 @@ class CrdsEvaluation(Model):
     selected_vehicle_id: str | None = None
     selected_facility_id: str | None = None
     ranked_candidates: list[CrdsCandidateGain] = Field(default_factory=list)
+
+
+class CrdsPlanningSnapshot(Model):
+    instance_id: UUID
+    revision: int = Field(ge=0)
+    observed_at: AwareDatetime
+    dispatches: list[Dispatch]
+
+
+class CrdsDemandSnapshot(Model):
+    instance_id: UUID
+    snapshot_at: AwareDatetime
+    zones: list[ZoneState]
+
+    @model_validator(mode="after")
+    def unique_zones(self):
+        if len({zone.zone_id for zone in self.zones}) != len(self.zones):
+            raise ValueError("duplicate demand zone IDs")
+        return self
+
+
+class CrdsInputs(Model):
+    evaluated_at: AwareDatetime
+    fleet: FleetSnapshot
+    demand: CrdsDemandSnapshot
+    facilities: FacilitiesSnapshot
+    planning: CrdsPlanningSnapshot
+    traffic: dict
+    available_by_zone: dict[str, int]
+    vehicle_zones: dict[str, str]
+    issues: list[str] = Field(default_factory=list)

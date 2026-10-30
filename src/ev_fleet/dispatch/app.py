@@ -56,6 +56,10 @@ def create_app(settings=None, client=None, clock=None, background=True):
         return {"dispatches": [record.view() for record in service.store.records.values()
                                if vehicle_id is None or record.data["vehicle_id"] == vehicle_id]}
 
+    @app.get("/api/v1/dispatch-planning-state")
+    async def planning_state():
+        return await app.state.service.planning_snapshot()
+
     @app.get("/api/v1/dispatches/{dispatch_id}/traffic-check")
     async def traffic_check(dispatch_id: UUID):
         return await app.state.service.traffic_check(dispatch_id)

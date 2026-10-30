@@ -37,6 +37,8 @@ class DispatchService:
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.routing = RoutingSettings.from_env()
+        self.planning_instance_id = uuid4()
+        self.planning_revision = 0
         self.traffic_enabled = (os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
             or os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true")
 
@@ -97,6 +99,17 @@ class DispatchService:
 
     def transition(self, record, state, reason=None):
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
+        self.planning_revision += 1
+
+    async def planning_snapshot(self):
+        from ev_fleet.contracts.crds import CrdsPlanningSnapshot
+
+        async with self.store.lock:
+            return CrdsPlanningSnapshot(
+                instance_id=self.planning_instance_id, revision=self.planning_revision,
+                observed_at=self.clock.now(), dispatches=[
+                    record.view() for record in self.store.records.values()
+                    if record.data["state"] not in TERMINAL or record.data["claim_held"] is not False])
 
     def claim_url(self, record):
         return f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}/claims/{record.data['dispatch_id']}"
