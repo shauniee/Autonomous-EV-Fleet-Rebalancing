@@ -63,7 +63,7 @@ async def choose_traffic_route(client, primary, origin, destination, tolerance_k
     must be explicitly configured. No output if a reported closure affects
     every available route. Caller must revalidate Fleet claim and SOC.
     """
-    if not primary or traffic.get("source") != "LTA_DATAMALL":
+    if not primary or traffic.get("source") not in ("LTA_DATAMALL", "SIMULATION"):
         return primary
     endpoint_limit = MAX_FACILITY_ROAD_ACCESS_KM if facility else tolerance_km
     base = _candidate(primary, traffic, now)
