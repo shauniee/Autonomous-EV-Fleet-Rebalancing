@@ -142,6 +142,7 @@ class CrdsMetadata(Model):
     shortage_changes_by_zone: dict[str, float] = Field(default_factory=dict)
     arrival_minutes_min: float | None = Field(default=None, ge=0)
     arrival_minutes_max: float | None = Field(default=None, ge=0)
+    execution: dict = Field(default_factory=dict)
 
 
 class CrdsRevalidationRequest(Model):
@@ -155,3 +156,20 @@ class CrdsRevalidationRequest(Model):
 class CrdsRevalidationResult(Model):
     allowed: bool
     metadata: CrdsMetadata
+
+
+class CrdsEvaluationTask(Model):
+    epoch_id: UUID
+    model_version: Literal["crds-engine-v1"] = "crds-engine-v1"
+    input_fingerprint: str
+    parameters: CrdsParameters
+    futures: list[CrdsFuture] = Field(min_length=1, max_length=64)
+    moves: list[CrdsMove] = Field(max_length=1000)
+
+
+class CrdsTaskResult(Model):
+    epoch_id: UUID
+    model_version: Literal["crds-engine-v1"]
+    input_fingerprint: str
+    future_ids: list[str]
+    evaluation: CrdsEvaluation

@@ -14,7 +14,8 @@ from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsMetadata, CrdsMove,
                                    CrdsMoveOutcome, CrdsRouteEstimate, CrdsRouteRequest)
-from .crds import apply_move, evaluate_moves, shortage_by_zone
+from .crds import apply_move, shortage_by_zone
+from .crds_execution import evaluate_candidates
 from .crds_futures import MODEL_VERSION, build_futures, parameters_for
 from .crds_inputs import collect_inputs
 from .crds_routes import travel_minutes
@@ -31,6 +32,7 @@ class CrdsPlan:
     assessments: dict
     sites: dict
     metadata: CrdsMetadata
+    deadline: float = float("inf")
 
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
@@ -56,7 +58,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
             "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat()})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
-                     [], [], {}, {}, metadata)
+                     [], [], {}, {}, metadata, start + settings.deadline_seconds)
     if inputs.issues:
         metadata.reason_code = ",".join(inputs.issues)
         empty.evaluation.reason_code = metadata.reason_code
@@ -165,7 +167,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     metadata.input_fingerprint = hashlib.sha256(json.dumps({
         "observations": fingerprint, "futures": [f.model_dump(mode="json") for f in futures],
         "moves": [m.model_dump(mode="json") for m in moves]}, sort_keys=True).encode()).hexdigest()
-    result = evaluate_moves(futures, moves, params)
+    result, metadata.execution = await evaluate_candidates(client, settings, metadata.epoch_id,
+        futures, moves, params, timeout_seconds=start + settings.deadline_seconds - clock.monotonic())
     if result.selected_vehicle_id:
         vehicle = next(v for v in inputs.fleet.vehicles if v.vehicle_id == result.selected_vehicle_id)
         if (clock.now() - vehicle.telemetry.observed_at).total_seconds() >= policy.stale_seconds:
@@ -180,10 +183,10 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         metadata.shortage_changes_by_zone = winner.shortage_changes_by_zone
         metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
         metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
-    return CrdsPlan(inputs, result, futures, moves, assessments, sites, metadata)
+    return CrdsPlan(inputs, result, futures, moves, assessments, sites, metadata, start + settings.deadline_seconds)
 
 
-def plan_batch(plan, quantity):
+async def plan_batch(plan, quantity, client, settings, clock):
     """Greedy supported prefix; all steps use the same complete future set."""
     if plan.metadata.decision == "DEFER":
         return [], plan.metadata, plan.metadata.reason_code
@@ -193,19 +196,28 @@ def plan_batch(plan, quantity):
     parking = {s.facility_id: s.parking_available for s in plan.sites.values()}
     chargers = {s.facility_id: s.charging_available for s in plan.sites.values()}
     children = []
+    executions = [plan.metadata.execution]
     stop_reason = "REQUESTED_QUANTITY_REACHED"
     while len(children) < quantity:
         eligible = [m for m in remaining if parking[m.facility_id] > 0 and
                     (plan.assessments[m.vehicle_id]["predicted_arrival_soc_pct"] >= CHARGE_ON_ARRIVAL_BELOW_PCT
                      or chargers[m.facility_id] > 0) and
                     all(min(f.zones[m.origin_zone_id].usable_stock) >= 1 for f in futures)]
-        result = evaluate_moves(futures, eligible, params)
+        result, execution = await evaluate_candidates(client, settings, plan.metadata.epoch_id,
+            futures, eligible, params, timeout_seconds=plan.deadline - clock.monotonic())
+        executions.append(execution)
+        if result.decision == "DEFER":
+            metadata = plan.metadata.model_copy(deep=True)
+            metadata.decision, metadata.reason_code, metadata.approval_allowed = "DEFER", result.reason_code, False
+            metadata.execution = execution_summary(executions, settings.execution_mode)
+            return [], metadata, result.reason_code
         if result.decision != "MOVE":
             stop_reason = "CAPACITY_OR_STOCK_LIMIT" if not eligible and remaining else result.reason_code
             break
         gain = result.ranked_candidates[0]
         move = next(m for m in eligible if (m.vehicle_id, m.facility_id) == (gain.vehicle_id, gain.facility_id))
         metadata = plan.metadata.model_copy(deep=True)
+        metadata.execution = execution
         metadata.decision, metadata.reason_code = "MOVE", "USEFUL_SHORTAGE_REDUCTION"
         metadata.worst_case_gain_vehicle_minutes = gain.worst_case_gain_vehicle_minutes
         metadata.worst_case_future_id = gain.worst_case_future_id
@@ -213,7 +225,7 @@ def plan_batch(plan, quantity):
         metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
         metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
         metadata.source_references["virtual_prefix"] = [c.evaluation.selected_vehicle_id for c in children]
-        children.append(CrdsPlan(plan.inputs, result, futures, eligible, plan.assessments, plan.sites, metadata))
+        children.append(CrdsPlan(plan.inputs, result, futures, eligible, plan.assessments, plan.sites, metadata, plan.deadline))
         need_charge = plan.assessments[move.vehicle_id]["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
         if need_charge or parking[move.facility_id] == chargers[move.facility_id]:
             chargers[move.facility_id] -= 1
@@ -221,6 +233,7 @@ def plan_batch(plan, quantity):
         futures = [apply_move(f, params, move) for f in futures]
         remaining = [m for m in remaining if m.vehicle_id != move.vehicle_id]
     metadata = plan.metadata.model_copy(deep=True)
+    metadata.execution = execution_summary(executions, settings.execution_mode)
     if children:
         effects = []
         for original, final in zip(plan.futures, futures):
@@ -237,6 +250,11 @@ def plan_batch(plan, quantity):
     else:
         metadata.decision, metadata.reason_code, metadata.approval_allowed = "HOLD", stop_reason, False
     return children, metadata, stop_reason
+
+
+def execution_summary(executions, mode):
+    return {"mode": mode, **{key: sum(e.get(key, 0) for e in executions)
+        for key in ("requests", "retries", "request_bytes", "response_bytes", "elapsed_ms")}}
 
 
 def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=None):

@@ -1,6 +1,6 @@
 import os
 from typing import Literal
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from ev_fleet.contracts.common import Model
 
 
@@ -49,6 +49,21 @@ class CrdsSettings(Model):
     max_age_levels: int = Field(default=3, ge=0, le=10)
     deadline_seconds: float = Field(default=30, gt=0, le=120)
     dispatch_url: str = "http://localhost:8004"
+    execution_mode: Literal["LOCAL", "HTTP"] = "LOCAL"
+    worker_urls: list[str] = Field(default_factory=list, max_length=8)
+    worker_timeout_seconds: float = Field(default=5, gt=0, le=30)
+
+    @field_validator("worker_urls", mode="before")
+    @classmethod
+    def parse_worker_urls(cls, value):
+        from urllib.parse import urlsplit
+
+        values = [part.strip().rstrip("/") for part in value.split(",") if part.strip()] if isinstance(value, str) else value
+        for url in values:
+            parsed = urlsplit(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("worker URLs require server-configured HTTP(S) addresses without credentials")
+        return values
 
     @model_validator(mode="after")
     def whole_slots(self):
