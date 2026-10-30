@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DemandForm } from './DemandForm';
+import { TrafficScenariosPanel } from './TrafficScenariosPanel';
 import { RentalPanel } from './RentalPanel';
 import type { RentalVehicle } from './RentalPanel';
 import type { Zone } from './DemandForm';
@@ -17,7 +18,7 @@ type Dispatch = {
   vehicle_id: string | null;
   state: string;
   claim_held: boolean | null;
-  command: { target_zone_id?: string } | null;
+  command: { target_zone_id?: string; route?: {source: string; geometry: {latitude:number;longitude:number}[]} | null } | null;
 };
 type Observations = {
   services: Record<string, Resource<{ status: string }>>;
@@ -143,6 +144,8 @@ function App() {
           !!observations?.zones.data && !observations.zones.error && !error
         }
       />
+      <TrafficScenariosPanel dispatches={observations?.dispatches.data ?? []}
+        available={!error && !!observations?.dispatches.data && !observations.dispatches.error}/>
       <RentalPanel vehicles={observations?.fleet.data ?? []} zones={observations?.zones.data ?? []}
         available={!error && !!observations?.fleet.data && !observations.fleet.error && !!observations?.zones.data && !observations.zones.error} />
       <section>
