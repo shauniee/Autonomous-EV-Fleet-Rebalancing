@@ -5,6 +5,7 @@ import { TrafficScenariosPanel } from './TrafficScenariosPanel';
 import { RentalPanel } from './RentalPanel';
 import type { RentalVehicle } from './RentalPanel';
 import type { Zone } from './DemandForm';
+import { applyTheme, initialTheme, type Theme } from './theme';
 import './styles.css';
 
 type Resource<T> = {
@@ -38,6 +39,7 @@ function retain<T>(next: Resource<T>, previous?: Resource<T>): Resource<T> {
 }
 
 function App() {
+  const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const [observations, setObservations] = useState<Observations | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('Checking…');
@@ -97,8 +99,17 @@ function App() {
 
   return (
     <main>
-      <p className="eyebrow">EV FLEET</p>
-      <h1>Simulation probe</h1>
+      <header className="console-header">
+        <div><p className="eyebrow">EV FLEET</p><h1>Simulation probe</h1></div>
+        <div className="theme-toggle" role="group" aria-label="Color theme">
+          <button type="button" className="theme-option" aria-label="Light mode" aria-pressed={theme === 'light'} onClick={() => { applyTheme('light', true); setTheme('light'); }}>
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></span>Light
+          </button>
+          <button type="button" className="theme-option" aria-label="Dark mode" aria-pressed={theme === 'dark'} onClick={() => { applyTheme('dark', true); setTheme('dark'); }}>
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.5 13.2A8.5 8.5 0 0 1 10.8 3.5a8.5 8.5 0 1 0 9.7 9.7Z"/></svg></span>Dark
+          </button>
+        </div>
+      </header>
       <p className="description">
         Configure zone demand and observe the EV application. Observations
         update every five seconds after each completed request.
@@ -241,4 +252,5 @@ function App() {
   );
 }
 
+applyTheme(initialTheme());
 createRoot(document.getElementById('root')!).render(<App />);
