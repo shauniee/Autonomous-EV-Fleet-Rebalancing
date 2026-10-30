@@ -23,7 +23,7 @@ export function routeForVehicle(vehicle: Vehicle, dispatches: Dispatch[]): Posit
  */
 export function planConfirmedMotion(
   previous: MotionSample | undefined, latest: MotionSample,
-  path: Position[] | null,
+  path: Position[] | null, displayed?: Position,
 ): MotionPlan | null {
   if (!previous || !path || !latest.active_dispatch_id ||
       previous.active_dispatch_id !== latest.active_dispatch_id ||
@@ -31,7 +31,10 @@ export function planConfirmedMotion(
       !Number.isSafeInteger(latest.sequence) || latest.sequence <= previous.sequence) return null;
   const elapsedMs = Date.parse(latest.observed_at) - Date.parse(previous.observed_at);
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || elapsedMs > 4000) return null;
-  const positionAt = prepareConfirmedRoute(path, previous.position, latest.position);
+  // Validate the observations before continuing an interrupted animation from
+  // its displayed road position. Session/gap guards still apply to real data.
+  if (!prepareConfirmedRoute(path, previous.position, latest.position)) return null;
+  const positionAt = prepareConfirmedRoute(path, displayed ?? previous.position, latest.position);
   if (!positionAt) return null;
   return { positionAt, durationMs: Math.min(1400, Math.max(250, Math.round(elapsedMs * .9))) };
 }
