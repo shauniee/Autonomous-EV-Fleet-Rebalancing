@@ -5,7 +5,8 @@ from ev_fleet.common.travel import distance_km
 from .traffic import assess_traffic
 
 
-def travel_minutes(route, traffic, now, *, distance_travelled_km=0):
+def travel_minutes(route, traffic, now, *, distance_travelled_km=0, time_scale=1):
+    # Returned minutes use the wall clock shared by demand and event expiry.
     if route.distance_km <= 0:
         return 0.0
     if traffic.get("source") != "SIMULATION":
@@ -16,13 +17,13 @@ def travel_minutes(route, traffic, now, *, distance_travelled_km=0):
             if assessment["blocked"]:
                 raise ValueError("known road block on existing route")
             duration = assessment["estimated_duration_seconds"] or duration
-        return duration / 60 * max(0, 1 - distance_travelled_km / route.distance_km)
+        return duration / (60 * time_scale) * max(0, 1 - distance_travelled_km / route.distance_km)
     lengths = [distance_km(a.model_dump(), b.model_dump())
                for a, b in zip(route.geometry, route.geometry[1:])]
     total = sum(lengths)
     if total <= 0 or route.duration_seconds <= 0:
         raise ValueError("invalid route timing")
-    base_speed = route.distance_km / route.duration_seconds * 3600
+    base_speed = route.distance_km / route.duration_seconds * 3600 * time_scale
     progress = max(0, distance_travelled_km)
     elapsed = 0.0
     for index, length in enumerate(lengths):
@@ -41,7 +42,7 @@ def travel_minutes(route, traffic, now, *, distance_travelled_km=0):
             when = now + timedelta(minutes=elapsed)
             active = [e for e in events if datetime.fromisoformat(e["created_at"].replace("Z", "+00:00")) <= when
                       < datetime.fromisoformat(e["expires_at"].replace("Z", "+00:00"))]
-            speed = min([base_speed] + [0 if e["kind"] == "ROAD_CLOSED" else e["speed_kph"] for e in active])
+            speed = min([base_speed] + [0 if e["kind"] == "ROAD_CLOSED" else e["speed_kph"] * time_scale for e in active])
             until_expiry = min(((datetime.fromisoformat(e["expires_at"].replace("Z", "+00:00")) - when).total_seconds() / 60
                                 for e in active), default=float("inf"))
             minutes = segment / speed * 60 if speed > 0 else float("inf")

@@ -24,7 +24,7 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     planning = planning.model_copy(update={"dispatches": [
         d for d in planning.dispatches if str(d.dispatch_id) != exclude_dispatch_id]})
     now = clock.now()
-    policy = DemandSettings.from_env()
+    policy = DemandSettings.from_env().model_copy(update={"min_reserve_pct": settings.min_reserve_pct})
     zones = {z.zone_id: z for z in demand.zones}
     counts, diagnostics, issues = capacity(fleet, zones, policy, now)
     if not -5 <= (now - fleet.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
@@ -36,6 +36,9 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
             issues.add("DEMAND_UNKNOWN_OR_STALE")
     if diagnostics["unassigned_evs"]:
         issues.add("UNASSIGNED_VEHICLES")
+    if facilities.data_source == "LTA_DATAMALL" and not any(
+            f.name == "parking" and f.status == "FRESH" for f in facilities.feeds):
+        issues.add("PARKING_FEED_UNAVAILABLE")
     dispatches = {str(d.dispatch_id): d for d in planning.dispatches}
     for vehicle in fleet.vehicles:
         claim = vehicle.active_claim
@@ -43,6 +46,8 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
             dispatch = dispatches.get(str(claim.dispatch_id))
             if (dispatch is None or dispatch.command is None
                     or dispatch.vehicle_id != vehicle.vehicle_id
+                    or claim.fleet_instance_id != fleet.instance_id
+                    or dispatch.command.fleet_instance_id != fleet.instance_id
                     or dispatch.command.target_zone_id != claim.target_zone_id):
                 issues.add("CLAIM_DISPATCH_MISMATCH")
     if any(d.command is None for d in planning.dispatches):

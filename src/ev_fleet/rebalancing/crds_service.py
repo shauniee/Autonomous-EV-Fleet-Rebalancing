@@ -58,7 +58,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "planning_instance_id": str(inputs.planning.instance_id), "planning_revision": inputs.planning.revision,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
             "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat(),
-            "expand_age": expand_age})
+            "expand_age": expand_age, "age_budget_seconds": settings.deadline_seconds,
+            "simulation_time_scale": settings.simulation_time_scale})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
                      [], [], {}, {}, metadata, start + settings.deadline_seconds)
     if inputs.issues:
@@ -66,7 +67,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         empty.evaluation.reason_code = metadata.reason_code
         return empty
     try:
-        futures = build_futures(inputs, target_zone_id, settings, expand_age=expand_age)
+        futures = build_futures(inputs, target_zone_id, settings, expand_age=expand_age,
+            age_budget_seconds=settings.deadline_seconds, min_reserve_pct=policy.min_reserve_pct)
     except ValueError as exc:
         metadata.reason_code = str(exc)
         return empty
@@ -132,8 +134,15 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             if site.facility_type == "CHARGING" and not need_charge:
                 return None
             availability_delay = (max(0, CHARGING_TARGET_SOC_PCT - arrival_soc) / 100 *
-                                  vehicle.battery_capacity_kwh / site.charging_power_kw * 60) if need_charge else 0
-            minutes = travel_minutes(route, traffic, inputs.evaluated_at)
+                                  vehicle.battery_capacity_kwh / site.charging_power_kw * 60 /
+                                  settings.simulation_time_scale) if need_charge else 0
+            # Dispatch currently places its screening-adjusted duration in the
+            # issued command. Match that motion baseline once, then apply caps.
+            modeled_route = route if route.traffic_assessment is not None else route.model_copy(update={
+                "duration_seconds": evaluation["estimated_duration_seconds"] or route.duration_seconds,
+                "traffic_assessment": evaluation})
+            minutes = travel_minutes(modeled_route, traffic, inputs.evaluated_at,
+                                     time_scale=settings.simulation_time_scale)
             origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
             if origin is None:
                 raise ValueError("UNKNOWN_MOVE_ORIGIN")
@@ -188,7 +197,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     return CrdsPlan(inputs, result, futures, moves, assessments, sites, metadata, start + settings.deadline_seconds)
 
 
-async def plan_batch(plan, quantity, client, settings, clock):
+async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=15):
     """Greedy supported prefix; all steps use the same complete future set."""
     if plan.metadata.decision == "DEFER":
         return [], plan.metadata, plan.metadata.reason_code
@@ -237,6 +246,11 @@ async def plan_batch(plan, quantity, client, settings, clock):
     metadata = plan.metadata.model_copy(deep=True)
     metadata.execution = execution_summary(executions, settings.execution_mode)
     if children:
+        selected_ids = {c.evaluation.selected_vehicle_id for c in children}
+        if any(v.vehicle_id in selected_ids and (clock.now() - v.telemetry.observed_at).total_seconds() >= stale_seconds
+               for v in plan.inputs.fleet.vehicles):
+            metadata.decision, metadata.reason_code, metadata.approval_allowed = "DEFER", "STALE_AFTER_BATCH_PLANNING", False
+            return [], metadata, metadata.reason_code
         effects = []
         for original, final in zip(plan.futures, futures):
             before, after = shortage_by_zone(original, params), shortage_by_zone(final, params)
@@ -291,4 +305,5 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
         "explanation": explanation, "crds": plan.metadata.model_dump(mode="json"),
         "assumptions": ["Finite synthetic futures, not a probability guarantee", "One nearest eligible facility per EV",
             "Arrival stock requires usable SOC and modeled charging delay", "No idle-energy consumption modeled",
+            "Wall-clock minutes; planned EVs must use the configured shared simulation time scale",
             "Advisory until explicit operator approval and fresh revalidation"]}

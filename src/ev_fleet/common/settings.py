@@ -53,6 +53,7 @@ class CrdsSettings(Model):
     execution_mode: Literal["LOCAL", "HTTP"] = "LOCAL"
     worker_urls: list[str] = Field(default_factory=list, max_length=8)
     worker_timeout_seconds: float = Field(default=5, gt=0, le=30)
+    simulation_time_scale: float = Field(default=10, gt=0)
 
     @field_validator("worker_urls", mode="before")
     @classmethod
@@ -77,4 +78,5 @@ class CrdsSettings(Model):
         values = {name: os.environ["CRDS_" + name.upper()] for name in cls.model_fields
                   if "CRDS_" + name.upper() in os.environ}
         values.setdefault("dispatch_url", os.getenv("DISPATCH_URL", "http://localhost:8004"))
+        values.setdefault("simulation_time_scale", os.getenv("SIMULATION_TIME_SCALE", "10"))
         return cls(**values)

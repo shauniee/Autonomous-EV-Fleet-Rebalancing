@@ -274,7 +274,8 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                 raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
             except ValueError:
                 raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
-            children, metadata, stop_reason = await plan_batch(plan, body.quantity, app.state.client, crds_config, clock)
+            children, metadata, stop_reason = await plan_batch(plan, body.quantity, app.state.client, crds_config, clock,
+                                                              stale_seconds=config.stale_seconds)
             now = clock.now()
             expires = now + timedelta(seconds=config.recommendation_ttl_seconds)
             assignments = []

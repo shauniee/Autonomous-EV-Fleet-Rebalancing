@@ -96,7 +96,7 @@ class EpisodeRecorder:
             if not isinstance(energy, (int, float)) or not isfinite(energy) or energy < 0:
                 self.energy_complete = False
             elif self.observations:
-                self.energy += max(0, energy - (previous or {}).get("measured_energy_kwh", 0))
+                self.energy += max(0, energy - ((previous or {}).get("measured_energy_kwh") or 0))
             if self.observations:
                 self.distance += max(0, travelled - (previous or {}).get("distance_travelled_km", 0))
             self.dispatches[key] = dispatch

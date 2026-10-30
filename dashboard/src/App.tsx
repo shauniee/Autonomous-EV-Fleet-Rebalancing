@@ -125,12 +125,12 @@ export default function App() {
     try {
       if (!facilityWorkflow) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
-          method: 'POST', body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
+          method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
         });
         if (!controller.signal.aborted) setRecommendation(result);
       } else {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
-          method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity,
+          method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected, quantity,
             ...(purpose === 'CHARGE' ? { purpose } : {}),
             ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
             ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
@@ -147,7 +147,7 @@ export default function App() {
     const approval = retry ?? { request_id: crypto.randomUUID(), recommendation_id: recommendation!.recommendation_id };
     setPending(approval);
     try {
-      const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', body: JSON.stringify(approval) });
+      const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
       if (result.state === 'UNKNOWN' ||
@@ -180,7 +180,7 @@ export default function App() {
     const approval = retry ?? { request_id: crypto.randomUUID(), batch_recommendation_id: batch!.batch_recommendation_id };
     setPendingBatch(approval);
     try {
-      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', body: JSON.stringify(approval) });
+      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       setBatchResult(result); setBatch(null);
       const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));

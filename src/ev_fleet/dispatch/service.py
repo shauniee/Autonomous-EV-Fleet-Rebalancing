@@ -256,13 +256,17 @@ class DispatchService:
                 requires_charging=requires_charge).model_dump(mode="json")
         if recommendation.crds is not None:
             revision = self.planning_revision
+            remaining = (recommendation.expires_at - self.clock.now()).total_seconds()
+            if remaining <= 0:
+                raise HTTPException(409, "RECOMMENDATION_EXPIRED")
             body = CrdsRevalidationRequest(recommendation_id=recommendation.recommendation_id,
                 dispatch_id=record.data["dispatch_id"], route=route,
                 expected_planning_instance_id=self.planning_instance_id,
                 expected_planning_revision=revision)
             revalidated = await request_json(self.client, "POST",
                 f"{self.settings.rebalancing_url}/api/v1/crds/revalidate",
-                body.model_dump(mode="json"), model=CrdsRevalidationResult)
+                body.model_dump(mode="json"), model=CrdsRevalidationResult,
+                timeout_seconds=min(remaining, self.crds_settings.deadline_seconds))
             if self.planning_revision != revision:
                 raise HTTPException(409, "CRDS_PLANNING_CHANGED")
             if not revalidated.allowed:
@@ -393,8 +397,14 @@ class DispatchService:
     async def approve(self, body):
         # Shared by legacy requests and CRDS batch children. Read-only planning
         # and route endpoints never take this admission lock.
-        async with self.admission_lock:
+        try:
+            await asyncio.wait_for(self.admission_lock.acquire(), self.crds_settings.deadline_seconds)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, "ADMISSION_BUSY_RETRY_SAME_REQUEST") from None
+        try:
             return await self.approve_serial(body)
+        finally:
+            self.admission_lock.release()
 
     async def approve_serial(self, body):
         record = await self.store.begin(body)

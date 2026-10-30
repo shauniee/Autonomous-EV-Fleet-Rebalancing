@@ -1,5 +1,6 @@
 """Declared synthetic futures, not a learned or probability-calibrated forecast."""
 from math import ceil
+from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 
 from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajectory
 from .crds_routes import travel_minutes
@@ -20,7 +21,8 @@ def observation_age(inputs):
     return max((max(0, (inputs.evaluated_at - t).total_seconds()) for t in times), default=0)
 
 
-def build_futures(inputs, target_zone_id, settings, *, expand_age=True):
+def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budget_seconds=0,
+                  min_reserve_pct=20):
     """Keep base profiles and append age profiles within one frozen input package."""
     if inputs.issues:
         raise ValueError("incomplete planning observations: " + ",".join(inputs.issues))
@@ -35,7 +37,7 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True):
                 ("delayed_inbound", 0, 0, settings.journey_delay_minutes, False, True),
                 ("combined", settings.demand_step, settings.return_delay_minutes,
                  settings.journey_delay_minutes, True, True)]
-    levels = min(settings.max_age_levels, int(observation_age(inputs) // settings.age_step_seconds)) if expand_age else 0
+    levels = min(settings.max_age_levels, int((observation_age(inputs) + age_budget_seconds) // settings.age_step_seconds)) if expand_age else 0
     for level in range(1, levels + 1):
         profiles.append((f"age_{level}", settings.demand_step * level,
                          settings.return_delay_minutes * level,
@@ -67,16 +69,26 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True):
             route = command.route
             if route is None or vehicle.telemetry is None:
                 continue
-            if vehicle.telemetry.soc_pct < 20:
+            remaining = max(0, route.distance_km - dispatch.distance_travelled_km)
+            arrival_soc = vehicle.telemetry.soc_pct - 100 * remaining * vehicle.consumption_kwh_per_km / vehicle.battery_capacity_kwh
+            if arrival_soc < min_reserve_pct:
                 continue
             minutes = travel_minutes(route, inputs.traffic, inputs.evaluated_at,
-                                     distance_travelled_km=dispatch.distance_travelled_km)
+                                     distance_travelled_km=dispatch.distance_travelled_km,
+                                     time_scale=settings.simulation_time_scale)
+            if arrival_soc < CHARGE_ON_ARRIVAL_BELOW_PCT:
+                site = next((s for s in inputs.facilities.facilities
+                             if s.facility_id == dispatch.parking_facility_id), None)
+                if site is None or site.charging_power_kw is None:
+                    continue
+                minutes += (max(0, CHARGING_TARGET_SOC_PCT - arrival_soc) / 100 * vehicle.battery_capacity_kwh
+                            / site.charging_power_kw * 60 / settings.simulation_time_scale)
             credit(command.target_zone_id, minutes + journey_delay)
         if not omit_returns:
             for vehicle in vehicles.values():
                 rental = vehicle.active_rental
                 if (rental is None or vehicle.telemetry is None
-                        or vehicle.telemetry.soc_pct < 30 or not rental.expected_return_zone_id):
+                        or vehicle.telemetry.soc_pct < max(30, min_reserve_pct) or not rental.expected_return_zone_id):
                     continue
                 minutes = max(params.slot_minutes,
                               (rental.expected_end_at - inputs.evaluated_at).total_seconds() / 60)
