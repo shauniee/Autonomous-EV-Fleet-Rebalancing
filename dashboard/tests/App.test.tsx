@@ -383,4 +383,24 @@ describe('dispatcher dashboard', () => {
       String(path).includes('telemetry-history') && init?.method === 'POST')).toBe(false);
   });
 
+  it('shows a simulated closure as fictional rather than live LTA traffic', async () => {
+    const now = new Date().toISOString();
+    server({ '/api/rebalancing/traffic/conditions': {
+      source:'SIMULATION', mode:'SIMULATION', status:'FRESH', generated_at:now,
+      scenario_version:1, feeds:{}, speeds:[], incidents:[], roadworks:[],
+      simulated_events:[{
+        id:'sim-1', dispatch_id:'dispatch-00000000', segment_index:2,
+        kind:'ROAD_CLOSED', speed_kph:null, source:'SIMULATION',
+        start:{latitude:1.30,longitude:103.80},
+        end:{latitude:1.305,longitude:103.80}, created_at:now, expires_at:now,
+      }],
+    }});
+    render(<App/>);
+    const panel = await screen.findByRole('region', {name:'Traffic conditions and roadworks'});
+    expect(within(panel).getByText('SIMULATION MODE')).toBeInTheDocument();
+    expect(within(panel).getByText('ROAD CLOSED')).toBeInTheDocument();
+    expect(within(panel).getByText(/Live LTA readings are not mixed/)).toBeInTheDocument();
+    expect(within(panel).getByText(/Road closed/)).toBeInTheDocument();
+  });
+
 });
