@@ -77,7 +77,15 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const activeRoutes = useMemo(() => shownDispatches.filter(dispatch => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state)), [shownDispatches]);
   const journey = shownDispatches.find(dispatch => dispatch.dispatch_id === selectedDispatch) ?? activeRoutes.at(-1);
   const journeyId = journey?.dispatch_id;
-  const trackedVehicle = shownVehicles.find(vehicle => vehicle.vehicle_id === journey?.vehicle_id);
+  const trackedVehicle = vehicles.find(vehicle => vehicle.vehicle_id === journey?.vehicle_id);
+  const followUnavailable = !journey ? 'Select a road journey to follow an EV.'
+    : ['SUCCEEDED', 'REJECTED', 'FAILED'].includes(journey.state) ? 'Journey ended.'
+    : !telemetryFeedHealthy ? 'Fleet telemetry connection is unavailable.'
+    : !trackedVehicle?.telemetry ? 'Vehicle telemetry is unavailable.'
+    : trackedVehicle.stale ? 'Vehicle telemetry is stale.'
+    : trackedVehicle.connectivity !== 'ONLINE' ? 'Vehicle is offline.'
+    : trackedVehicle.telemetry.active_dispatch_id !== journeyId ? 'Waiting for telemetry for the selected journey.'
+    : '';
   const [followEV, setFollowEV] = useState(false);
   const fittedJourney = useRef('');
   const routes = journey && !activeRoutes.includes(journey) ? [...activeRoutes, journey] : activeRoutes;
@@ -132,21 +140,29 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     fittedJourney.current = journey.dispatch_id;
     if (selectedDispatch !== journey.dispatch_id) onSelectDispatch(journey.dispatch_id);
     setVisible(current => ({ ...current, routes: true, vehicles: true }));
+    if (followEV && !followUnavailable) return;
     const points = route.geometry.filter(point => !areaZone || nearestZone(point, zones) === areaZone);
     if (points.length) map.current.fitBounds(points.map(point => [point.latitude, point.longitude]), { padding: [35, 35], maxZoom: 16 });
     // Fit once per selected journey; telemetry refreshes must preserve the operator's zoom.
-  }, [journey, selectedDispatch, onSelectDispatch, areaZone, zones]);
+  }, [journey, selectedDispatch, onSelectDispatch, areaZone, zones, followEV, followUnavailable]);
   useEffect(() => {
+    // Following owns the camera when enabling it also changes the map area.
+    if (followEV) return;
     if (area) map.current?.setView([area.position.latitude, area.position.longitude], 13);
     else if (fitted.current && zones.length) map.current?.fitBounds(zones.map(zone => [zone.position.latitude, zone.position.longitude]), { padding: [30, 30], maxZoom: 12 });
     // Keep manual zoom/pan when only telemetry or demand refreshes.
   }, [area?.zone_id, area?.position.latitude, area?.position.longitude]);
   useEffect(() => {
+    if (!followEV) return;
+    if (followUnavailable || !visible.vehicles || areaZone) {
+      setFollowEV(false);
+      return;
+    }
     const telemetry = trackedVehicle?.telemetry;
-    if (followEV && visible.vehicles && !trackedVehicle?.stale && telemetry && telemetry.active_dispatch_id === journeyId) {
+    if (telemetry) {
       map.current?.panTo([telemetry.position.latitude, telemetry.position.longitude], { animate: false });
     }
-  }, [followEV, visible.vehicles, trackedVehicle, journeyId]);
+  }, [followEV, followUnavailable, visible.vehicles, areaZone, trackedVehicle, journeyId]);
   useEffect(() => {
     if (!map.current) return;
     if (!fitted.current && zones.length) {
@@ -343,6 +359,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         {layers.map(({ key, label, colour, count }) => <label key={key} className="map-filter" data-active={visible[key]}>
           <input type="checkbox" checked={visible[key]} onChange={event => {
             const checked = event.currentTarget.checked;
+            if (key === 'vehicles' && !checked) setFollowEV(false);
             setVisible(current => ({ ...current, [key]: checked }));
           }}/>
           {key === 'vehicles' || key === 'parking' || key === 'charging'
@@ -352,7 +369,11 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         </label>)}
       </div></fieldset>
       <label className="map-scope"><span>Map area · all icons</span><span className="select-wrap">
-        <select className="form-select" aria-label="Map area" value={areaZone ? 'selected' : 'all'} onChange={event => setSelectedZoneOnly(event.target.value === 'selected')}>
+        <select className="form-select" aria-label="Map area" value={areaZone ? 'selected' : 'all'} onChange={event => {
+          const selectedOnly = event.target.value === 'selected';
+          if (selectedOnly) setFollowEV(false);
+          setSelectedZoneOnly(selectedOnly);
+        }}>
           <option value="all">All zones</option>
           <option value="selected" disabled={!selected}>{selected ? `${zones.find(zone => zone.zone_id === selected)?.name ?? selected} only` : 'Select a zone first'}</option>
         </select>
@@ -373,7 +394,15 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           </option>)}
         </select>
       </span></label>
-      <label className="map-filter" data-active={followEV && !!trackedVehicle}><input type="checkbox" checked={followEV && !!trackedVehicle} disabled={!trackedVehicle} onChange={event => setFollowEV(event.target.checked)}/>Follow EV</label>
+      <label className="map-filter" data-active={followEV && !followUnavailable}><input type="checkbox" checked={followEV && !followUnavailable} disabled={!!followUnavailable} aria-describedby={followUnavailable ? 'follow-ev-status' : undefined} onChange={event => {
+        const checked = event.target.checked;
+        if (checked) {
+          setSelectedZoneOnly(false);
+          setVisible(current => ({ ...current, vehicles: true }));
+        }
+        setFollowEV(checked);
+      }}/>Follow EV</label>
+      {followUnavailable && <span id="follow-ev-status" className="map-filter-note" role="status">{followUnavailable}</span>}
       <button className="map-reset" disabled={!journey} onClick={() => {
         const route = journey?.command?.route;
         if (route) {
@@ -386,6 +415,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     <div ref={element} className="map" aria-label="Singapore zones, fleet, and parking or charging sites map"/>
     <details className="map-help"><summary>Map controls & marker help</summary>
       <p className="map-marker-help">Nearby parking and charging sites are grouped by count. Select a group to zoom in or spread overlapping sites apart. EVs remain at their geographic positions; the selected EV is outlined.</p>
+      <p className="map-marker-help">Follow EV switches to All zones and shows EVs so you can follow the selected journey across zone boundaries. Choosing a single zone or hiding EVs stops following.</p>
     </details>
     {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
     {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
