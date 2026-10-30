@@ -78,11 +78,21 @@ Do not expose the mutation API directly to unauthorised networks.
 
 ## Limitations and validation
 
-- This PR does **not** modify simulator vehicle speed or automatically
-  reroute an EV already moving. The immutable Dispatch route can trigger
-  operator review, but in-flight replanning requires a versioned and
-  acknowledged pause/replan command protocol. The map shows explicit
-  changes in simulated conditions, not fabricated movements.
+- The 20 moving EV simulators now poll the same simulation snapshot
+  every two real seconds when this opt-in mode is enabled. Their existing
+  road-following physics loop applies the configured **speed cap** when
+  traversing the exact affected OneMap/OSRM segment; at ROAD_CLOSED it
+  holds the EV on its road position (0 km/h) until the scenario is cleared
+  or expires. Fleet continues receiving current zero-speed observations.
+  This does **not** automatically reroute an EV already moving: the
+  immutable Dispatch command can trigger operator review, but safe
+  detours require a separately acknowledged versioned pause/replan
+  protocol. On network outage, the simulator keeps its last scenario
+  observation until the event's stated expiry.
+- The simulated ETA heuristic can exaggerate a tiny affected segment:
+  it uses a journey-wide speed factor instead of microscopic segment
+  travel-time accumulation. It is an explicit teaching demonstration,
+  not calibrated transport prediction.
 - Simulation scenarios are intentionally **ephemeral** in one Rebalancing
   replica. They are cleared on restart; this avoids persistent fictional
   road closures silently surviving deployment. Not a distributed
