@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: ev-fleet-config
 data:
-  CRDS_MODE: "DISABLED"
+  CRDS_MODE: "ACTIVE"
   CRDS_EXECUTION_MODE: "LOCAL"
   CRDS_EXPAND_AGE: "true"
   CRDS_WORKER_URLS: "http://crds-worker:8000,http://crds-worker:8000"

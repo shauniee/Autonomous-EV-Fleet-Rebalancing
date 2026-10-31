@@ -77,7 +77,7 @@ services:
     command: ["uvicorn", "ev_fleet.rebalancing.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${REBALANCING_PORT:-8003}:8000"]
     environment:
-      CRDS_MODE: ${CRDS_MODE:-DISABLED}
+      CRDS_MODE: ${CRDS_MODE:-ACTIVE}
       CRDS_EXECUTION_MODE: ${CRDS_EXECUTION_MODE:-LOCAL}
       CRDS_EXPAND_AGE: ${CRDS_EXPAND_AGE:-true}
       SIMULATION_TIME_SCALE: ${SIMULATION_TIME_SCALE:-10}
@@ -138,7 +138,7 @@ services:
     command: ["uvicorn", "ev_fleet.dispatch.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${DISPATCH_PORT:-8004}:8000"]
     environment:
-      CRDS_MODE: ${CRDS_MODE:-DISABLED}
+      CRDS_MODE: ${CRDS_MODE:-ACTIVE}
       ROUTING_PROVIDER: ${ROUTING_PROVIDER:-SIMULATED}
       ONEMAP_ACCESS_TOKEN: ${ONEMAP_ACCESS_TOKEN:-}
       OSRM_ROUTING_URL: ${OSRM_ROUTING_URL:-}

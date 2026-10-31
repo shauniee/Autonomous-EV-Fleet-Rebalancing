@@ -38,7 +38,7 @@ class DispatchSettings(Settings):
 
 
 class CrdsSettings(Model):
-    mode: Literal["DISABLED", "ADVISORY", "ACTIVE"] = "DISABLED"
+    mode: Literal["DISABLED", "ADVISORY", "ACTIVE"] = "ACTIVE"
     horizon_minutes: int = Field(default=30, gt=0, le=120)
     slot_minutes: int = Field(default=1, gt=0)
     minimum_gain_vehicle_minutes: float = Field(default=1, ge=0)

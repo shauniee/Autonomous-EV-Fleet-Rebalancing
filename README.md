@@ -148,6 +148,16 @@ kilometres, energy in kWh and state of charge as a percentage.
 Rebalancing excludes vehicles with missing or stale telemetry, offline connectivity,
 an active claim or rental, insufficient predicted arrival charge, or another
 conflicting operation. Eligible vehicles receive an explainable score:
+Rebalancing first excludes EVs with missing/stale telemetry, offline connectivity,
+unavailability, an active relocation or claim, or insufficient predicted arrival
+SOC. CRDS is the default rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
+eligible moves across declared futures, ranks their minimum fleet-wide shortage
+reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires
+operator approval and fresh revalidation. Execution defaults to LOCAL, so the
+optional HTTP workers are not required. The existing CHARGE workflow is preserved.
+
+Set `CRDS_MODE=ADVISORY` to review CRDS recommendations without permitting their
+dispatch, or `CRDS_MODE=DISABLED` to select the legacy weighted policy. Its score is:
 
 ```text
 35% distance utility
