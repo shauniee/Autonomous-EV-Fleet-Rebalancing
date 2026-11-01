@@ -23,27 +23,42 @@ function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
 }
 
 function Assert-ExistingPostgresHealthy {
-    # Guard against partial initdb volumes that pg_isready mistakenly calls healthy.
-    # Do not alter pg_hba.conf, create databases, or reset PostgreSQL storage here.
+    # The Pod IP from Kubernetes is authoritative. The old hostname -i probe
+    # can return a different address and fail even when Postgres readiness works.
+    # A missing database or authentication rule MUST still fail closed.
     $namespace = (& kubectl get namespace ev-fleet --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the ev-fleet namespace." }
-    if (-not $namespace) { return } # Brand new Docker Desktop Kubernetes cluster.
+    if (-not $namespace) { return } # Fresh install.
     $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect PostgreSQL StatefulSet." }
-    if (-not $postgres) { return } # First-time install; wait for new startup/readiness probe after apply.
+    if (-not $postgres) { return } # Fresh install.
+
+    $podIp = (& kubectl -n ev-fleet get pod postgres-0 -o jsonpath='{.status.podIP}') -join ""
+    if ($LASTEXITCODE -ne 0 -or -not $podIp) {
+        throw "PostgreSQL preflight cannot find the postgres-0 Pod IP. Inspect: kubectl -n ev-fleet get pods -o wide. No storage was changed."
+    }
+    if ($podIp -notmatch '^[0-9a-fA-F.:]+$') {
+        throw "PostgreSQL returned an unexpected Pod IP; refusing to construct a shell probe."
+    }
 
     $probe = @'
 set -eu
-pod_ip="$(hostname -i | awk '{print $1}')"
-result="$(PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=3 psql -X -qAt -h "$pod_ip" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT 1')" || exit 1
-test "$result" = "1"
+result="$(PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -qAt -h "__POD_IP__" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT 1')" || exit 1
+if [ "$result" != "1" ]; then
+  echo "PostgreSQL preflight: expected SELECT 1, received an unexpected response." >&2
+  exit 1
+fi
+echo "Authenticated PostgreSQL Pod-IP SQL check passed."
 '@
+    $probe = $probe.Replace("__POD_IP__", $podIp)
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($probe))
-    & kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c "echo '$encoded' | base64 -d | sh"
+    Write-Host "Testing PostgreSQL TCP authentication to Pod IP $podIp (read-only)..." -ForegroundColor Cyan
+    # Only base64 characters are passed through Windows PowerShell's native
+    # argument quoting; shell code is decoded and executed inside the Pod.
+    & kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c "echo $encoded | base64 -d | sh"
     if ($LASTEXITCODE -ne 0) {
-        throw "PostgreSQL is not accessible through Pod-network password authentication. Check: kubectl -n ev-fleet logs postgres-0 -c postgres --tail=80. An interrupted first-time initialization can leave the ev_fleet database or pg_hba.conf missing. Back up and inspect the PVC before any recovery; deployment will not delete or repair it automatically."
+        throw "PostgreSQL preflight failed against Pod IP $podIp. Inspect the psql or kubectl error immediately above. Also run: kubectl -n ev-fleet get pod postgres-0 -o wide; kubectl -n ev-fleet logs postgres-0 -c postgres --tail=80. Missing database or pg_hba.conf rules must be recovered without deleting existing PVC data."
     }
-    Write-Host "Existing PostgreSQL passed real SQL and Pod-network authentication checks." -ForegroundColor Green
 }
 
 function Assert-SafeToRedeploy {
