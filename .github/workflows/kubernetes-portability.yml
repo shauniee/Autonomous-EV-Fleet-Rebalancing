@@ -98,10 +98,14 @@ jobs:
           assert 'Assert-ExistingPostgresHealthy' in script
           # Use the authoritative Kubernetes status.podIP, not hostname resolution.
           assert "get pod postgres-0 -o jsonpath='{.status.podIP}'" in script
-          assert 'Replace("__POD_IP__", $podIp)' in script
-          assert 'base64 -d | sh' in script
-          assert 'SELECT 1' in script
-          assert 'No storage was changed' in script
+          assert "Replace('__POD_IP__', $podIp)" in script
+          assert 'PGPASSWORD=$POSTGRES_PASSWORD' in script
+          assert 'psql -X -qAt -w -h __POD_IP__' in script
+          assert 'SELECT/**/1' in script
+          assert 'exec postgres-0 -c postgres -- sh -c $sqlCheck' in script
+          # No encoded shell pipeline: avoid quoting differences on Windows PowerShell 5.1.
+          assert 'base64 -d | sh' not in script
+          assert 'No PVC data was changed' in script
           print('PostgreSQL real TCP startup, SQL readiness, SCRAM auth and fail-closed preflight are configured.')
           PY
       - name: Validate optional customer simulation workloads
