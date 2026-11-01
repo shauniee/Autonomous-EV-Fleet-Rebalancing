@@ -106,6 +106,10 @@ jobs:
           # No encoded shell pipeline: avoid quoting differences on Windows PowerShell 5.1.
           assert 'base64 -d | sh' not in script
           assert 'No PVC data was changed' in script
+          assert '$CheckPostgresOnly' in script
+          assert 'if ($CheckPostgresOnly)' in script
+          assert 'PostgreSQL-only check passed' in script
+          assert 'No images, Pods, or persistent volumes were changed' in script
           print('PostgreSQL real TCP startup, SQL readiness, SCRAM auth and fail-closed preflight are configured.')
           PY
       - name: Validate optional customer simulation workloads
@@ -138,7 +142,7 @@ jobs:
         shell: pwsh
         run: |
           $script = Get-Content -Raw scripts/start-kubernetes.ps1
-          foreach ($required in @('$ConnectOnly', 'Assert-SafeToRedeploy',
+          foreach ($required in @('$ConnectOnly', '$CheckPostgresOnly', 'Assert-SafeToRedeploy',
                                   'kubectl kustomize', 'rollout status',
                                   'dry-run=client', 'customer-rental-demo')) {
             if (-not $script.Contains($required)) {
