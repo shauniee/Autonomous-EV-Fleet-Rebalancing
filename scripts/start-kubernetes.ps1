@@ -12,7 +12,14 @@ function Require-Command([string]$Name) {
 
 function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
     & kubectl -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
-    if ($LASTEXITCODE -ne 0) { throw "Rollout failed: $Kind/$Name" }
+    if ($LASTEXITCODE -ne 0) {
+        if ($Kind -eq "statefulset" -and $Name -eq "postgres") {
+            Write-Warning "PostgreSQL did not become ready: check the app DB and Pod-network password authentication before restarting Fleet. Recent PostgreSQL logs:"
+            & kubectl -n ev-fleet logs postgres-0 -c postgres --tail=35
+            Write-Warning "PostgreSQL PVC has NOT been deleted or reset."
+        }
+        throw "Rollout failed: $Kind/$Name"
+    }
 }
 
 function Assert-ExistingPostgresHealthy {
