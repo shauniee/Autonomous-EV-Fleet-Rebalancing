@@ -12,7 +12,38 @@ function Require-Command([string]$Name) {
 
 function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
     & kubectl -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
-    if ($LASTEXITCODE -ne 0) { throw "Rollout failed: $Kind/$Name" }
+    if ($LASTEXITCODE -ne 0) {
+        if ($Kind -eq "statefulset" -and $Name -eq "postgres") {
+            Write-Warning "PostgreSQL did not become ready: check the app DB and Pod-network password authentication before restarting Fleet. Recent PostgreSQL logs:"
+            & kubectl -n ev-fleet logs postgres-0 -c postgres --tail=35
+            Write-Warning "PostgreSQL PVC has NOT been deleted or reset."
+        }
+        throw "Rollout failed: $Kind/$Name"
+    }
+}
+
+function Assert-ExistingPostgresHealthy {
+    # Guard against partial initdb volumes that pg_isready mistakenly calls healthy.
+    # Do not alter pg_hba.conf, create databases, or reset PostgreSQL storage here.
+    $namespace = (& kubectl get namespace ev-fleet --ignore-not-found -o name) -join ""
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the ev-fleet namespace." }
+    if (-not $namespace) { return } # Brand new Docker Desktop Kubernetes cluster.
+    $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect PostgreSQL StatefulSet." }
+    if (-not $postgres) { return } # First-time install; wait for new startup/readiness probe after apply.
+
+    $probe = @'
+set -eu
+pod_ip="$(hostname -i | awk '{print $1}')"
+result="$(PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=3 psql -X -qAt -h "$pod_ip" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT 1')" || exit 1
+test "$result" = "1"
+'@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($probe))
+    & kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c "echo '$encoded' | base64 -d | sh"
+    if ($LASTEXITCODE -ne 0) {
+        throw "PostgreSQL is not accessible through Pod-network password authentication. Check: kubectl -n ev-fleet logs postgres-0 -c postgres --tail=80. An interrupted first-time initialization can leave the ev_fleet database or pg_hba.conf missing. Back up and inspect the PVC before any recovery; deployment will not delete or repair it automatically."
+    }
+    Write-Host "Existing PostgreSQL passed real SQL and Pod-network authentication checks." -ForegroundColor Green
 }
 
 function Assert-SafeToRedeploy {
@@ -92,6 +123,8 @@ if ($ConnectOnly) {
         throw "Docker must use the 'desktop-linux' context; current context is '$dockerContext'."
     }
 
+    # Fail early on incomplete databases, before checking Fleet or building images.
+    Assert-ExistingPostgresHealthy
     # Check BEFORE image builds, and again immediately before applying updates.
     Assert-SafeToRedeploy
 
@@ -119,6 +152,7 @@ if ($ConnectOnly) {
         if ($LASTEXITCODE -ne 0) { throw "Build failed: $imageRef; Kubernetes was not updated." }
     }
 
+    Assert-ExistingPostgresHealthy
     Assert-SafeToRedeploy
     Write-Host "Rendering Kubernetes manifests with versioned images..." -ForegroundColor Cyan
     $rendered = (& kubectl kustomize .\k8s) -join [Environment]::NewLine

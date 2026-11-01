@@ -69,6 +69,57 @@ docker context show
 docker version
 ```
 
+## PostgreSQL bootstrap and safe recovery
+
+The official `postgres:17-alpine` entrypoint creates the database named in
+`POSTGRES_DB=ev_fleet` and appends host-password authentication rules when
+the data directory is **empty**. If the container stops after `initdb` has
+written `PG_VERSION` but before bootstrap finishes, later starts may report
+"Skipping initialization" and leave `ev_fleet` absent or `pg_hba.conf`
+allowing only localhost. A PostgreSQL TCP socket can still be open, so
+`pg_isready` **does not prove the application can connect**.
+
+The Kubernetes configuration now protects slow Windows laptop first starts:
+
+- `startupProbe` uses TCP on `127.0.0.1`, not the temporary local Unix
+  socket opened during the Docker image's bootstrap; its 15-minute budget
+  keeps liveness disabled during slow database creation
+- `POSTGRES_HOST_AUTH_METHOD=scram-sha-256` explicitly enables
+  password-authenticated host connections for **new** volumes; no
+  unauthenticated `trust` rule is introduced for remote clients
+- `readinessProbe` runs `SELECT 1` against the configured `ev_fleet` DB
+  through the PostgreSQL Pod IP with the configured password, so both the
+  real database and network authentication must work before Fleet uses it
+- `livenessProbe` only checks whether PostgreSQL accepts TCP connections;
+  an existing recoverable but incomplete PVC will stay unready rather than
+  being killed repeatedly
+
+**Existing PVCs are never rewritten.** Before an update, the Windows
+`start-kubernetes.ps1` script checks any existing PostgreSQL installation with
+the same read-only, authenticated Pod-IP SQL query. If it fails, startup stops
+with a diagnostic before changing the application Pods. Your prior manual
+`pg_hba.conf` repair on this laptop is preserved.
+
+Inspect a failed database without changing it:
+
+```powershell
+kubectl -n ev-fleet get pods
+kubectl -n ev-fleet get pvc postgres-data-postgres-0
+kubectl -n ev-fleet logs postgres-0 -c postgres --tail=100
+kubectl -n ev-fleet exec postgres-0 -c postgres -- psql -U ev_fleet -d template1 -c "SELECT datname FROM pg_database ORDER BY datname;"
+kubectl -n ev-fleet exec postgres-0 -c postgres -- psql -U ev_fleet -d template1 -c "SELECT type,database,user_name,address,auth_method,error FROM pg_hba_file_rules;"
+```
+
+For an already-incomplete PVC, adding the environment variable or probe **will
+not replay first-time initialization**. Back up and examine the data and
+catalogue first. Only recover manually after determining whether the old Fleet
+snapshots matter. Never delete a PVC as part of routine deployments.
+On a completely new empty cluster, use the standard startup script; do not
+manually create a database or patch authentication rules.
+
+Because each computer has its own PVC, the application is portable but the
+underlying Fleet state is not synchronised between PC and laptop.
+
 ## Dashboard Horizontal Pod Autoscaler (HPA)
 
 The repository includes `k8s/hpa-dashboard.yaml` through `k8s/kustomization.yaml`.

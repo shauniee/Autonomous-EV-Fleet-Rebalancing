@@ -66,6 +66,37 @@ jobs:
           assert 'refusing to mutate stored database' in command
           print('PostgreSQL keeps existing data intact and verifies permissions before startup.')
           PY
+      - name: Verify PostgreSQL bootstrap, authentication and readiness contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          documents = yaml.safe_load_all(Path('/tmp/ev-fleet.yaml').read_text())
+          objects = {(obj['kind'], obj['metadata']['name']): obj for obj in documents}
+          pg = objects['StatefulSet', 'postgres']['spec']['template']['spec']['containers'][0]
+          env = {item['name']: item for item in pg['env']}
+          assert env['POSTGRES_HOST_AUTH_METHOD']['value'] == 'scram-sha-256'
+          assert env['POD_IP']['valueFrom']['fieldRef']['fieldPath'] == 'status.podIP'
+
+          startup = pg['startupProbe']
+          assert startup['failureThreshold'] * startup['periodSeconds'] >= 600
+          assert 'pg_isready' in ' '.join(startup['exec']['command'])
+          assert '-h 127.0.0.1' in ' '.join(startup['exec']['command'])
+
+          ready = pg['readinessProbe']['exec']['command']
+          assert ready[:2] == ['sh', '-ec']
+          assert 'PGPASSWORD' in ready[2]
+          assert 'psql ' in ready[2] and 'SELECT 1' in ready[2]
+          assert '-h "$POD_IP"' in ready[2]
+          assert 'POSTGRES_DB' in ready[2]
+          assert pg['readinessProbe']['timeoutSeconds'] >= 5
+
+          live = ' '.join(pg['livenessProbe']['exec']['command'])
+          assert 'pg_isready' in live and 'psql' not in live
+          assert 'Assert-ExistingPostgresHealthy' in Path('scripts/start-kubernetes.ps1').read_text()
+          print('PostgreSQL real TCP startup, SQL readiness, SCRAM auth and fail-closed preflight are configured.')
+          PY
       - name: Validate optional customer simulation workloads
         run: |
           python - <<'PY'
@@ -131,3 +162,66 @@ jobs:
               throw "PowerShell syntax errors in $file"
             }
           }
+
+  postgres-bootstrap-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify first-start and reused-volume TCP password authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="ev-pg-bootstrap-${GITHUB_RUN_ID}"
+          docker network create "$name"
+          docker volume create "$name"
+          cleanup() {
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            docker network rm "$name" >/dev/null 2>&1 || true
+            docker volume rm "$name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --name "$name" --network "$name" \
+            -v "$name":/var/lib/postgresql/data \
+            -e PGDATA=/var/lib/postgresql/data/pgdata \
+            -e POSTGRES_USER=ev_fleet \
+            -e POSTGRES_DB=ev_fleet \
+            -e POSTGRES_PASSWORD=ci-test-only \
+            -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 \
+            postgres:17-alpine
+
+          check_remote_sql() {
+            docker run --rm --network "$name" \
+              -e PGPASSWORD=ci-test-only postgres:17-alpine \
+              psql -X -qAt -h "$name" -U ev_fleet -d ev_fleet -c 'SELECT 1'
+          }
+          ready=0
+          for attempt in $(seq 1 90); do
+            if [ "$(check_remote_sql 2>/dev/null)" = "1" ]; then ready=1; break; fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs "$name" | tail -80
+            echo "PostgreSQL failed network SQL bootstrap" >&2
+            exit 1
+          fi
+          docker exec "$name" psql -U ev_fleet -d ev_fleet -XAt -c \
+            "SELECT COUNT(*) FROM pg_database WHERE datname IN ('ev_fleet','postgres','template0','template1')" |
+            grep -qx 4
+
+          # A new container on the SAME PVC must retain the completed bootstrap.
+          docker rm -f "$name"
+          docker run -d --name "$name" --network "$name" \
+            -v "$name":/var/lib/postgresql/data \
+            -e PGDATA=/var/lib/postgresql/data/pgdata \
+            -e POSTGRES_USER=ev_fleet \
+            -e POSTGRES_DB=ev_fleet \
+            -e POSTGRES_PASSWORD=ci-test-only \
+            -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 \
+            postgres:17-alpine
+          ready=0
+          for attempt in $(seq 1 30); do
+            if [ "$(check_remote_sql 2>/dev/null)" = "1" ]; then ready=1; break; fi
+            sleep 2
+          done
+          [ "$ready" -eq 1 ] || { docker logs "$name" | tail -80; exit 1; }
+          echo "First startup, persistent reuse, database creation and Pod-like TCP authentication passed."
