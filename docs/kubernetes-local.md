@@ -95,9 +95,30 @@ The Kubernetes configuration now protects slow Windows laptop first starts:
   being killed repeatedly
 
 The deployment preflight obtains PostgreSQL's actual Pod IP through the
-Kubernetes API rather than relying on container hostname lookup. It prints
+Kubernetes API rather than relying on container hostname lookup. It uses a
+single non-interactive remote shell command (no nested quotes, encoded
+pipelines or interactive password prompts) to test authenticated SQL. It prints
 underlying SQL/kubectl failures so an unavailable database can be distinguished
-from a false-negative IP or shell quoting issue.
+from a false-negative preflight.
+
+To test the existing database without rebuilding Docker images, applying
+manifests or restarting EV simulator Pods, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly
+```
+
+This uses the same non-interactive database authentication check that Deploy
+mode runs, but exits immediately after the check succeeds or fails. It will not
+modify the database or StatefulSet.
+
+**Important:** A successful manual `psql -W` login only validates the password
+typed interactively. The deployment preflight tests the **configured**
+`POSTGRES_PASSWORD` environment variable from the Kubernetes Secret. If the
+Secret's password has drifted from an existing persistent database user's
+password, `-W` can succeed while the script correctly fails. Do not delete
+the PVC or print credentials; reconcile the database user's password and
+Kubernetes Secret safely instead.
 
 **Existing PVCs are never rewritten.** Before an update, the Windows
 `start-kubernetes.ps1` script checks any existing PostgreSQL installation with
