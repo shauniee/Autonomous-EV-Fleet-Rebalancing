@@ -101,6 +101,17 @@ pipelines or interactive password prompts) to test authenticated SQL. It prints
 underlying SQL/kubectl failures so an unavailable database can be distinguished
 from a false-negative preflight.
 
+To test the existing database without rebuilding Docker images, applying
+manifests or restarting EV simulator Pods, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly
+```
+
+This uses the same non-interactive database authentication check that Deploy
+mode runs, but exits immediately after the check succeeds or fails. It will not
+modify the database or StatefulSet.
+
 **Important:** A successful manual `psql -W` login only validates the password
 typed interactively. The deployment preflight tests the **configured**
 `POSTGRES_PASSWORD` environment variable from the Kubernetes Secret. If the
