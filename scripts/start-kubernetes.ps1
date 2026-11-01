@@ -41,24 +41,22 @@ function Assert-ExistingPostgresHealthy {
         throw "PostgreSQL returned an unexpected Pod IP; refusing to construct a shell probe."
     }
 
-    $probe = @'
-set -eu
-result="$(PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=5 psql -X -qAt -h "__POD_IP__" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT 1')" || exit 1
-if [ "$result" != "1" ]; then
-  echo "PostgreSQL preflight: expected SELECT 1, received an unexpected response." >&2
-  exit 1
-fi
-echo "Authenticated PostgreSQL Pod-IP SQL check passed."
-'@
-    $probe = $probe.Replace("__POD_IP__", $podIp)
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($probe))
+    # Avoid sending an encoded shell pipeline through Windows PowerShell's
+    # legacy native-argument quoting. The only kubectl exec payload is a
+    # single portable sh -c argument with no nested quotes or shell pipes.
+    # PostgreSQL password is read ONLY from the container's environment.
+    # SELECT/**/1 is PostgreSQL's whitespace-free equivalent of SELECT 1.
+    $sqlCheck = 'PGPASSWORD=$POSTGRES_PASSWORD PGCONNECT_TIMEOUT=5 psql -X -qAt -w -h __POD_IP__ -U $POSTGRES_USER -d $POSTGRES_DB -c SELECT/**/1'
+    $sqlCheck = $sqlCheck.Replace('__POD_IP__', $podIp)
     Write-Host "Testing PostgreSQL TCP authentication to Pod IP $podIp (read-only)..." -ForegroundColor Cyan
-    # Only base64 characters are passed through Windows PowerShell's native
-    # argument quoting; shell code is decoded and executed inside the Pod.
-    & kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c "echo $encoded | base64 -d | sh"
+    $sqlOutput = (& kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c $sqlCheck) -join ""
     if ($LASTEXITCODE -ne 0) {
-        throw "PostgreSQL preflight failed against Pod IP $podIp. Inspect the psql or kubectl error immediately above. Also run: kubectl -n ev-fleet get pod postgres-0 -o wide; kubectl -n ev-fleet logs postgres-0 -c postgres --tail=80. Missing database or pg_hba.conf rules must be recovered without deleting existing PVC data."
+        throw "PostgreSQL Pod-IP preflight failed. The psql or kubectl diagnostic above identifies the actual problem (for example wrong POSTGRES_PASSWORD, missing database or pg_hba.conf rule). The interactive -W test uses a manually typed password and does NOT verify that the Secret's POSTGRES_PASSWORD matches. Check the current Kubernetes Secret and persistent database credentials without exposing passwords. No PVC data was changed."
     }
+    if ($sqlOutput.Trim() -ne '1') {
+        throw "PostgreSQL Pod-IP preflight returned an unexpected SQL response (expected 1). Output: $sqlOutput. No PVC data was changed."
+    }
+    Write-Host "Authenticated PostgreSQL Pod-IP SQL check passed." -ForegroundColor Green
 }
 
 function Assert-SafeToRedeploy {
