@@ -1,4 +1,4 @@
-param([switch]$SetupMetricsServer, [switch]$AllowInsecureLocalKubeletTls, [switch]$ConnectOnly)
+param([switch]$SetupMetricsServer, [switch]$AllowInsecureLocalKubeletTls, [switch]$ConnectOnly, [switch]$CheckPostgresOnly)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -113,9 +113,10 @@ print("Fleet confirms no active rentals, relocations or charging.")
 }
 
 Require-Command kubectl
-if (-not $ConnectOnly) { Require-Command docker }
+if (-not ($ConnectOnly -or $CheckPostgresOnly)) { Require-Command docker }
 if ($AllowInsecureLocalKubeletTls -and -not $SetupMetricsServer) { throw 'TLS workaround requires -SetupMetricsServer.' }
 if ($ConnectOnly -and ($SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) { throw '-ConnectOnly cannot be combined with Metrics Server setup switches.' }
+if ($CheckPostgresOnly -and ($ConnectOnly -or $SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) { throw '-CheckPostgresOnly cannot be combined with other startup modes.' }
 
 & kubectl config use-context docker-desktop
 if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Kubernetes context 'docker-desktop' is unavailable." }
@@ -123,6 +124,14 @@ if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Kubernetes context 'docker-desk
 $nodeReady = & kubectl get node docker-desktop -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}"
 if ($LASTEXITCODE -ne 0 -or $nodeReady -ne "True") {
     throw "Docker Desktop Kubernetes is not Ready. Enable it in Docker Desktop settings and retry."
+}
+
+if ($CheckPostgresOnly) {
+    $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
+    if ($LASTEXITCODE -ne 0 -or -not $postgres) { throw "No existing PostgreSQL StatefulSet to check in namespace ev-fleet." }
+    Assert-ExistingPostgresHealthy
+    Write-Host "PostgreSQL-only check passed. No images, Pods, or persistent volumes were changed." -ForegroundColor Green
+    return
 }
 
 if ($ConnectOnly) {
