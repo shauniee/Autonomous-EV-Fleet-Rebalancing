@@ -22,7 +22,14 @@ function Run-Checked([string]$Label, [string]$Executable, [string[]]$Arguments) 
 
 try {
     Set-Location (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-    $python = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+    $venvPython = Join-Path (Get-Location) ".venv\Scripts\python.exe"
+    $python = if (Test-Path $venvPython) {
+        $venvPython
+    } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+        "py"
+    } else {
+        "python"
+    }
     Require-Tool $python
     Require-Tool "npm.cmd"
     $prefix = if ($python -eq "py") { @("-3") } else { @() }

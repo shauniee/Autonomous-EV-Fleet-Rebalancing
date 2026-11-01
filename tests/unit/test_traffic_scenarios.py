@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from ev_fleet.contracts.routing import RoadRoute
 from ev_fleet.rebalancing.scenarios import (
     TrafficScenarios, TrafficScenarioInput, allowed_control,
@@ -32,6 +33,18 @@ def request(kind, *, segment=0, speed=12, version=0, expires=30):
 def disabled_feed():
     return {"source":"DISABLED", "status":"DISABLED", "generated_at":Clock().now().isoformat(),
             "speeds":[], "incidents":[], "roadworks":[], "feeds":{}}
+
+def live_feed():
+    return {"source":"LTA_DATAMALL", "status":"FRESH",
+            "generated_at":Clock().now().isoformat(),
+            "speeds":[{"id":"speed-live", "road":"FIRST ROAD", "start":A, "end":B,
+                       "min_kph":20, "max_kph":30}],
+            "incidents":[{"id":"incident-live", "type":"ACCIDENT", "position":B,
+                          "message":"Observed incident"}],
+            "roadworks":[{"id":"work-live", "road":"FIRST ROAD",
+                          "start_date":"2026-10-01", "end_date":"2026-11-01"}],
+            "feeds":{"speeds":{"status":"FRESH", "observed_at":Clock().now().isoformat(),
+                                "count":1, "error":None}}}
 
 def test_guard_denies_anonymous_and_disabled_mutations(monkeypatch):
     monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "false")
@@ -70,6 +83,18 @@ def test_scenario_can_recommend_different_route_and_close_only_segment(monkeypat
     store.delete(closed["scenarios"][-1]["id"], 2)
     assert assess_traffic([A, B, C], 2, 240, store.merged_snapshot(disabled_feed()))["blocked"] is False
 
+def test_active_simulation_retains_live_lta_as_separate_observations(monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "true")
+    store = TrafficScenarios(Clock())
+    store.create(request("ROADWORKS", speed=15), route())
+    merged = store.merged_snapshot(live_feed())
+    assert merged["source"] == "SIMULATION"
+    assert merged["mode"] == "LIVE_AND_SIMULATION"
+    assert merged["simulated_events"][0]["source"] == "SIMULATION"
+    assert merged["live_observations"]["source"] == "LTA_DATAMALL"
+    assert merged["live_observations"]["incidents"][0]["message"] == "Observed incident"
+    assert all(row["id"] != "incident-live" for row in merged["incidents"])
+
 def test_rejects_unknown_or_unroutable_or_outside_segments():
     store = TrafficScenarios(Clock())
     with pytest.raises(HTTPException):
@@ -78,11 +103,10 @@ def test_rejects_unknown_or_unroutable_or_outside_segments():
         store.create(request("ROAD_CLOSED"), None)
     with pytest.raises(HTTPException):
         store.create(request("ROADWORKS", speed=None), route())
-    far = RoadRoute(source="ONEMAP", fetched_at=Clock().now(),
-        geometry=[{"latitude":2.0,"longitude":103.8}, {"latitude":2.01,"longitude":103.8}],
-        distance_km=1, duration_seconds=100)
-    with pytest.raises(HTTPException):
-        store.create(request("CONGESTION"), far)
+    with pytest.raises(ValidationError):
+        RoadRoute(source="ONEMAP", fetched_at=Clock().now(),
+            geometry=[{"latitude":2.0,"longitude":103.8}, {"latitude":2.01,"longitude":103.8}],
+            distance_km=1, duration_seconds=100)
 
 def test_expired_synthetic_conditions_revert_to_explicit_disabled(monkeypatch):
     monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "true")

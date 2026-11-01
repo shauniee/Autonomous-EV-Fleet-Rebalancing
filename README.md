@@ -96,7 +96,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 
 Use this command after changing the code. It builds new backend, operator
 Dashboard, and Simulation Console images, deploys them to Kubernetes, waits for
-the updated Pods, and then opens the dashboard connections.
+the updated Pods, and then opens the dashboard connections. It also validates
+the whitelisted facilities, routing, live-traffic and traffic-simulation values
+from root `.env`, pipes backend-only keys directly into Kubernetes Secrets, and
+restarts their consumers without printing the keys.
 
 **Run the existing deployed code — open both dashboards only:**
 
@@ -106,7 +109,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -Connect
 
 Use this command when the system is already deployed and you do not want to
 apply local code changes. It only opens or reuses the dashboard connections;
-it does not build images, deploy code, or restart Pods.
+it does not read `.env`, build images, deploy code, or restart Pods.
 
 On macOS with Docker Desktop Kubernetes (kubeadm), Python 3 and curl available:
 

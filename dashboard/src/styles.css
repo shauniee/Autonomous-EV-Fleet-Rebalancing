@@ -88,6 +88,11 @@ main{padding:20px var(--page-gutter)}
 .map-pin{display:grid;place-items:center;padding:5px;border:2px solid #fff;border-radius:9px;background:#287d83;color:#fff;box-shadow:0 2px 6px #123d4240}
 .map-pin--ev{background:#163c63}
 .map-pin--charging{background:#a96817}
+.map-pin--congestion{background:#c96123}
+.map-pin--roadworks{background:#a96817}
+.map-pin--closure{background:#a83232}
+.map-pin--diversion{background:#7252a3}
+.map-pin--incident{background:#ad3e28}
 .map-pin.is-rented{background:#ba791d}
 .map-pin.is-muted{background:#76838a}
 .map-pin.is-selected{outline:3px solid #176d62;outline-offset:2px}
@@ -99,6 +104,9 @@ main{padding:20px var(--page-gutter)}
 .map-cluster.is-selected span{display:none}
 .map-pin:focus-visible,.map-cluster:focus-visible{outline:3px solid #327dd1;outline-offset:3px}
 .map-marker-help{font-size:11px;color:var(--muted);margin:10px 0 0}
+.traffic-map-legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
+.traffic-map-legend>span{display:inline-flex;align-items:center;gap:4px}
+.traffic-line-swatch{width:18px;height:4px;border-radius:2px;background:#23826e}
 .map-layer-count{padding:1px 5px;border-radius:4px;background:var(--surface);font-size:10px;font-variant-numeric:tabular-nums}
 .map-reset{padding:8px 12px;font-size:11px;white-space:nowrap}
 .map-scope{display:grid;gap:6px;font-size:11px;font-weight:650;color:var(--muted)}

@@ -10,6 +10,28 @@ function Require-Command([string]$Name) {
     }
 }
 
+function Resolve-Python {
+    $venvPython = Join-Path (Get-Location) ".venv\Scripts\python.exe"
+    if (Test-Path $venvPython) { return @{ Executable = $venvPython; Prefix = @() } }
+    if (Get-Command py -ErrorAction SilentlyContinue) { return @{ Executable = "py"; Prefix = @("-3") } }
+    if (Get-Command python -ErrorAction SilentlyContinue) { return @{ Executable = "python"; Prefix = @() } }
+    throw "Python is required to validate and render the whitelisted .env integration settings."
+}
+
+function Render-EnvArtifact([hashtable]$Python, [string[]]$Mode = @()) {
+    $arguments = @($Python.Prefix) + @("scripts\render_facilities_secret.py", ".env") + $Mode
+    $output = (& $Python.Executable @arguments) -join [Environment]::NewLine
+    if ($LASTEXITCODE -ne 0 -or -not $output) {
+        throw "Unable to validate and render integration settings from .env."
+    }
+    return $output
+}
+
+function Apply-RenderedSecret([string]$Manifest, [string]$Name) {
+    $Manifest | & kubectl apply -f -
+    if ($LASTEXITCODE -ne 0) { throw "Unable to apply Kubernetes Secret '$Name'." }
+}
+
 function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
     & kubectl -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
     if ($LASTEXITCODE -ne 0) {
@@ -150,6 +172,14 @@ if ($ConnectOnly) {
     # Check BEFORE image builds, and again immediately before applying updates.
     Assert-SafeToRedeploy
 
+    # Validate before expensive builds. Secret JSON stays in process memory and
+    # is piped directly to kubectl later; it is never written to disk or logged.
+    $python = Resolve-Python
+    $facilitiesSecret = Render-EnvArtifact $python
+    $routingSecret = Render-EnvArtifact $python @("--routing")
+    $trafficControlSecret = Render-EnvArtifact $python @("--traffic-control")
+    $trafficConfigPatch = Render-EnvArtifact $python @("--traffic-config")
+
     if ($SetupMetricsServer) {
         & (Join-Path $PSScriptRoot "setup-local-metrics.ps1") -AllowInsecureKubeletTls:$AllowInsecureLocalKubeletTls
         if (-not $?) { throw "Metrics Server setup failed." }
@@ -190,8 +220,12 @@ if ($ConnectOnly) {
     if ($rendered.Contains(":k8s-local")) { throw "Unversioned image reference remains in rendered manifests." }
 
     $manifestFile = Join-Path ([IO.Path]::GetTempPath()) ("ev-fleet-deploy-" + [guid]::NewGuid().ToString("N") + ".yaml")
+    $trafficPatchFile = Join-Path ([IO.Path]::GetTempPath()) ("ev-fleet-traffic-patch-" + [guid]::NewGuid().ToString("N") + ".json")
     try {
         [IO.File]::WriteAllText($manifestFile, $rendered + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        # This patch contains only the provider/enable flags, never credentials.
+        # A file avoids Windows PowerShell 5.1 altering nested JSON quotes.
+        [IO.File]::WriteAllText($trafficPatchFile, $trafficConfigPatch + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
         & kubectl apply -f .\k8s\namespace.yaml
         if ($LASTEXITCODE -ne 0) { throw "Namespace creation failed." }
         & kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
@@ -200,8 +234,26 @@ if ($ConnectOnly) {
         if ($LASTEXITCODE -ne 0) { throw "Rendered manifest validation failed; nothing else applied." }
         & kubectl apply -f $manifestFile
         if ($LASTEXITCODE -ne 0) { throw "Kubernetes apply failed. Inspect Pod images and events before retrying." }
+
+        Apply-RenderedSecret $facilitiesSecret "ev-fleet-facilities"
+        Apply-RenderedSecret $routingSecret "ev-fleet-routing"
+        Apply-RenderedSecret $trafficControlSecret "ev-fleet-traffic-control"
+        & kubectl -n ev-fleet patch configmap ev-fleet-config --type merge --patch-file $trafficPatchFile
+        if ($LASTEXITCODE -ne 0) { throw "Unable to apply the traffic provider configuration." }
+
+        # ConfigMap/Secret environment values are read only when a container
+        # starts. Restart every consumer after the validated settings exist.
+        foreach ($workload in @(
+            "deployment/facilities", "deployment/rebalancing", "deployment/dispatch",
+            "deployment/simulation-console", "deployment/ev-moving-01",
+            "deployment/ev-moving-02", "statefulset/ev-moving-extra"
+        )) {
+            & kubectl -n ev-fleet rollout restart $workload
+            if ($LASTEXITCODE -ne 0) { throw "Unable to restart $workload after integration settings changed." }
+        }
     } finally {
         Remove-Item -Path $manifestFile -ErrorAction SilentlyContinue
+        Remove-Item -Path $trafficPatchFile -ErrorAction SilentlyContinue
     }
 
     # Image references change across *all* backend processes (including EVs),

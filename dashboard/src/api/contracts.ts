@@ -13,10 +13,17 @@ export interface SimulatedTrafficEvent {
   source: 'SIMULATION'; start: Position; end: Position;
   created_at: string; expires_at: string;
 }
+export interface ObservedTrafficSnapshot {
+  source: 'LTA_DATAMALL'; status: string; generated_at: string;
+  feeds: Record<string, {status: string; observed_at: string | null; count: number; error: string | null}>;
+  speeds: TrafficSegment[]; incidents: TrafficIncident[];
+  roadworks: {id: string; road: string; start_date: string; end_date: string}[];
+}
 export interface TrafficSnapshot {
-  source: string; mode?: 'LIVE' | 'SIMULATION' | 'DISABLED';
+  source: string; mode?: 'LIVE' | 'SIMULATION' | 'LIVE_AND_SIMULATION' | 'DISABLED';
   status: string; generated_at: string;
   simulated_events?: SimulatedTrafficEvent[]; scenario_version?: number;
+  live_observations?: ObservedTrafficSnapshot | null;
   feeds: Record<string, {status: string; observed_at: string | null; count: number; error: string | null}>;
   speeds: TrafficSegment[]; incidents: TrafficIncident[];
   roadworks: {id: string; road: string; start_date: string; end_date: string}[];

@@ -15,11 +15,11 @@ or an automatic mid-journey rerouting system.
    referenced Dispatch and checks the approved geometry, segment bounds,
    Singapore coordinates, maximum 3 km segment length and optimistic
    scenario version. Arbitrary user-drawn connector lines are rejected.
-4. Rebalancing's read-only `/api/v1/traffic/conditions` returns **mode:
-   SIMULATION**, fresh synthetic events and their exact segment endpoints.
-   The Operator Dashboard polls every five seconds, plots orange congestion,
-   amber roadworks and dashed red closures, and lets dispatchers inspect
-   the affected segment. It separately labels live LTA data when active.
+4. Rebalancing's read-only `/api/v1/traffic/conditions` returns fresh synthetic
+   events and their exact segment endpoints. When LTA traffic is enabled, its
+   independently refreshed observations remain in a separate
+   `live_observations` snapshot. The Operator Dashboard polls every five seconds
+   and renders both layers with explicit `SIMULATED` and `LTA observed` labels.
 5. The *same* events feed the single and batch recommendation assessment,
    and Dispatch rechecks the actual road route geometry at operator approval.
    Confirmed synthetic closures reject an affected route if no valid
@@ -42,6 +42,19 @@ numeric ETA as verified street-level trip time.
 Traffic simulation is **disabled by default**. Do not enable this on an
 internet-facing Simulation Console. The backend-only control key must be
 at least 16 characters and is never given to the browser.
+
+On Windows, the normal `scripts/start-kubernetes.ps1` deployment validates the
+whitelisted traffic values in root `.env`, pipes the three backend Secrets
+directly to Kubernetes, patches only the non-secret traffic flags, and restarts
+their consumers. `-ConnectOnly` deliberately does not read `.env` or change the
+cluster. Configure both live observations and local simulation with:
+
+```dotenv
+TRAFFIC_SOURCE=LTA_DATAMALL
+LTA_DATAMALL_ACCOUNT_KEY=<your backend-only LTA key>
+TRAFFIC_SIMULATION_ENABLED=true
+TRAFFIC_SIMULATION_CONTROL_KEY=<at least 16 random characters>
+```
 
 Use a randomly generated operator secret, stored as a Kubernetes Secret
 (not in Git); example, run in PowerShell with a locally set environment
@@ -97,6 +110,10 @@ Do not expose the mutation API directly to unauthorised networks.
   replica. They are cleared on restart; this avoids persistent fictional
   road closures silently surviving deployment. Not a distributed
   multi-replica traffic-control authority.
+- While a synthetic scenario is active, it remains the decision source for
+  simulation-aware ranking and movement. Live LTA observations continue to be
+  fetched and displayed as a separate evidence layer; they are not silently
+  flattened together with fictional events.
 - Live LTA Approved Road Works have road names without verified drivable
   segment geometry; the dashboard continues to list them, without
   guessing road segments.

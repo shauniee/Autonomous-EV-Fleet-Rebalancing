@@ -112,8 +112,11 @@ class TrafficScenarios:
         if not rows:
             return {**live, "mode": "LIVE" if live["source"] == "LTA_DATAMALL" else "DISABLED",
                     "simulated_events": [], "scenario_version": self.version}
-        # Explicit SIMULATION mode overrides live LTA rather than mixing
-        # synthetic and observational evidence indistinguishably.
+        # Synthetic control remains the decision source while it is active,
+        # but retain the independently refreshed LTA snapshot for a separately
+        # labelled dashboard layer. Never flatten observed and fictional rows
+        # into the same collections.
+        observed = live if live.get("source") == "LTA_DATAMALL" else None
         speeds = []
         incidents = []
         works = []
@@ -129,7 +132,10 @@ class TrafficScenarios:
                 # A route segment is unambiguously closed in simulation.
                 incidents.append({"id": row["id"], "type": "ROAD BLOCK",
                     "position": row["start"], "message": "Synthetic closure on approved road route"})
-        return {"source": "SIMULATION", "mode": "SIMULATION", "status": "FRESH",
+        return {"source": "SIMULATION",
+                "mode": "LIVE_AND_SIMULATION" if observed else "SIMULATION",
+                "status": "FRESH",
                 "generated_at": self.clock.now().isoformat(),
                 "feeds": {}, "speeds": speeds, "incidents": incidents,
-                "roadworks": works, "simulated_events": rows, "scenario_version": self.version}
+                "roadworks": works, "simulated_events": rows,
+                "live_observations": observed, "scenario_version": self.version}

@@ -6,7 +6,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.css';
 import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
 import { planConfirmedMotion, routeForVehicle, type MotionSample } from './confirmedMotion';
-import { mapIcon, mapSymbols } from './mapIcons';
+import { liveTrafficIconKind, mapIcon, mapSymbols, simulatedTrafficIconKind } from './mapIcons';
 const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
 const reportedPositions = new WeakMap<L.Marker, L.LatLng>();
@@ -99,8 +99,10 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
     { key: 'routes', label: 'Routes', colour: '#326995', count: routes.length },
-    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count: traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length
-      : traffic?.source === 'SIMULATION' ? (traffic.simulated_events?.length ?? 0) : 0 },
+    { key: 'traffic', label: 'Traffic', colour: '#b44d22', count:
+      (traffic?.source === 'LTA_DATAMALL' ? traffic.speeds.length + traffic.incidents.length
+        : (traffic?.live_observations?.speeds.length ?? 0) + (traffic?.live_observations?.incidents.length ?? 0))
+      + (traffic?.simulated_events?.length ?? 0) },
   ] as const;
   useEffect(() => { setSelectedZoneOnly(true); setFollowEV(false); }, [selected]);
   useEffect(() => {
@@ -229,24 +231,32 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     return () => { layer.remove(); };
   }, [routes, journeyId, onSelectDispatch, visible.routes, areaZone, zones]);
   useEffect(() => {
-    if (!map.current || !visible.traffic || !traffic || !['LTA_DATAMALL', 'SIMULATION'].includes(traffic.source)) return;
+    if (!map.current || !visible.traffic || !traffic) return;
     const layer = L.layerGroup().addTo(map.current);
     // Show full synthetic approved road segments, independently of LTA's
     // point-to-link observation overlay. No guessed geometry is plotted.
-    if (traffic.source === 'SIMULATION') {
-      for (const item of (traffic.simulated_events ?? []).slice(0, 30)) {
+    for (const item of (traffic.simulated_events ?? []).slice(0, 30)) {
         const colour = item.kind === 'ROAD_CLOSED' ? '#c43332' : item.kind === 'ROADWORKS' ? '#e1a127' : '#eb762c';
         const description = document.createElement('span');
         description.textContent = `SIMULATED ${item.kind.replaceAll('_', ' ')} · ${item.speed_kph == null ? 'Road closed' : item.speed_kph + ' km/h'} · route ${item.dispatch_id.slice(0,8)} · segment ${item.segment_index} · expires ${new Date(item.expires_at).toLocaleTimeString('en-SG', {timeZone:'Asia/Singapore'})} SGT`;
         L.polyline([[item.start.latitude, item.start.longitude], [item.end.latitude, item.end.longitude]],
           { color: colour, weight: 9, opacity: .95, dashArray: item.kind === 'ROAD_CLOSED' ? '4,6' : undefined })
           .bindTooltip(description).bindPopup(description.cloneNode(true) as HTMLElement).addTo(layer);
-      }
-      return () => { layer.remove(); };
+        const midpoint: L.LatLngTuple = [
+          (item.start.latitude + item.end.latitude) / 2,
+          (item.start.longitude + item.end.longitude) / 2,
+        ];
+        L.marker(midpoint, {
+          icon: mapIcon(simulatedTrafficIconKind(item.kind)),
+          title: `Simulated ${item.kind.replaceAll('_', ' ').toLowerCase()}`,
+        }).bindTooltip(description.cloneNode(true) as HTMLElement)
+          .bindPopup(description.cloneNode(true) as HTMLElement).addTo(layer);
     }
+    const observed = traffic.source === 'LTA_DATAMALL' ? traffic : traffic.live_observations;
+    if (!observed) return () => { layer.remove(); };
     // Rendering bound: show at most 500 observed road segments at a time.
     // This layer is descriptive only; geometry is not a routable network.
-    for (const segment of traffic.speeds.slice(0, 500)) {
+    for (const segment of observed.speeds.slice(0, 500)) {
       const average = (segment.min_kph + segment.max_kph) / 2;
       const colour = average < 20 ? '#bd453b' : average < 40 ? '#d6a137' : '#23826e';
       const label = document.createElement('span');
@@ -254,12 +264,12 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       L.polyline([[segment.start.latitude, segment.start.longitude], [segment.end.latitude, segment.end.longitude]],
         { color: colour, weight: 4, opacity: .7 }).bindTooltip(label).addTo(layer);
     }
-    for (const incident of traffic.incidents.slice(0, 100)) {
+    for (const incident of observed.incidents.slice(0, 100)) {
       const label = document.createElement('span');
       label.textContent = incident.type + ': ' + incident.message;
-      L.circleMarker([incident.position.latitude, incident.position.longitude],
-        { radius: 7, color: '#ad3e28', fillOpacity: .75, weight: 2 })
-        .bindTooltip(label).addTo(layer);
+      L.marker([incident.position.latitude, incident.position.longitude], {
+        icon: mapIcon(liveTrafficIconKind(incident.type)), title: `LTA ${incident.type}`,
+      }).bindTooltip(label).bindPopup(label.cloneNode(true) as HTMLElement).addTo(layer);
     }
     return () => { layer.remove(); };
   }, [visible.traffic, traffic]);
@@ -362,8 +372,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
             if (key === 'vehicles' && !checked) setFollowEV(false);
             setVisible(current => ({ ...current, [key]: checked }));
           }}/>
-          {key === 'vehicles' || key === 'parking' || key === 'charging'
-            ? <span className="map-filter-symbol" style={{ color: colour }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: mapSymbols[key === 'vehicles' ? 'ev' : key] }}/>
+          {key === 'vehicles' || key === 'parking' || key === 'charging' || key === 'traffic'
+            ? <span className="map-filter-symbol" style={{ color: colour }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: mapSymbols[key === 'vehicles' ? 'ev' : key === 'traffic' ? 'incident' : key] }}/>
             : <span className="map-layer-dot" style={{ backgroundColor: colour }} aria-hidden="true"/>}
           <span>{label}</span><span className="map-layer-count">{count}</span>
         </label>)}

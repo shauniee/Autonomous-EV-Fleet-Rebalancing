@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.render_facilities_secret import settings
+from scripts.render_facilities_secret import TRAFFIC_DEFAULTS, settings
 
 
 def test_env_loader_whitelists_settings_and_does_not_execute_values(tmp_path):
@@ -28,3 +28,22 @@ def test_invalid_configuration_fails_without_echoing_secrets(tmp_path, line):
     with pytest.raises(ValueError) as error:
         settings(path)
     assert "unclosed" not in str(error.value)
+
+
+def test_traffic_settings_are_whitelisted_and_validated(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("TRAFFIC_SOURCE=LTA_DATAMALL\nLTA_DATAMALL_ACCOUNT_KEY=fixture-key\n"
+                    "TRAFFIC_SIMULATION_ENABLED=true\n"
+                    "TRAFFIC_SIMULATION_CONTROL_KEY=fixture-control-key\nDATABASE_URL=private\n")
+    result = settings(path, TRAFFIC_DEFAULTS)
+    assert result["TRAFFIC_SOURCE"] == "LTA_DATAMALL"
+    assert result["TRAFFIC_SIMULATION_ENABLED"] == "true"
+    assert result["TRAFFIC_SIMULATION_CONTROL_KEY"] == "fixture-control-key"
+    assert "DATABASE_URL" not in result
+
+
+def test_invalid_traffic_boolean_fails_closed(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("TRAFFIC_SIMULATION_ENABLED=yes\n")
+    with pytest.raises(ValueError, match="must be true or false"):
+        settings(path, TRAFFIC_DEFAULTS)

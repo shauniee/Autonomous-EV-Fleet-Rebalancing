@@ -409,8 +409,35 @@ describe('dispatcher dashboard', () => {
     const panel = await screen.findByRole('region', {name:'Traffic conditions and roadworks'});
     expect(within(panel).getByText('SIMULATION MODE')).toBeInTheDocument();
     expect(within(panel).getByText('ROAD CLOSED')).toBeInTheDocument();
-    expect(within(panel).getByText(/Live LTA readings are not mixed/)).toBeInTheDocument();
+    expect(within(panel).getByText(/separately labelled from live LTA observations/)).toBeInTheDocument();
     expect(within(panel).getByText(/Road closed/)).toBeInTheDocument();
+  });
+
+  it('shows live LTA observations alongside a separately labelled simulated closure', async () => {
+    const now = new Date().toISOString();
+    const feeds = { speeds:{status:'FRESH', observed_at:now, count:1, error:null},
+      incidents:{status:'FRESH', observed_at:now, count:1, error:null},
+      roadworks:{status:'FRESH', observed_at:now, count:1, error:null} };
+    server({ '/api/rebalancing/traffic/conditions': {
+      source:'SIMULATION', mode:'LIVE_AND_SIMULATION', status:'FRESH', generated_at:now,
+      scenario_version:1, feeds:{}, speeds:[], incidents:[], roadworks:[],
+      simulated_events:[{ id:'sim-combined', dispatch_id:'dispatch-combined', segment_index:1,
+        kind:'ROAD_CLOSED', speed_kph:null, source:'SIMULATION',
+        start:{latitude:1.30,longitude:103.80}, end:{latitude:1.305,longitude:103.80},
+        created_at:now, expires_at:now }],
+      live_observations:{ source:'LTA_DATAMALL', status:'FRESH', generated_at:now, feeds,
+        speeds:[{id:'live-speed',road:'OBSERVED ROAD',start:{latitude:1.31,longitude:103.81},
+          end:{latitude:1.32,longitude:103.82},min_kph:10,max_kph:20}],
+        incidents:[{id:'live-incident',type:'ROAD BLOCK',position:{latitude:1.31,longitude:103.81},
+          message:'Observed LTA closure'}],
+        roadworks:[{id:'live-work',road:'OBSERVED ROAD',start_date:'2020-01-01',end_date:'2099-01-01'}] },
+    }});
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Traffic/ }));
+    const panel = await screen.findByRole('region', {name:'Traffic conditions and roadworks'});
+    expect(within(panel).getByText('LIVE LTA + SIMULATION')).toBeInTheDocument();
+    expect(within(panel).getByText('Observed LTA closure')).toBeInTheDocument();
+    expect(within(panel).getByText('ROAD CLOSED')).toBeInTheDocument();
   });
 
 });

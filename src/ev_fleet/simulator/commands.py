@@ -81,20 +81,33 @@ class MovingNode:
             await self.refresh_parking()
 
     async def refresh_parking(self):
-        self.parking_verified = False
+        previous_verified = self.parking_verified
         previous_charging = self.movement.charging_state
+        # Keep the last verified state while Facilities is responding. Clearing
+        # it before this await lets the concurrent telemetry loop publish a
+        # transient UNAVAILABLE sample on every ordinary parking poll.
+        try:
+            state = VehicleParking.model_validate(await self.request("GET",
+                f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking")).model_dump(mode="json")
+            if state["vehicle_id"] != self.vehicle_id:
+                raise RuntimeError("Parking response belongs to another vehicle")
+        except Exception:
+            # Once a refresh has definitely failed, stale parking authority
+            # must not leave the EV advertised as available.
+            self.movement.park(None)
+            self.parking_verified = False
+            if previous_verified or self.movement.charging_state != previous_charging:
+                self.telemetry_changed.set()
+            raise
         self.movement.park(None)
-        state = VehicleParking.model_validate(await self.request("GET",
-            f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking")).model_dump(mode="json")
-        if state["vehicle_id"] != self.vehicle_id:
-            raise RuntimeError("Parking response belongs to another vehicle")
         if state["pending"]:
-            return
-        if state["parking"]:
+            self.parking_verified = False
+        elif state["parking"]:
             self.parking_verified = self.movement.park(state["parking"])
         else:
             self.parking_verified = True
-        if self.movement.charging_state != previous_charging:
+        if (self.parking_verified != previous_verified
+                or self.movement.charging_state != previous_charging):
             self.telemetry_changed.set()
 
     async def send_telemetry(self):

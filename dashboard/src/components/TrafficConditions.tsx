@@ -1,26 +1,36 @@
 import type { TrafficSnapshot } from '../api/contracts';
 import { time } from './format';
+import { mapSymbols } from './mapIcons';
+
+function LegendIcon({ kind, colour }: {kind: 'congestion' | 'roadworks' | 'closure' | 'incident'; colour: string}) {
+  return <span className="map-filter-symbol" style={{ color: colour }} aria-hidden="true"
+    dangerouslySetInnerHTML={{ __html: mapSymbols[kind] }}/>;
+}
 
 export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapshot; error?: string}) {
-  const live = snapshot?.source === 'LTA_DATAMALL';
-  const simulated = snapshot?.source === 'SIMULATION';
-  const issues = live ? snapshot.incidents : [];
-  const works = live ? snapshot.roadworks : [];
+  const live = snapshot?.source === 'LTA_DATAMALL' ? snapshot : snapshot?.live_observations;
+  const simulated = (snapshot?.simulated_events?.length ?? 0) > 0;
+  const combined = !!live && simulated;
+  const issues = live?.incidents ?? [];
+  const works = live?.roadworks ?? [];
   const today = new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Singapore'});
   const active = works.filter(w => w.start_date <= today && today <= w.end_date);
   return <section className="panel" aria-label="Traffic conditions and roadworks">
     <div className="section-title"><h2>Traffic conditions & roadworks</h2>
-      <strong>{error ? 'UNAVAILABLE' : simulated ? 'SIMULATION MODE' : live ? 'LIVE LTA MODE' : 'DISABLED'}</strong></div>
+      <strong>{error ? 'UNAVAILABLE' : combined ? 'LIVE LTA + SIMULATION' : simulated ? 'SIMULATION MODE' : live ? 'LIVE LTA MODE' : 'DISABLED'}</strong></div>
     {error && <p className="warning" role="status">Traffic feed unavailable: {error}. Cached road conditions must not be interpreted as a clear route.</p>}
-    <div className="map-marker-help" aria-label="Traffic map legend">
-      <strong>Map legend:</strong> <span>🟢 Normal / higher observed speed</span>{' · '}
-      <span>🟠 Congestion</span>{' · '}<span>🟡 Roadworks</span>{' · '}
-      <span>🔴 Explicit road closure</span>
+    <div className="map-marker-help traffic-map-legend" aria-label="Traffic map legend">
+      <strong>Map legend:</strong>
+      <span><span className="traffic-line-swatch" aria-hidden="true"/>Observed speed</span>
+      <span><LegendIcon kind="congestion" colour="#c96123"/>Congestion</span>
+      <span><LegendIcon kind="roadworks" colour="#a96817"/>Roadworks</span>
+      <span><LegendIcon kind="closure" colour="#a83232"/>Road closure</span>
+      <span><LegendIcon kind="incident" colour="#ad3e28"/>Incident</span>
     </div>
-    {simulated && <>
-      <p className="muted">Simulation only · generated {time(snapshot.generated_at)} ·
+    {simulated && snapshot && <>
+      <p className="muted">Simulation layer only · generated {time(snapshot.generated_at)} ·
         {snapshot.simulated_events?.length ?? 0} active scenarios. The route map uses the exact approved road segments
-        selected in the Simulation Console. Live LTA readings are not mixed with fictional events.</p>
+        selected in the Simulation Console. Fictional events remain separately labelled from live LTA observations.</p>
       <div className="table-scroll"><table aria-label="Simulated traffic scenarios">
         <thead><tr><th>Condition</th><th>Route / segment</th><th>Simulated speed</th><th>Expires</th></tr></thead>
         <tbody>{snapshot.simulated_events?.map(item => <tr key={item.id}>
@@ -39,10 +49,10 @@ export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapsh
       (requires enabled operator control), or configure LTA DataMall for observed traffic.
       No conditions are assumed clear when data is unavailable.</p>}
     {live && <>
-      <p className="muted">LTA DataMall observed traffic · snapshot {time(snapshot.generated_at)}.
+      <p className="muted">LTA DataMall observed traffic · snapshot {time(live.generated_at)}.
         Available speeds and incidents are observations, not guaranteed road closures.</p>
       <div className="table-scroll"><table><thead><tr><th>Feed</th><th>Status</th><th>Observations</th><th>Last received</th></tr></thead>
-        <tbody>{Object.entries(snapshot.feeds).map(([name, feed]) =>
+        <tbody>{Object.entries(live.feeds).map(([name, feed]) =>
           <tr key={name}><td>{name}</td><td>{feed.status}</td><td>{feed.count}</td><td>{time(feed.observed_at)}</td></tr>)}</tbody>
       </table></div>
       <h3>Geolocated incidents ({issues.length})</h3>

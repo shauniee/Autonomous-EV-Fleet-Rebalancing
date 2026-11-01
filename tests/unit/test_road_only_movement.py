@@ -127,6 +127,68 @@ def test_parked_ev_stays_at_drivable_road_access_without_teleport():
     asyncio.run(scenario())
 
 
+def test_parking_refresh_keeps_verified_availability_until_response_arrives():
+    from ev_fleet.simulator.commands import MovingNode
+
+    async def scenario():
+        position = {"latitude": 1.436, "longitude": 103.786}
+        parking = {
+            "facility_id": "test-woodlands-parking", "name": "Test parking",
+            "position": position, "zone_id": "woodlands", "source": "MOCK",
+            "charging_allocated": False, "charging_power_kw": 7,
+            "charging_target_soc_pct": 80,
+        }
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-parking-refresh",
+                          position, 70, facilities_url="http://facilities.test")
+        node.session = str(uuid4())
+        node.initialized = True
+        node.parking_verified = True
+        assert node.movement.park(parking)
+
+        request_started = asyncio.Event()
+        release_response = asyncio.Event()
+        telemetry = []
+
+        async def delayed_request(method, url, body=None):
+            if method == "GET" and url.endswith("/parking"):
+                request_started.set()
+                await release_response.wait()
+                return {"vehicle_id": node.vehicle_id, "parking": None, "pending": False}
+            if method == "POST" and url.endswith("/telemetry"):
+                telemetry.append(body)
+                return {}
+            raise AssertionError(f"Unexpected request: {method} {url}")
+
+        node.request = delayed_request
+        refresh = asyncio.create_task(node.refresh_parking())
+        await request_started.wait()
+
+        assert node.parking_verified is True
+        assert node.movement.parking == parking
+        await node.send_telemetry()
+        assert telemetry[-1]["availability"] == "AVAILABLE"
+        assert telemetry[-1]["parked_facility_id"] == parking["facility_id"]
+
+        release_response.set()
+        await refresh
+        assert node.parking_verified is True
+        assert node.movement.parking is None
+
+        assert node.movement.park(parking)
+        node.parking_verified = True
+
+        async def failed_request(method, url, body=None):
+            raise RuntimeError("Facilities response invalid")
+
+        node.request = failed_request
+        with pytest.raises(RuntimeError, match="Facilities response invalid"):
+            await node.refresh_parking()
+        assert node.parking_verified is False
+        assert node.movement.parking is None
+
+    asyncio.run(scenario())
+
+
 def test_charging_approval_claims_access_road_and_not_facility_centre(clock, monkeypatch):
     from ev_fleet.dispatch import service
     async def scenario():
