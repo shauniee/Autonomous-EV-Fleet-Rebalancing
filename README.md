@@ -65,6 +65,18 @@ separate Dispatch approval operation can start a relocation.
 
 See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md) for local-only controls, safety assumptions and current limitations. Rental returns do not automatically alter the Rebalancing algorithm, and ground-staff tasks do not themselves physically charge EVs.
 
+## PostgreSQL portable startup
+
+On a fresh Docker Desktop cluster, the checked-in PostgreSQL StatefulSet
+now reserves sufficient first-start time before liveness checks begin, explicitly
+uses SCRAM password authentication, and verifies the actual `ev_fleet` SQL
+database through the Pod network before reporting ready. Existing PVC data is
+never automatically deleted or reinitialised.
+
+If a previously interrupted installation already has a partial PostgreSQL
+data directory, the deployment script stops with a diagnostic instead of
+overwriting it. See [PostgreSQL startup and recovery](docs/kubernetes-local.md#postgresql-bootstrap-and-safe-recovery).
+
 ## Kubernetes startup
 
 ### Prerequisites
