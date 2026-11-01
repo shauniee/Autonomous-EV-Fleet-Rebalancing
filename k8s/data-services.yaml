@@ -106,20 +106,48 @@ spec:
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # Explicit for new clusters; does not overwrite existing pg_hba.conf.
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: scram-sha-256
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           ports:
             - name: postgres
               containerPort: 5432
+          # The official image runs a temporary Unix-socket-only postmaster
+          # during initdb. Probing TCP keeps liveness disabled until bootstrap
+          # finishes, rather than killing slow laptop initialization midway.
+          startupProbe:
+            exec:
+              command: ["sh", "-ec", "pg_isready -q -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 180
+          # pg_isready alone can succeed for a nonexistent database. Require an
+          # actual SQL query through Pod-IP TCP with the configured password.
+          # This also tests pg_hba.conf rules used by other Kubernetes Pods.
           readinessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+              command:
+                - sh
+                - -ec
+                - |
+                  result=$(PGPASSWORD="$POSTGRES_PASSWORD" PGCONNECT_TIMEOUT=3 \
+                    psql -X -qAt -h "$POD_IP" -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                    -c 'SELECT 1') || exit 1
+                  test "$result" = "1"
             periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 12
+            timeoutSeconds: 8
+            failureThreshold: 3
+          # Liveness checks only the server process; missing DB/auth must not
+          # repeatedly kill or re-initialize a potentially recoverable PVC.
           livenessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+              command: ["sh", "-ec", "pg_isready -q -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 5
             failureThreshold: 6
           resources:
             requests:
