@@ -94,6 +94,11 @@ The Kubernetes configuration now protects slow Windows laptop first starts:
   an existing recoverable but incomplete PVC will stay unready rather than
   being killed repeatedly
 
+The deployment preflight obtains PostgreSQL's actual Pod IP through the
+Kubernetes API rather than relying on container hostname lookup. It prints
+underlying SQL/kubectl failures so an unavailable database can be distinguished
+from a false-negative IP or shell quoting issue.
+
 **Existing PVCs are never rewritten.** Before an update, the Windows
 `start-kubernetes.ps1` script checks any existing PostgreSQL installation with
 the same read-only, authenticated Pod-IP SQL query. If it fails, startup stops
