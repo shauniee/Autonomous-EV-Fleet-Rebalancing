@@ -18,6 +18,9 @@ function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
 function Assert-ExistingPostgresHealthy {
     # Guard against partial initdb volumes that pg_isready mistakenly calls healthy.
     # Do not alter pg_hba.conf, create databases, or reset PostgreSQL storage here.
+    $namespace = (& kubectl get namespace ev-fleet --ignore-not-found -o name) -join ""
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the ev-fleet namespace." }
+    if (-not $namespace) { return } # Brand new Docker Desktop Kubernetes cluster.
     $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect PostgreSQL StatefulSet." }
     if (-not $postgres) { return } # First-time install; wait for new startup/readiness probe after apply.
