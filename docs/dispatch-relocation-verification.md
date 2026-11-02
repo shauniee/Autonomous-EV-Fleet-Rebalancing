@@ -1,9 +1,9 @@
-# Phase 2 verification
+# Dispatch and relocation verification
 
 ## Regression and new behaviour
 
 The final local regression run completed with **63 passed, 1 warning** on Python
-3.10.1. All 37 Phase 1 test functions/parameter cases remain unchanged. The warning
+3.10.1. All 37 initial service foundation test functions/parameter cases remain unchanged. The warning
 is the existing Starlette TestClient HTTPX-adapter deprecation, not a failure.
 `python -m pip check` reports no broken requirements.
 
@@ -32,9 +32,9 @@ was relaxed to make that test pass.
 
 ## Docker execution
 
-Docker became reachable outside the sandbox during Phase 2 (Engine 29.8.0). Initial
+Docker became reachable outside the sandbox during dispatch and relocation (Engine 29.8.0). Initial
 default-port startup collided with existing services. Only the isolated project
-`evfleet-phase2-check` was subsequently used on host ports 18001..18004; existing
+`evfleet-dispatch-check` was subsequently used on host ports 18001..18004; existing
 services were left untouched.
 
 The Python 3.12 images built successfully. Four backend containers passed readiness
@@ -51,14 +51,14 @@ After reconnection, arrival was validated and the claim released. Recorded evide
 - 171 raw API samples, including 78 UNKNOWN and 49 OFFLINE observations.
 - Final SUCCEEDED dispatch, CBD zone assignment, no active claim, AVAILABLE EV.
 
-Raw recovery evidence: [phase2-container-smoke.json](evidence/phase2-container-smoke.json).
+Raw recovery evidence: [dispatch-container-smoke.json](evidence/dispatch-container-smoke.json).
 This run preceded the final additive response-schema and never-polled timeout changes;
 a final-image smoke result is recorded separately in
-[phase2-container-final.json](evidence/phase2-container-final.json).
+[dispatch-container-final.json](evidence/dispatch-container-final.json).
 
 The final-image smoke also passed: ten observed distinct positions, the same
 9.823527 km trip and 90% -> 87.052942% SOC, with ARRIVAL_PENDING followed by
-SUCCEEDED and AVAILABLE. [Container health](evidence/phase2-container-health.json)
+SUCCEEDED and AVAILABLE. [Container health](evidence/dispatch-container-health.json)
 records four healthy backend services and two running simulator processes.
 `git diff --check` and source parsing passed as well.
 
@@ -69,7 +69,7 @@ records four healthy backend services and two running simulator processes.
 .\.venv\Scripts\python -m pip check
 docker compose --profile relocation config --quiet
 docker compose --profile relocation up --build -d --wait fleet demand rebalancing dispatch ev-moving-01 ev-moving-02
-.\.venv\Scripts\python scripts/phase2_smoke.py --base-port 8001 --output docs/evidence/repeat-smoke.json
+.\.venv\Scripts\python scripts/dispatch_relocation_smoke.py --base-port 8001 --output docs/evidence/repeat-smoke.json
 ```
 
 Use alternate port variables and a distinct Compose project name when other
@@ -81,5 +81,5 @@ EV in an isolated test project; do not stop unrelated services or reset Fleet me
 
 Container execution is now verified for this four-service simulation. Durable crash
 recovery, multi-replica shared state, authentication, real Singapore road routing,
-real vehicles and Kubernetes remain outside this phase. State and deduplication are
+real vehicles and Kubernetes remain outside this verification scope. State and deduplication are
 in memory. FAILED/unknown ownership is not automatically force-released.

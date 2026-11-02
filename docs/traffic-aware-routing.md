@@ -1,4 +1,4 @@
-# Traffic-aware EV selection and road-disruption routing — one PR, four phases
+# Traffic-aware EV selection and road-disruption routing
 
 This feature expands PR #13. **It is optional** and disabled unless
 `TRAFFIC_SOURCE=LTA_DATAMALL` is set. All examples below use synthetic

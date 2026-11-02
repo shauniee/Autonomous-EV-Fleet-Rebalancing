@@ -1,6 +1,6 @@
-# Phase 5C — Multi-EV relocation and mock parking allocation
+# Multi-EV relocation and mock parking allocation
 
-This change extends the same PR as Phase 5A/B. It adds no customer-driving simulator.
+This capability builds on the parking/charging catalogue and rental lifecycle. It adds no customer-driving simulator.
 
 ## Overview
 
@@ -61,9 +61,9 @@ The old `POST /api/v1/recommendations` and
 - An occupied simulated space remains occupied; the future rental departure
   lifecycle must explicitly vacate it. Do not equate the current mock
   `parking_available` values to actual, guaranteed public bay availability.
-- Uncertain parking hold delivery or reconciliation is an area for Phase 5D
+- Uncertain parking hold delivery or reconciliation requires additional
   hardening with PostgreSQL, durable event records, and periodic recovery.
-- The unchanged Phase 4 experimental outputs do not validate Phase 5C's
+- The existing strategy-evaluation outputs do not validate this capability's
   new greedy pair-selection weights; a separate evaluation is required.
 
 ## Local verification

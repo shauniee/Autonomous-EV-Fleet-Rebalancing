@@ -1,7 +1,7 @@
 import asyncio
-from experiments.phase4.cluster import execute_trial
-from experiments.phase4.config import EvaluationConfig
-from experiments.phase4.scenarios import generate_scenario
+from experiments.strategy_evaluation.cluster import execute_trial
+from experiments.strategy_evaluation.config import EvaluationConfig
+from experiments.strategy_evaluation.scenarios import generate_scenario
 from ev_fleet.rebalancing.strategies import ENERGY_AWARE, NEAREST_EV
 
 

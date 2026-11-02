@@ -32,7 +32,7 @@ def repository_state():
         result = subprocess.run(["git", *arguments], text=True, capture_output=True, check=False)
         return result.stdout.strip() if result.returncode == 0 else None
     digest = sha256()
-    sources = [*sorted(Path("experiments/phase4").glob("*.py")),
+    sources = [*sorted(Path("experiments/strategy_evaluation").glob("*.py")),
                Path("src/ev_fleet/rebalancing/policy.py"),
                Path("src/ev_fleet/rebalancing/strategies.py"),
                Path("src/ev_fleet/rebalancing/app.py")]
@@ -50,7 +50,7 @@ async def run(config, scenarios, output):
     raw.mkdir()
     started = datetime.now(timezone.utc)
     manifest = {
-        "phase": "4", "research_question": "Does energy-aware selection reduce operationally poor relocations while maintaining reasonable distance and response time?",
+        "evaluation_version": "1", "research_question": "Does energy-aware selection reduce operationally poor relocations while maintaining reasonable distance and response time?",
         "started_at": started.isoformat(), "config": config.as_dict(),
         "scenarios": list(scenarios), "algorithms": [ENERGY_AWARE.name, NEAREST_EV.name],
         "planned_scenario_trials": len(scenarios) * config.repetitions * 2,
@@ -106,7 +106,7 @@ async def run(config, scenarios, output):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Run the paired Phase 4 EV selection evaluation")
+    parser = argparse.ArgumentParser(description="Run the paired EV-selection strategy evaluation")
     parser.add_argument("--repetitions", type=int, default=30)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--scenarios", nargs="*", choices=SCENARIO_NAMES, default=list(SCENARIO_NAMES))
@@ -114,7 +114,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.repetitions < 1:
         parser.error("--repetitions must be positive")
-    output = args.output or Path("results/phase4-evaluation") / datetime.now().strftime("run-%Y%m%d-%H%M%S")
+    output = args.output or Path("results/strategy-evaluation") / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     config = EvaluationConfig(repetitions=args.repetitions, seed_start=args.seed_start)
     completion = asyncio.run(run(config, args.scenarios, output))
     print(json.dumps({"output": str(output), **completion}, indent=2))

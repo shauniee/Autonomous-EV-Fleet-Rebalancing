@@ -59,8 +59,8 @@ try {
         Require-Tool "act"
         Run-Checked "Docker engine" "docker" @("info", "--format", "{{.ServerVersion}}")
         $runner = @("-P", "ubuntu-latest=catthehacker/ubuntu:act-latest")
-        Run-Checked "Disposable PostgreSQL telemetry" "act" (@("workflow_dispatch", "-W", ".github/workflows/phase5c-checks.yml", "-j", "telemetry-postgres") + $runner)
-        Run-Checked "Local Docker Compose smoke" "act" (@("workflow_dispatch", "-W", ".github/workflows/phase5c-checks.yml", "-j", "compose-smoke") + $runner)
+        Run-Checked "Disposable PostgreSQL telemetry" "act" (@("workflow_dispatch", "-W", ".github/workflows/infrastructure-checks.yml", "-j", "telemetry-postgres") + $runner)
+        Run-Checked "Local Docker Compose smoke" "act" (@("workflow_dispatch", "-W", ".github/workflows/infrastructure-checks.yml", "-j", "compose-smoke") + $runner)
         Run-Checked "Kubernetes manifest checks" "act" (@("workflow_dispatch", "-W", ".github/workflows/kubernetes-portability.yml", "-j", "manifests") + $runner)
         Write-Host "[PASS] Unit, build, and disposable integration checks passed." -ForegroundColor Green
     } else {

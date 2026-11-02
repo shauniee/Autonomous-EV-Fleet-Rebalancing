@@ -1,4 +1,4 @@
-# Phase 2: dispatch lifecycle and autonomous EV relocation simulation
+# Dispatch lifecycle and autonomous EV relocation
 
 Singapore simulation only. Recommendation creation does not claim an EV or move it.
 Dispatch approval is a separate POST, using an existing recommendation ID and a
@@ -6,7 +6,7 @@ caller-generated request UUID. Four independent services communicate over HTTP.
 
 ## Run locally
 
-Start the three Phase 1 services as in README, then a fourth terminal:
+Start Fleet, Demand and Rebalancing as described in the README, then use a fourth terminal:
 
 ```powershell
 .\.venv\Scripts\python -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
@@ -33,7 +33,7 @@ For a clean dedicated demo, start only moving nodes and their dependencies:
 docker compose --profile relocation up --build -d --wait fleet demand rebalancing dispatch ev-moving-01 ev-moving-02
 ```
 
-Default `docker compose up` preserves the Phase 1 stationary service set. An
+Default `docker compose up` preserves the original stationary service set. An
 unqualified `--profile relocation up` also starts the default stationary nodes;
 use the explicit service list above to avoid recommending a stationary node.
 Do not mix independently running simulators with the same vehicle IDs.
@@ -100,7 +100,7 @@ Dispatch. Final distance can also be recovered from telemetry. An ARRIVED event
 alone cannot release a vehicle without matching fresh Fleet telemetry.
 
 Explicit command rejection releases a claim only after matching IDLE telemetry at
-the origin. Confirmed execution failure retains the claim. Phase 2 deliberately
+the origin. Confirmed execution failure retains the claim. The dispatch and relocation system deliberately
 does not expose an unsafe force-release or automatic reassignment on timeout.
 
 ## Communication and failure handling
@@ -132,7 +132,7 @@ treated as conflicts, not as a reason to steal another node's session.
 
 ## Distance and SOC
 
-Route length is the Phase 1 geographic distance multiplied by route factor. Position
+Route length is the direct geographic distance multiplied by the route factor. Position
 interpolates along a synthetic segment according to fractional route completion;
 this is not a road route, animation or external maps integration. Incremental
 distance is speed times elapsed simulated time, clamped to the remaining route.
@@ -170,7 +170,7 @@ movement, and four real backend processes with two separate moving-node processe
 For a repeatable smoke test of an already-running moving demo:
 
 ```powershell
-.\.venv\Scripts\python scripts/phase2_smoke.py --base-port 8001 --output docs/evidence/my-phase2-smoke.json
+.\.venv\Scripts\python scripts/dispatch_relocation_smoke.py --base-port 8001 --output docs/evidence/my-dispatch-smoke.json
 ```
 
 This command explicitly approves one simulated relocation and records raw API

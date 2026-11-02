@@ -4,7 +4,7 @@ import time
 from uuid import uuid4
 import pytest
 from fastapi import HTTPException
-from tests.phase3a_support import DemandCluster
+from tests.demand_heatmap_support import DemandCluster
 from tests.integration.test_dispatch_relocation_flow import relocation_cluster
 
 

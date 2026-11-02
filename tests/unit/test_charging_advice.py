@@ -8,7 +8,7 @@ from ev_fleet.common.settings import Settings
 from ev_fleet.contracts.recommendations import BatchRecommendationRequest
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.rebalancing.charging_advice import build_charging_advice
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def vehicle_at(site, now, soc=25):

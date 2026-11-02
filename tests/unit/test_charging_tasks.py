@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from ev_fleet.contracts.charging_tasks import ChargingTaskCreate, ChargingTaskUpdate
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_charging_task_is_explicit_durable_and_blocks_dispatch(clock):

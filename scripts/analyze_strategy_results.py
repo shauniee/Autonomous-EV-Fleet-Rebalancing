@@ -4,11 +4,11 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from experiments.phase4.analysis import analyze
+from experiments.strategy_evaluation.analysis import analyze
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Regenerate Phase 4 tables and graphs from raw JSONL")
+    parser = argparse.ArgumentParser(description="Regenerate strategy-evaluation tables and graphs from raw JSONL")
     parser.add_argument("run", type=Path)
     args = parser.parse_args()
     result = analyze(args.run / "raw" / "trials.jsonl", args.run)

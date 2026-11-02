@@ -1,4 +1,4 @@
-"""Phase 5C contract, matching, parking capacity and batch dispatch tests."""
+"""Contract, matching, parking capacity and batch dispatch tests."""
 import asyncio
 from datetime import timedelta
 from uuid import uuid4
@@ -12,7 +12,7 @@ from ev_fleet.contracts.facilities import ParkingHoldRequest
 from ev_fleet.contracts.rentals import RentalStart
 from ev_fleet.facilities.store import FacilitiesStore
 from ev_fleet.facilities.catalog import BY_ID
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_atomic_mock_parking_holds_do_not_overallocate_and_release_is_idempotent():

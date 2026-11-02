@@ -1,10 +1,10 @@
-# Phase 3B: Dispatcher Dashboard
+# Operator dashboard
 
 React/TypeScript/Vite renders the existing six Singapore zones with Leaflet. The UI is a client of the existing services. It does not calculate shortage, severity, eligibility, ranking, route energy or dispatch transitions. All coordinates and charging assessments are simulated.
 
 ## Run locally
 
-Start the four existing backend services and moving EV nodes using the Phase 2 instructions. In a second terminal:
+Start the four existing backend services and moving EV nodes using the dispatch and relocation instructions. In a second terminal:
 
 ```powershell
 cd dashboard
@@ -21,9 +21,9 @@ $env:DEMAND_SIMULATION_ENABLED = 'true'
 docker compose --profile relocation up --build fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
 ```
 
-Open http://127.0.0.1:8080 (`DASHBOARD_PORT` changes the host port). Explicit service names avoid starting the stationary Phase 1 EVs, which do not consume dispatch commands. Do not run stationary and moving processes with the same vehicle ID. Existing default Compose behaviour is retained; dashboard is in the `relocation` profile.
+Open http://127.0.0.1:8080 (`DASHBOARD_PORT` changes the host port). Explicit service names avoid starting the stationary initial service foundation EVs, which do not consume dispatch commands. Do not run stationary and moving processes with the same vehicle ID. Existing default Compose behaviour is retained; dashboard is in the `relocation` profile.
 
-The opt-in environment variable enables Phase 3A demand simulation. Without simulation or manual demand updates, unknown demand is correctly shown as Unknown. New simulator observations follow the configured interval (default 30 seconds).
+The opt-in environment variable enables demand and heat-map demand simulation. Without simulation or manual demand updates, unknown demand is correctly shown as Unknown. New simulator observations follow the configured interval (default 30 seconds).
 
 The dashboard has a Node build stage and an Nginx static runtime. Nginx resolves internal service names per request using Docker DNS, so a backend outage does not prevent the dashboard itself loading. Its health endpoint checks static-serving availability, not backend health. Backend panels independently report API failures.
 
@@ -78,4 +78,4 @@ Playwright starts isolated real services on ports 18001–18004, a readiness ser
 
 For an occasional real-map smoke check, set `$env:REAL_MAP = '1'` before running the browser suite, then remove that environment variable afterward. The journey then requires successful real tile responses. Keep the default stubbed mode for routine tests.
 
-Frontend unit/component tests cover semantic states, selection races, expiry, explanations, confirmation, ambiguous retry/reload, partial responses and backend lifecycle display. The existing Python regression suite is unchanged. See `phase3b-verification.md` for observed results and runtime limitations.
+Frontend unit/component tests cover semantic states, selection races, expiry, explanations, confirmation, ambiguous retry/reload, partial responses and backend lifecycle display. The existing Python regression suite is unchanged. See `operator-dashboard-verification.md` for observed results and runtime limitations.

@@ -1,7 +1,7 @@
 # API contracts
 
-Phase 3A adds read-only `/api/v1/heat-map`, `/api/v1/heat-map/hotspots`, and
-`/api/v1/demand-simulation` to Demand. See [heat-map contracts and calculations](phase3a-demand-heatmap.md).
+demand and heat-map adds read-only `/api/v1/heat-map`, `/api/v1/heat-map/hotspots`, and
+`/api/v1/demand-simulation` to Demand. See [heat-map contracts and calculations](demand-heatmap.md).
 Existing zone, manual-demand and raw-demand hotspot contracts below remain unchanged.
 
 OpenAPI is served at `/openapi.json` and interactive documentation at `/docs` on
@@ -75,9 +75,9 @@ initialization, not transitive dependencies. The OpenAPI request contracts are
 authoritative for exact field constraints. Fleet, zone detail and recommendation
 response schemas are also typed. Inapplicable candidate score fields are null.
 
-## Implemented Phase 2 endpoints
+## Implemented dispatch and relocation endpoints
 
 POST /dispatches approves a recommendation; GET /dispatches/{id} reports outcome.
 EVs poll GET /vehicles/{id}/commands and POST acknowledgements/events under the
 dispatch ID. These operations are now implemented by the separate Dispatch Service
-and Fleet claim API. See [Phase 2 contracts and lifecycle](phase2-dispatch.md).
+and Fleet claim API. See [dispatch and relocation contracts and lifecycle](dispatch-relocation.md).

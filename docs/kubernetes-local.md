@@ -243,6 +243,13 @@ SOC values are deterministically spread from 65% to 94%. Each StatefulSet Pod na
 is also its Fleet vehicle ID, so Pod replacement preserves identity while still
 losing any process-local journey state as described above.
 
+StatefulSet scaling creates simulator Pods in parallel. Rolling updates use
+`maxUnavailable: 10%`, rounded up by Kubernetes, so independent EV simulators are
+replaced in bounded batches rather than one at a time. This updates two Pods at a
+time for the default 18 replicas and 20 at a time for 200 replicas. The rollout
+still waits for each batch to publish telemetry and pass its Fleet readiness check
+before continuing.
+
 To confirm the Pods are using the locally built images:
 
 ```powershell
@@ -379,7 +386,7 @@ git diff --check
 git diff --exit-code -- experiments results
 ```
 
-The Phase 4 experiment matrix does not need to be rerun merely to deploy its
+The strategy evaluation experiment matrix does not need to be rerun merely to deploy its
 unchanged application to Kubernetes. Its checked-in raw evidence must remain
 byte-for-byte untouched.
 

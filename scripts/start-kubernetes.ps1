@@ -10,11 +10,74 @@ function Require-Command([string]$Name) {
     }
 }
 
+function Test-PythonExecutable([string]$Executable) {
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Executable
+    $startInfo.Arguments = '-c "import sys"'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { return $false }
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            return $false
+        }
+        return $process.ExitCode -eq 0
+    } catch {
+        return $false
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Resolve-PyLauncherPython {
+    $launcher = Get-Command py -ErrorAction SilentlyContinue
+    if (-not $launcher) { return $null }
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $launcher.Source
+    $startInfo.Arguments = '-3 -c "import sys; print(sys.executable)"'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { return $null }
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            return $null
+        }
+        $output = $process.StandardOutput.ReadToEnd().Trim()
+        if ($process.ExitCode -eq 0 -and $output -and (Test-PythonExecutable $output)) {
+            return $output
+        }
+        return $null
+    } catch {
+        return $null
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Resolve-Python {
     $venvPython = Join-Path (Get-Location) ".venv\Scripts\python.exe"
-    if (Test-Path $venvPython) { return @{ Executable = $venvPython; Prefix = @() } }
-    if (Get-Command py -ErrorAction SilentlyContinue) { return @{ Executable = "py"; Prefix = @("-3") } }
-    if (Get-Command python -ErrorAction SilentlyContinue) { return @{ Executable = "python"; Prefix = @() } }
+    if (Test-Path $venvPython) {
+        if (Test-PythonExecutable $venvPython) {
+            return @{ Executable = $venvPython; Prefix = @() }
+        }
+        Write-Warning "Ignoring the unusable .venv Python. Recreate the virtual environment to repair it."
+    }
+    $launcherPython = Resolve-PyLauncherPython
+    if ($launcherPython) { return @{ Executable = $launcherPython; Prefix = @() } }
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCommand -and (Test-PythonExecutable $pythonCommand.Source)) {
+        return @{ Executable = $pythonCommand.Source; Prefix = @() }
+    }
     throw "Python is required to validate and render the whitelisted .env integration settings."
 }
 
@@ -33,6 +96,22 @@ function Apply-RenderedSecret([string]$Manifest, [string]$Name) {
 }
 
 function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
+    if ($Kind -eq "statefulset") {
+        $replicaText = (& kubectl -n ev-fleet get statefulset $Name -o jsonpath='{.spec.replicas}') -join ""
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect StatefulSet '$Name' before waiting for its rollout."
+        }
+        $replicas = 0
+        if ([int]::TryParse($replicaText, [ref]$replicas) -and $replicas -gt 1) {
+            # OrderedReady StatefulSets replace one Pod at a time. Simulator Pods can
+            # each need close to a minute to register telemetry and become ready.
+            $replicaAwareSeconds = 120 + (60 * $replicas)
+            if ($replicaAwareSeconds -gt $Seconds) {
+                $Seconds = $replicaAwareSeconds
+            }
+        }
+    }
+    Write-Host "Waiting up to $Seconds seconds for $Kind/$Name..."
     & kubectl -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
     if ($LASTEXITCODE -ne 0) {
         if ($Kind -eq "statefulset" -and $Name -eq "postgres") {
@@ -40,6 +119,8 @@ function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
             & kubectl -n ev-fleet logs postgres-0 -c postgres --tail=35
             Write-Warning "PostgreSQL PVC has NOT been deleted or reset."
         }
+        & kubectl -n ev-fleet get "$Kind/$Name" -o wide
+        & kubectl -n ev-fleet get pods -l "app.kubernetes.io/name=$Name" -o wide
         throw "Rollout failed: $Kind/$Name"
     }
 }
@@ -162,6 +243,9 @@ if ($ConnectOnly) {
         Wait-Rollout deployment $deployment 120
     }
 } else {
+    & (Join-Path $PSScriptRoot "setup-local.ps1")
+    if ($LASTEXITCODE -ne 0 -or -not $?) { throw "Local Python environment setup failed." }
+
     $dockerContext = (& docker context show).Trim()
     if ($LASTEXITCODE -ne 0 -or $dockerContext -ne "desktop-linux") {
         throw "Docker must use the 'desktop-linux' context; current context is '$dockerContext'."

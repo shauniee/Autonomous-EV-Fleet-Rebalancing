@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from ev_fleet.contracts.demand import DemandUpdate
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 from ev_fleet.contracts.dispatch import CommandAcknowledgement, DispatchEvent
 import httpx
 

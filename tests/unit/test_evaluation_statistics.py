@@ -1,6 +1,6 @@
 import csv
 import pytest
-from experiments.phase4.analysis import bootstrap_mean_ci, describe, percentile, wilson, write_csv
+from experiments.strategy_evaluation.analysis import bootstrap_mean_ci, describe, percentile, wilson, write_csv
 
 
 def test_descriptive_statistics_and_percentile():

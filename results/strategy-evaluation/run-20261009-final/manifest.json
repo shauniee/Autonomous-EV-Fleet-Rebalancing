@@ -1,5 +1,5 @@
 {
-  "phase": "4",
+  "evaluation_version": "1",
   "research_question": "Does energy-aware selection reduce operationally poor relocations while maintaining reasonable distance and response time?",
   "started_at": "2026-10-09T14:05:17.040760+00:00",
   "config": {
@@ -33,12 +33,12 @@
     "dirty": true,
     "evaluation_source_sha256": "61ecdbd9209c7020e61b755ffb23e57e9d1e48e96cfc08a7fcc03962badd42c4",
     "evaluation_sources": [
-      "experiments/phase4/__init__.py",
-      "experiments/phase4/analysis.py",
-      "experiments/phase4/cluster.py",
-      "experiments/phase4/config.py",
-      "experiments/phase4/runner.py",
-      "experiments/phase4/scenarios.py",
+      "experiments/strategy_evaluation/__init__.py",
+      "experiments/strategy_evaluation/analysis.py",
+      "experiments/strategy_evaluation/cluster.py",
+      "experiments/strategy_evaluation/config.py",
+      "experiments/strategy_evaluation/runner.py",
+      "experiments/strategy_evaluation/scenarios.py",
       "src/ev_fleet/rebalancing/policy.py",
       "src/ev_fleet/rebalancing/strategies.py",
       "src/ev_fleet/rebalancing/app.py"

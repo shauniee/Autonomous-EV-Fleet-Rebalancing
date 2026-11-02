@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from ev_fleet.contracts.vehicles import TelemetryUpdate
 from ev_fleet.simulator.commands import MovingNode
 from ev_fleet.simulator.movement import Movement
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_adaptive_telemetry_frequency_and_synthetic_condition_fields():

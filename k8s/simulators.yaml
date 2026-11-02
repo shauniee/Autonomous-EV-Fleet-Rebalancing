@@ -170,6 +170,12 @@ spec:
   serviceName: ev-moving-extra
   replicas: 18
   podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # These simulators are independent. Update a bounded batch at a time
+      # instead of waiting for every EV Pod sequentially.
+      maxUnavailable: 10%
   selector:
     matchLabels:
       app.kubernetes.io/name: ev-moving-extra

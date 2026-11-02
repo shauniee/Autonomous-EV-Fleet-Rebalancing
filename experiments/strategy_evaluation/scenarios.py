@@ -70,7 +70,7 @@ def _vehicle(rng, name, zone, soc, online=True, consumption=.18):
 def generate_scenario(name: str, seed: int) -> ScenarioSpec:
     if name not in SCENARIO_NAMES:
         raise ValueError(f"unknown scenario: {name}")
-    rng = random.Random(f"phase4:{name}:{seed}")
+    rng = random.Random(f"strategy-evaluation-v1:{name}:{seed}")
     demands = {zone_id: 0 for zone_id in ZONE_POSITIONS}
     demands["cbd"] = 6
     charging = 2

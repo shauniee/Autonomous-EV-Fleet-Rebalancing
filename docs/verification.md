@@ -1,7 +1,7 @@
-# Phase 1 verification — 2026-09-26
+# Initial service foundation verification — 2026-09-26
 
-Historical Phase 1 evidence is retained below. Docker became reachable during the
-subsequent Phase 2 work; see [Phase 2 verification](phase2-verification.md) for actual
+Historical initial service foundation evidence is retained below. Docker became reachable during the
+subsequent dispatch and relocation work; see [dispatch and relocation verification](dispatch-relocation-verification.md) for actual
 image/container/network and relocation-recovery evidence that supersedes the
 environment limitation recorded here.
 

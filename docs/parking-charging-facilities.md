@@ -1,4 +1,4 @@
-# Phase 5A — Mock parking and charging facilities
+# Mock parking and charging facilities
 
 This is an additive, simulation-only first step. All 15 location names, coordinates,
 parking counts and charger counts are **fictional test data**, placed near the
@@ -21,7 +21,7 @@ The data do not update dynamically yet and no reservations are held. Neither the
 EV ranking policy nor the dispatch endpoints consume Facilities data yet;
 **parking and charger pins are information-only**. Actual rental returns,
 multi-EV dispatch, parking-slot claiming and eventual PostgreSQL durability
-are later phases. Reuse this API contract for a future live data adapter.
+are later enhancements. Reuse this API contract for a future live data adapter.
 
 ## Development
 
@@ -41,7 +41,7 @@ For a local Python backend without containers:
 
 Dashboard: `http://127.0.0.1:8080` for Compose or its configured dev port.
 The Facilities data are read-only and the UI clearly labels them as mock.
-Existing Fleet/Demand/Dispatch endpoints and Phase 4 experiment results are unchanged.
+Existing Fleet/Demand/Dispatch endpoints and strategy evaluation experiment results are unchanged.
 
 ## Testing
 
@@ -65,6 +65,6 @@ Future selection must apply destination operating permissions, capacity freshnes
 battery viability and exclusive fleet slot claims **at approval/execution time**.
 
 
-Phase 5C extends this service with in-process mock parking reservations and
-occupancy. It is no longer read-only. See `docs/phase5c-bulk-parking.md`
+multi-EV parking allocation extends this service with in-process mock parking reservations and
+occupancy. It is no longer read-only. See `docs/multi-ev-parking-allocation.md`
 for the POST hold endpoints. These are NOT reservations for real public bays.

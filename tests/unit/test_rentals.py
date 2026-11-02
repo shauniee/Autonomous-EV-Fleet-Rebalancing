@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from ev_fleet.contracts.dispatch import ClaimRequest
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn
 from ev_fleet.fleet.app import create_app
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_rental_lifecycle_excludes_ev_until_fresh_confirmed_free_floating_return(clock):

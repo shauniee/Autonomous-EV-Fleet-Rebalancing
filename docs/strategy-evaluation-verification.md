@@ -1,10 +1,10 @@
-# Phase 4 verification
+# Strategy evaluation verification
 
 Verified on 9 October 2026 (Singapore time).
 
 ## Evaluation completion
 
-The final evidence run is `results/phase4-evaluation/run-20261009-final`.
+The final evidence run is `results/strategy-evaluation/run-20261009-final`.
 It executed 10 scenarios with 30 deterministic seeds and both selection
 algorithms, for 600 paired scenario trials.
 
@@ -52,18 +52,18 @@ at this scale because the confidence interval includes zero.
 
 ## Generated evidence
 
-- [Generated evaluation report](../results/phase4-evaluation/run-20261009-final/report.md)
-- [Run manifest](../results/phase4-evaluation/run-20261009-final/manifest.json)
-- [Completion record](../results/phase4-evaluation/run-20261009-final/completion.json)
-- [Raw JSONL trials](../results/phase4-evaluation/run-20261009-final/raw/trials.jsonl)
-- [Raw CSV trials](../results/phase4-evaluation/run-20261009-final/raw/trials.csv)
-- [Scenario summaries](../results/phase4-evaluation/run-20261009-final/tables/scenario-summary.csv)
-- [Paired effects](../results/phase4-evaluation/run-20261009-final/tables/paired-effects.csv)
-- [Failure summary](../results/phase4-evaluation/run-20261009-final/tables/failure-summary.csv)
-- [Graphs](../results/phase4-evaluation/run-20261009-final/graphs/)
-- [Backend JUnit report](evidence/phase4-backend-tests.xml)
-- [Frontend JUnit report](evidence/phase4-frontend-tests.xml)
-- [Browser JUnit report](evidence/phase4-browser-tests.xml)
+- [Generated evaluation report](../results/strategy-evaluation/run-20261009-final/report.md)
+- [Run manifest](../results/strategy-evaluation/run-20261009-final/manifest.json)
+- [Completion record](../results/strategy-evaluation/run-20261009-final/completion.json)
+- [Raw JSONL trials](../results/strategy-evaluation/run-20261009-final/raw/trials.jsonl)
+- [Raw CSV trials](../results/strategy-evaluation/run-20261009-final/raw/trials.csv)
+- [Scenario summaries](../results/strategy-evaluation/run-20261009-final/tables/scenario-summary.csv)
+- [Paired effects](../results/strategy-evaluation/run-20261009-final/tables/paired-effects.csv)
+- [Failure summary](../results/strategy-evaluation/run-20261009-final/tables/failure-summary.csv)
+- [Graphs](../results/strategy-evaluation/run-20261009-final/graphs/)
+- [Backend JUnit report](evidence/strategy-evaluation-backend-tests.xml)
+- [Frontend JUnit report](evidence/strategy-evaluation-frontend-tests.xml)
+- [Browser JUnit report](evidence/strategy-evaluation-browser-tests.xml)
 
 ## Regression verification
 
@@ -78,7 +78,7 @@ at this scale because the confidence interval includes zero.
 | Docker container runtime | **Not verified: Docker daemon unavailable** |
 
 The browser journey again exercised explicit human approval and real relocation
-through arrival. Phase 4 did not alter dispatch semantics, dashboard behavior,
+through arrival. strategy evaluation did not alter dispatch semantics, dashboard behavior,
 or the default energy-aware application policy.
 
 ## Limits
@@ -89,4 +89,4 @@ and straight-line distance with a route factor. Prediction and movement use
 related energy assumptions. Recommendation latency uses in-process service
 transport and must not be interpreted as deployed network latency. The fixed
 weights were not tuned against these results. Persistent storage, external maps,
-traffic, charging APIs and ML remain outside the phase scope.
+traffic, charging APIs and ML remain outside the evaluation scope.

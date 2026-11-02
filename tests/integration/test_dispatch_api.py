@@ -1,6 +1,6 @@
 import asyncio
 from uuid import uuid4
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_approval_poll_ack_and_errors_through_http(clock):

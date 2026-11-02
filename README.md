@@ -1,415 +1,334 @@
 # Autonomous EV Fleet Rebalancing - Singapore
 
-CSC3104 Cloud and Distributed Computing project. This repository contains a
-distributed, simulation-only system that helps a human dispatcher move available
-electric vehicles to Singapore zones with insufficient supply.
+This repository contains a distributed, simulation-only system for observing an
+electric-vehicle fleet and helping a human dispatcher rebalance available vehicles
+between Singapore zones.
 
-The system observes simulated demand and vehicle telemetry, recommends a suitable
-EV, requires explicit dispatcher approval, and then simulates the EV travelling to
-the selected zone. It does not control real vehicles and does not use live demand,
-traffic or road-routing data. Optional LTA DataMall integration supplies real parking
-and charging observations for simulated destinations; see [LTA setup](docs/lta-datamall.md).
+The system combines simulated demand, vehicle telemetry, parking capacity, charging
+information and explicit operator approval. It does not control real vehicles.
+Optional integrations can provide real parking, charging, routing and traffic
+observations, but movement and operational decisions remain simulated.
 
-## What the project demonstrates
-
-- Five independently running FastAPI services communicating over HTTP, including the mock Facilities Service.
-- Simulated EV processes that register and continuously publish ordered telemetry.
-- Six representative Singapore zones: Jurong East, Woodlands, Bishan, Punggol,
-  Tampines, and CBD.
-- Demand, available supply, projected supply, shortages, and hotspot severity.
-- Explainable energy-aware EV selection with eligibility and reserve checks.
-- Human-approved dispatch, atomic vehicle claims, idempotent commands, gradual
-  movement, SOC consumption, arrival verification, and timeout reconciliation.
-- A React/TypeScript operator dashboard with a Leaflet/OpenStreetMap display.
-- A separate simulation console for setting demand, controlling the optional customer rental workload, and observing expected return zones.
-- Operator-reviewed low-battery alerts, ground-staff charging tasks and advisory rental-return forecasts.
-- A complete local Docker Desktop Kubernetes deployment.
-- Unit, integration, dashboard, browser, container, and experimental evaluation
-  evidence.
-
-## Architecture and ownership
-
-Each service owns a separate part of the simulation:
-
-| Component | Responsibility | Default host port |
-|---|---|---:|
-| Fleet Service | Vehicle registration, telemetry, freshness, versions, zones, and claims | 8001 |
-| Demand Service | Zone demand, charging observations, heat-map composition, and optional demand simulation | 8002 |
-| Rebalancing Service | Eligibility checks, scoring, ranking, and short-lived recommendations | 8003 |
-| Dispatch Service | Approval, claim coordination, commands, lifecycle events, and reconciliation | 8004 |
-| Facilities Service | Simulated parking, chargers and capacity observations | 8005 |
-| EV simulators | Simulated physical position, SOC, command polling, and movement | None |
-| Operator dashboard | Map, recommendation review, and explicit dispatch approval | 8080 |
-| Simulation console | Demand input and read-only service, fleet, and dispatch observations | 8090 |
-
-Runtime state is exchanged only through service APIs. One service does not import
-another service's private store or database repository.
-
-The relocation flow is:
-
-```text
-Demand and Fleet observations
-        -> select hotspot in dashboard
-        -> request Rebalancing recommendation
-        -> review selected EV and explanation
-        -> explicitly approve through Dispatch
-        -> Fleet atomically claims the EV
-        -> EV simulator receives and acknowledges the command
-        -> EV reports movement and decreasing SOC
-        -> Dispatch verifies arrival
-        -> Fleet releases the claim in the destination zone
-```
-
-A recommendation is advisory. It neither reserves nor moves an EV. Only the
-separate Dispatch approval operation can start a relocation.
-
-See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md) for local-only controls, safety assumptions and current limitations. Rental returns do not automatically alter the Rebalancing algorithm, and ground-staff tasks do not themselves physically charge EVs.
-
-## PostgreSQL portable startup
-
-On a fresh Docker Desktop cluster, the checked-in PostgreSQL StatefulSet
-now reserves sufficient first-start time before liveness checks begin, explicitly
-uses SCRAM password authentication, and verifies the actual `ev_fleet` SQL
-database through the Pod network before reporting ready. Existing PVC data is
-never automatically deleted or reinitialised.
-
-If a previously interrupted installation already has a partial PostgreSQL
-data directory, the deployment script stops with a diagnostic instead of
-overwriting it. See [PostgreSQL startup and recovery](docs/kubernetes-local.md#postgresql-bootstrap-and-safe-recovery).
-
-## Kubernetes startup
+## Start the application
 
 ### Prerequisites
 
-- Docker Desktop with Kubernetes enabled and Linux containers
-- `kubectl` using the `docker-desktop` context
-- PowerShell
+- Docker Desktop using Linux containers
+- Docker Desktop Kubernetes enabled
+- `kubectl` with the `docker-desktop` context
+- Windows PowerShell
+- Python 3 available through `py -3` or `python`
 - Host ports 8080 and 8090 available
 
-On Windows, choose the command based on whether you want to deploy code changes.
-
-**Run updated code — build, deploy, and open both dashboards:**
+From the repository root, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
 
-Use this command after changing the code. It builds new backend, operator
-Dashboard, and Simulation Console images, deploys them to Kubernetes, waits for
-the updated Pods, and then opens the dashboard connections. It also validates
-the whitelisted facilities, routing, live-traffic and traffic-simulation values
-from root `.env`, pipes backend-only keys directly into Kubernetes Secrets, and
-restarts their consumers without printing the keys.
+This single command:
 
-**Run the existing deployed code — open both dashboards only:**
+1. Runs `scripts/setup-local.ps1` to validate or create `.venv` and install runtime
+   dependencies when the dependency definition changes.
+2. Validates the local Docker Desktop Kubernetes context.
+3. Checks that an existing PostgreSQL database is reachable without deleting data.
+4. Refuses to redeploy while rentals, relocations or charging work are active.
+5. Validates permitted integration settings from `.env` without printing secrets.
+6. Builds uniquely tagged backend, operator-dashboard and simulation-console images.
+7. Applies the Kubernetes resources and waits for every workload to roll out.
+8. Opens or reuses the two local dashboard tunnels.
+
+After startup:
+
+- Operator dashboard: <http://127.0.0.1:8080>
+- Simulation console: <http://127.0.0.1:8090>
+
+Keep the PowerShell window open when it created new port-forward sessions. Press
+`Ctrl+C` to close only those tunnels. PostgreSQL data remains on the
+`postgres-data-postgres-0` persistent-volume claim.
+
+To reconnect to an existing deployment without rebuilding or restarting it:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
 ```
 
-Use this command when the system is already deployed and you do not want to
-apply local code changes. It only opens or reuses the dashboard connections;
-it does not read `.env`, build images, deploy code, or restart Pods.
-
-On macOS with Docker Desktop Kubernetes (kubeadm), Python 3 and curl available:
-
-```bash
-bash scripts/start-kubernetes.sh
-```
-
-The macOS script loads only the facilities settings from root `.env` into a backend
-Kubernetes Secret. To use real parking and charging observations, set
-`FACILITIES_SOURCE=LTA_DATAMALL` and `LTA_DATAMALL_ACCOUNT_KEY=...` there.
-See [LTA DataMall integration](docs/lta-datamall.md) for modelling and freshness rules.
-Optional [OneMap routing](docs/onemap-routing.md) adds road-following simulation,
-map route overlays and directions using a separate backend access token.
-The macOS script builds native images with unique tags and replaces application
-Pods, including simulators, to load the integration. Run it between demos with no
-active relocations. To reopen both interfaces without reading `.env` or deploying:
-
-```bash
-bash scripts/start-kubernetes.sh --connect-only
-```
-
-Existing healthy tunnels are reused; extra EV rollouts do not block the web apps.
-See the [parking and charging walkthrough](docs/lta-datamall.md#end-to-end-walkthrough)
-to verify real destinations, simulated charging to 80%, and subsequent parking.
-
-On **Windows**, each normal invocation builds backend, Dashboard and Simulation
-Console images with a **new local version tag**, renders the Kubernetes manifests
-to those tags, applies them, and waits for Pods to roll out. There is **no need**
-to manually run `kubectl rollout restart` after a code change. The unchanged
-`k8s-local` aliases are retained only for optional standalone test Job commands.
-
-Deployment is blocked if Fleet reports an in-progress rental, relocation or
-charging operation, or the customer rental simulator/Job is running. Finish
-those sessions first; the script never resets PostgreSQL or forcibly completes
-a customer journey. Do not issue new dispatches while deploying.
-
-The original `-SetupMetricsServer -AllowInsecureLocalKubeletTls` command remains
-**Deploy mode**. Metrics Server setup is idempotent but typically only needed
-once on a new cluster. The startup command keeps its terminal open only for
-newly created dashboard tunnels; existing healthy tunnels are reused.
-See [the local deployment guide](docs/kubernetes-local.md) for troubleshooting.
-
-### Optional HPA for the Dashboard
-
-The Kubernetes manifests include Dashboard CPU autoscaling (1–3 replicas,
-60% CPU target), but a fresh cluster also needs Metrics Server:
+To check only the existing PostgreSQL StatefulSet:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\\scripts\\start-kubernetes.ps1 `
-  -SetupMetricsServer -AllowInsecureLocalKubeletTls
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly
 ```
 
-The `-AllowInsecureLocalKubeletTls` workaround bypasses kubelet certificate
-verification **only for local Docker Desktop testing**; never enable it for
-production. Omit it when using valid kubelet certificates. Without the
-optional setup switch, the usual startup continues to work, but HPA will
-need an existing healthy Metrics API. Other state-owning services remain
-single-replica for correctness. Details:
-[Dashboard HPA and Metrics Server](docs/kubernetes-local.md#dashboard-horizontal-pod-autoscaler-hpa).
-
-Open both Kubernetes interfaces:
-
-- Simulation console (simulation dashboard): <http://127.0.0.1:8090>
-- Operator dashboard: <http://127.0.0.1:8080>
-
-Demand starts unknown. In the simulation console, create a repeatable manual
-hotspot:
-
-1. Select **CBD** under **Set zone demand**.
-2. Enter `12` for desired available vehicles.
-3. Select **Apply demand**.
-4. Confirm that CBD shows the updated demand observation.
-
-Then use the operator dashboard:
-
-1. Select **CBD**.
-2. In **Relocation request**, choose the number of EVs needed, from 1 to 20.
-3. Select **Recommend EV** or **Recommend N EVs**.
-4. Review the ranking and every proposed vehicle-to-parking assignment.
-5. Select **Review dispatch**.
-6. Approve the reviewed EV or batch within the 120-second review window.
-7. Watch each relocation change from pending to in progress and then succeeded.
-8. Confirm that the EVs finish in CBD and become available again.
-
-Press `Ctrl+C` in the startup window when finished. PostgreSQL data remains in
-the `postgres-data-postgres-0` Kubernetes PVC for the next startup. For logs,
-troubleshooting, and teardown, see
+For the complete procedure and troubleshooting, see
 [Local Kubernetes deployment](docs/kubernetes-local.md).
 
-## Demand input
+## Local Python environment
 
-Manual demand through the simulation console is used for a deterministic
-demonstration. The console reads the current Demand version before applying an
-observation and confirms the updated value. All supported service settings and
-defaults are listed in [.env.example](.env.example).
+`scripts/setup-local.ps1` is called automatically during a full Windows Kubernetes
+startup. It can also be run directly:
 
-Timestamps use UTC on the wire. Dashboard times use Asia/Singapore. Distances are
-kilometres, energy is kWh, and state of charge is a percentage.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
+```
 
-## EV selection policy
+The script checks that `.venv\Scripts\python.exe` starts successfully. If the
+environment is missing or references a removed Python installation, it recreates the
+project-local environment. It installs from a root `requirements.txt` when present;
+otherwise it installs the project described by `pyproject.toml`.
 
-Rebalancing first excludes EVs with missing/stale telemetry, offline connectivity,
-unavailability, an active relocation or claim, or insufficient predicted arrival
-SOC. Eligible EVs receive an explainable weighted score:
+A SHA-256 marker inside `.venv` prevents dependency installation on every startup.
+Installation runs again when the selected dependency file changes or when setup is
+forced:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1 -Force
+```
+
+## Runtime components
+
+Each backend process owns a distinct part of the simulation and communicates with
+other components through HTTP APIs.
+
+| Component | Code | Responsibility | Local port |
+|---|---|---|---:|
+| Fleet Service | `src/ev_fleet/fleet/` | Vehicle registration, ordered telemetry, freshness, rentals and atomic claims | 8001 |
+| Demand Service | `src/ev_fleet/demand/` | Zone demand, supply projections, shortages and heat-map composition | 8002 |
+| Rebalancing Service | `src/ev_fleet/rebalancing/` | Eligibility, scoring, ranking and short-lived recommendations | 8003 |
+| Dispatch Service | `src/ev_fleet/dispatch/` | Approval, command lifecycle, acknowledgements and reconciliation | 8004 |
+| Facilities Service | `src/ev_fleet/facilities/` | Parking locations, charger observations, capacity holds and allocations | 8005 |
+| EV simulators | `src/ev_fleet/simulator/` | Position, battery state, command polling and simulated movement | None |
+| Operator dashboard | `dashboard/` | Map, recommendations, dispatch review and operational status | 8080 |
+| Simulation console | `simulation-console/` | Demand input, workload controls and service observations | 8090 |
+
+Shared models and utilities are intentionally separate:
+
+- `src/ev_fleet/contracts/` contains validated API request and response models.
+- `src/ev_fleet/common/` contains shared settings, clocks, logging and travel calculations.
+- A service does not import another service's private store or repository.
+
+## Main workflows
+
+### Vehicle relocation
+
+```text
+Fleet telemetry + zone demand
+        -> operator selects a shortage zone
+        -> Rebalancing ranks eligible EVs
+        -> operator reviews a recommendation
+        -> Dispatch receives explicit approval
+        -> Fleet atomically claims the EV
+        -> simulator acknowledges and moves
+        -> Dispatch verifies arrival
+        -> Fleet releases the EV in the destination zone
+```
+
+A recommendation is advisory. It does not reserve or move a vehicle. Only an
+explicit Dispatch approval can begin relocation.
+
+The operator can request one EV or a batch of up to 20. Batch recommendations rank
+vehicle-to-facility pairs, respect simulated parking capacity and may return partial
+fulfilment. Approval revalidates both vehicle eligibility and parking availability.
+
+### Demand and shortages
+
+The simulation console supplies deterministic manual demand for Jurong East,
+Woodlands, Bishan, Punggol, Tampines and CBD. The Demand Service combines this with
+fresh Fleet observations to calculate:
+
+- available and projected vehicle supply;
+- current and projected shortages;
+- confirmed and unconfirmed inbound relocations;
+- data-quality warnings and hotspot severity.
+
+Timestamps use UTC in APIs and Asia/Singapore in the dashboards. Distances are in
+kilometres, energy in kWh and state of charge as a percentage.
+
+### EV selection
+
+Rebalancing excludes vehicles with missing or stale telemetry, offline connectivity,
+an active claim or rental, insufficient predicted arrival charge, or another
+conflicting operation. Eligible vehicles receive an explainable score:
 
 ```text
 35% distance utility
-20% current SOC
+20% current state of charge
 35% predicted arrival reserve
 10% charging suitability
 ```
 
-The highest score wins, followed by deterministic tie-breaks. Phase 4 also includes
-a nearest-eligible-EV strategy strictly as an evaluation baseline; the application
-default remains energy-aware.
+The highest score wins, followed by deterministic tie-breaks. A nearest-eligible-EV
+strategy exists only as an experimental comparison; the application uses the
+energy-aware strategy.
 
-## Verification
+### Rentals and charging
 
-Run the backend regression suite and dependency check:
+Fleet records idempotent rental starts and confirmed returns. A rented vehicle is
+ineligible for relocation even if its ordinary telemetry says `AVAILABLE`. Returns
+use fresh telemetry received after rental start and remain visible after service
+restart.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m pip check
-```
+Charging alerts and ground-staff tasks are operator-reviewed simulation features.
+They do not connect to a real charging provider or physically charge a vehicle.
 
-Run dashboard tests and a production build:
-
-```powershell
-Set-Location dashboard
-npm.cmd test
-npm.cmd run build
-```
-
-Run the isolated browser end-to-end workflow after installing Chromium once:
-
-```powershell
-npx.cmd playwright install chromium
-npm.cmd run test:e2e
-```
-
-The browser suite starts isolated backend services and moving EV processes on test
-ports. It does not reuse the running Kubernetes deployment.
-
-Validate the Kubernetes resources without changing the cluster:
-
-```powershell
-kubectl kustomize .\k8s
-kubectl apply --dry-run=client -k .\k8s
-```
-
-## Phase 4 evaluation
-
-Phase 4 compares the unchanged energy-aware policy with the nearest-eligible-EV
-baseline using paired seeded scenarios, repeated trials, raw records, confidence
-intervals, tables, and SVG graphs. It does not change production selection or the
-dispatch lifecycle.
-
-Run the complete 600-trial matrix with:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_phase4_evaluation.py --repetitions 30
-```
-
-See [the evaluation guide](docs/phase4-evaluation.md),
-[verification report](docs/phase4-verification.md), and preserved output under
-`results/phase4-evaluation/`.
+See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md).
 
 ## Repository map
 
 ```text
-src/ev_fleet/contracts/    Validated request and response models
-src/ev_fleet/common/       Shared settings, logging, time, and travel calculations
-src/ev_fleet/fleet/        Fleet API and durable vehicle/claim state
-src/ev_fleet/demand/       Demand API, simulation, and heat-map composition
-src/ev_fleet/rebalancing/  Eligibility, strategies, ranking, and recommendations
-src/ev_fleet/dispatch/     Approval and relocation coordination
-src/ev_fleet/simulator/    Stationary and moving simulated EV processes
-src/ev_fleet/facilities/   Mock parking/charging catalogue and allocations
-dashboard/                 React dashboard, Nginx proxy, and frontend tests
-simulation-console/        Demand input and service-observation console
-k8s/                       Local Kubernetes resources
-tests/                     Python unit and integration tests
-experiments/phase4/        Reproducible evaluation runner and analysis
-scripts/                   Smoke, browser-test, and evaluation entry points
-docs/                      Architecture, contracts, phase guides, and evidence
-results/                    Preserved Phase 4 evaluation output
+src/ev_fleet/                 Python backend package
+  common/                     Shared configuration, clocks and calculations
+  contracts/                  API schemas shared between services
+  fleet/                      Vehicle, telemetry, rental and claim ownership
+  demand/                     Demand observations and heat-map calculations
+  rebalancing/                Eligibility and recommendation strategies
+  dispatch/                   Approval and relocation coordination
+  facilities/                 Parking and charging observations and capacity
+  simulator/                  Simulated EV nodes and movement
+
+dashboard/                    React operator interface and Nginx configuration
+simulation-console/           Simulation control backend and React frontend
+k8s/                          Kubernetes manifests and optional simulation jobs
+scripts/                      Setup, startup, verification and evaluation commands
+tests/                        Python unit and integration tests
+experiments/                  Reproducible strategy evaluation code
+results/                      Preserved evaluation output
+docs/                         Architecture, API, operations and feature guides
+
+pyproject.toml                Python project metadata and dependency ranges
+requirements.lock             Exact backend container dependency set
+.env.example                  Supported local integration settings
+Dockerfile                    Backend container build
+docker-compose.yml            Local multi-container configuration
 ```
 
-## Important limitations
+### Kubernetes files
 
-- Fleet, Demand, Rebalancing recommendations, Dispatch workflows, rentals and
-  mock parking allocations use PostgreSQL-backed durable snapshots. Redis stores
-  only short-lived display cache entries and may be lost without affecting
-  dispatch correctness.
-- Individual EV simulator journey progress remains process-local. A simulator Pod
-  replacement preserves its stable vehicle identity but starts a new telemetry
-  session and reconciles from Fleet and Dispatch APIs.
-- Durable snapshots provide restart recovery, not multi-replica transaction
-  safety. State-owning services and individual EV simulators must remain at one
-  worker and one replica until database-level per-entity locking and race tests
-  are implemented.
-- There is no authentication or authorization. Internal APIs must not be exposed to
-  an untrusted network.
-- Demand, movement and arrival are simulated. Optional LTA facilities retain real
-  coordinates and reported availability with local simulation allocations. There is no
-  real-road autonomy, live map routing, ML, maintenance model, real reservation
-  system, or charging-session integration.
-- Public OpenStreetMap tiles require browser network access. The dashboard's zone
-  list and service panels continue working if tiles fail.
+| File | Purpose |
+|---|---|
+| `k8s/kustomization.yaml` | Collects the manifests rendered and applied by the startup script |
+| `k8s/namespace.yaml` | Creates the isolated `ev-fleet` namespace |
+| `k8s/configmaps.yaml` | Non-secret backend configuration shared by workloads |
+| `k8s/data-services.yaml` | PostgreSQL and Redis workloads, storage and health checks |
+| `k8s/backends.yaml` | Fleet, Demand, Rebalancing, Dispatch and Facilities workloads |
+| `k8s/services.yaml` | Cluster networking for backend and data services |
+| `k8s/simulators.yaml` | Default simulated EV workloads |
+| `k8s/dashboard.yaml` | Operator dashboard Deployment and Service |
+| `k8s/simulation-console.yaml` | Simulation console Deployment and Service |
+| `k8s/hpa-dashboard.yaml` | Optional CPU autoscaling policy for the operator dashboard |
+| `k8s/simulations/` | Optional customer-rental Job, Deployment and controller permissions |
 
-## Further documentation
+## Important scripts
 
-- [Architecture and ownership](docs/architecture.md)
-- [API contracts](docs/api-contracts.md)
-- [Dispatch lifecycle](docs/phase2-dispatch.md)
-- [Demand and heat-map calculations](docs/phase3a-demand-heatmap.md)
-- [Dashboard behaviour](docs/phase3b-dashboard.md)
-- [Local Kubernetes deployment](docs/kubernetes-local.md)
-- [Implementation history](docs/implementation-plan.md)
+| Script | Purpose |
+|---|---|
+| `scripts/setup-local.ps1` | Creates or repairs `.venv` and synchronizes runtime dependencies |
+| `scripts/start-kubernetes.ps1` | Safely builds, deploys and connects to the Windows Kubernetes environment |
+| `scripts/start-kubernetes.sh` | macOS Docker Desktop Kubernetes startup |
+| `scripts/test-local.ps1` | Runs backend tests and frontend tests/builds; `-Integration` adds disposable infrastructure checks |
+| `scripts/render_facilities_secret.py` | Validates whitelisted `.env` values and renders in-memory Kubernetes artifacts |
+| `scripts/setup-local-metrics.ps1` | Installs or updates Metrics Server for local HPA testing |
+| `scripts/run_strategy_evaluation.py` | Runs reproducible strategy comparisons and writes raw evaluation results |
+| `scripts/analyze_strategy_results.py` | Summarizes saved evaluation results and produces tables and graphs |
 
-## Phase 5A: simulated parking and charging catalogue
+The two evaluation filenames retain their original names for compatibility. They are
+experimental tools and are not part of application startup.
 
-A separate simulated Facilities Service now provides 15 clearly labelled MOCK
-parking/charging locations across the six simulated zones. The dispatcher map
-shows their pins and per-zone capacities, independently of Fleet/Demand health.
-The legacy single-EV ranking remains zone-based; the Phase 5C batch pathway now
-uses mock parking capacity persisted as simulation state in PostgreSQL. Mock charger
-bays are included in (not added to) reported parking capacity. The local
-Kubernetes manifests include the new Facilities Service.
+## Configuration and optional integrations
 
-See [Phase 5A guide](docs/phase5a-mock-facilities.md) for endpoints, scope,
-verification instructions and the planned rental / multi-EV / parking allocation
-extensions. Historical Phase 4 evidence remains unchanged.
+Copy `.env.example` to `.env` and set only the integrations you need. The Windows
+startup script validates an allowlist of facilities, routing, traffic-control and
+traffic-simulation settings. Credential values are piped directly to Kubernetes and
+are not written to generated manifest files or printed by the script.
 
-## Phase 5B: simulated free-floating rentals
+Available optional integrations include:
 
-Fleet now tracks simulated rental start and confirmed return events via
-version-checked, idempotent HTTP endpoints. A rented EV cannot be ranked or
-claimed for immediate relocation, even if regular vehicle telemetry reports
-AVAILABLE. The return position and SOC are taken from fresh telemetry that
-arrived **after** rental start, so the customer may end at any position inside
-the simulated operating envelope. Confirmed rental status and expected return
-time appear in the Fleet dashboard and EV map and survive service restarts in
-PostgreSQL. There is **no pre-dispatch, parking allocation or
-automatic rental simulator** yet. For API examples and tests, see
-[Phase 5B guide](docs/phase5b-rental-lifecycle.md).
+- [LTA DataMall parking and charging observations](docs/lta-datamall.md)
+- [OneMap road routing](docs/onemap-routing.md)
+- live or simulated traffic settings documented in `.env.example`
 
+The default system remains fully simulated when these integrations are disabled.
 
-## Phase 5C: multi-EV parking-aware allocation
+## Dashboard autoscaling
 
-The dispatcher can request **1–20 EVs** for any selected zone using the
-parking-aware workflow. The backend ranks eligible EV–facility pairs with a
-deterministic greedy heuristic (existing 85% energy-aware score + 15% parking
-availability ratio), respects mock parking capacity and charging needs, and
-proposes partial fulfilment when insufficient vehicles/spaces exist.
+The Kubernetes resources include CPU-based autoscaling for the stateless operator
+dashboard. A fresh Docker Desktop cluster also needs Metrics Server:
 
-Batch recommendations do not hold vehicles or parking places. Explicit batch
-approval revalidates capacity and EV eligibility. The Facilities Service
-atomically holds mock parking slots before Fleet vehicle claims; completed
-arrivals mark slots occupied. Child dispatch outcomes are reported individually;
-the existing single-EV path remains available.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 `
+  -SetupMetricsServer -AllowInsecureLocalKubeletTls
+```
 
-**Not production-ready:** PostgreSQL snapshots provide local restart recovery,
-but do not provide per-entity multi-replica locking or cross-service transactions.
-Single replicas remain mandatory until those constraints and race tests exist.
-No rental-driving simulator, real parking reservation, charging provider, or
-live data integration is included.
+The insecure kubelet TLS option is only for local Docker Desktop testing. Never use
+it in production. State-owning services and individual EV simulators remain at one
+replica for correctness.
 
-See [Phase 5C guide](docs/phase5c-bulk-parking.md) for API usage,
-assumptions, test commands and safety limitations.
+## Optional customer-rental workload
 
-## Optional customer rental experiment
-
-The customer simulation is a **separate, finite Kubernetes Job in the same
-`ev-fleet` namespace**, not another cluster or dashboard. It uses six dedicated
-rental-capable simulated EVs, each with one authoritative telemetry owner.
-Existing EV simulators remain unchanged. The Job exercises existing Fleet
-rental APIs and generates movement, battery consumption and returns; returned
-EVs can subsequently be considered for approved relocations.
-
-Run after the base Kubernetes application is healthy:
+The rental workload is disabled by default. Run either the finite Job:
 
 ```powershell
 kubectl apply -f .\k8s\simulations\customer-job.yaml
 kubectl -n ev-fleet logs -f job/customer-rental-simulation
 ```
 
-It is disabled by default and deliberately does not alter Demand or
-automatically dispatch cars. See
-[customer rental simulation](docs/customer-rental-simulation.md) for scenario
-settings, safe reruns, limitations and evaluation guidance.
-
-
-For an **interactive demo where returned customer cars stay online and can be
-relocated**, use the alternative persistent single-replica Deployment instead:
+or the persistent interactive Deployment:
 
 ```powershell
 kubectl apply -f .\k8s\simulations\customer-deployment.yaml
 kubectl -n ev-fleet logs -f deployment/customer-rental-demo
 ```
 
-Do **not** start the finite Job and Deployment together: they use the same
-six vehicle IDs. See the simulation guide for safe stop/restart instructions.
+Do not run both at the same time because they use the same six vehicle IDs. See
+[Customer rental simulation](docs/customer-rental-simulation.md) for safe stop and
+restart instructions.
+
+## Testing and validation
+
+Run the repository's local-first verification command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1
+```
+
+For telemetry, Docker Compose, Kubernetes, database or deployment-sensitive changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -Integration
+```
+
+Integration mode uses disposable local resources through Docker Desktop and `act`.
+It must never be pointed at existing production Kubernetes or PostgreSQL data. If
+Docker or `act` is unavailable, treat integration verification as not verified.
+
+The strategy comparison tools under `experiments/` can generate paired seeded trial
+data, confidence intervals, tables and SVG graphs without changing the application's
+selection policy.
+
+## Safety and limitations
+
+- This is a trusted-local simulation without authentication or authorization.
+- Internal APIs must not be exposed to an untrusted network.
+- PostgreSQL snapshots support local restart recovery but not safe multi-replica
+  transactions across state-owning services.
+- Simulator journey progress is process-local. Deployment is therefore blocked while
+  active rentals, relocations or charging tasks exist.
+- The startup script never deletes PostgreSQL persistent-volume data.
+- Parking allocation is simulated and is not a real reservation.
+- Demand, movement, arrival, rentals and charging are simulated.
+- Optional real observations do not provide real-road autonomy or vehicle control.
+- OpenStreetMap tiles require browser network access; service panels continue to work
+  if map tiles are unavailable.
+
+## Documentation by topic
+
+- [Architecture and service ownership](docs/architecture.md)
+- [API contracts](docs/api-contracts.md)
+- [Dispatch lifecycle](docs/dispatch-relocation.md)
+- [Demand and heat-map calculations](docs/demand-heatmap.md)
+- [Operator dashboard behaviour](docs/operator-dashboard.md)
+- [Parking and charging facilities](docs/parking-charging-facilities.md)
+- [Rental lifecycle](docs/rental-lifecycle.md)
+- [Multi-EV parking-aware allocation](docs/multi-ev-parking-allocation.md)
+- [Evaluation method](docs/strategy-evaluation.md)
+- [Local Kubernetes deployment](docs/kubernetes-local.md)
+- [PostgreSQL persistence and recovery](docs/kubernetes-local.md#postgresql-bootstrap-and-safe-recovery)

@@ -4,7 +4,7 @@ import pytest
 from ev_fleet.demand.app import create_app
 from ev_fleet.demand.settings import DemandSettings
 from ev_fleet.demand.store import DemandStore
-from tests.phase3a_support import DemandCluster
+from tests.demand_heatmap_support import DemandCluster
 
 
 def test_all_zones_response_and_capacity_hotspots_preserve_legacy_api(clock):

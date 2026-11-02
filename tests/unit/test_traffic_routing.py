@@ -12,7 +12,7 @@ from ev_fleet.dispatch.traffic_routes import choose_traffic_route
 from ev_fleet.common.settings import Settings
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.rebalancing.batch import rank_pairs
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 START = {"latitude": 1.30, "longitude": 103.80}
 END = {"latitude": 1.30, "longitude": 103.82}

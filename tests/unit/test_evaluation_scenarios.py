@@ -1,5 +1,5 @@
 import pytest
-from experiments.phase4.scenarios import SCENARIO_NAMES, generate_scenario
+from experiments.strategy_evaluation.scenarios import SCENARIO_NAMES, generate_scenario
 
 
 @pytest.mark.parametrize("name", SCENARIO_NAMES)

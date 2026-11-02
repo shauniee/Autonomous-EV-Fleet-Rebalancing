@@ -1,6 +1,6 @@
-# Phase 5B — Simulated free-floating rental lifecycle
+# Simulated free-floating rental lifecycle
 
-Phase 5B extends Fleet with safe, simulation-only customer rental **start and return
+This capability extends Fleet with safe, simulation-only customer rental **start and return
 events**. Customers can return at any location inside the current simulation
 coordinate envelope; the actual GPS coordinate and battery are obtained from
 fresh, ordered **Fleet telemetry** rather than a guessed end destination.
@@ -72,7 +72,7 @@ The returned EV becomes eligible **only if** the most recent telemetry also
 reports availability and IDLE state and still passes existing policy checks.
 This does not automatically dispatch or reserve a parking space.
 
-## Limitations and next phases
+## Limitations and follow-up work
 
 - No customer authentication, rental payments, reservation system or real
   physical EV integration. Protect simulated rental mutation endpoints from
@@ -81,11 +81,11 @@ This does not automatically dispatch or reserve a parking space.
   loses them. Keep one Fleet process/Pod until shared persistent storage is
   implemented.
 - The existing moving EV simulator does not yet drive a rental journey or
-  automatically complete a rental. This phase exposes validated Fleet APIs
+  automatically complete a rental. This capability exposes validated Fleet APIs
   and read-only dashboard status to support a future rental simulator.
 - No pre-dispatch scheduling, multi-EV batches, parking allocation or charger
   ranking yet. These need durable, exclusive claims and return-time checks.
-- Existing Phase 1–4 selection weights and evaluation output are unchanged.
+- Existing selection weights and strategy-evaluation output are unchanged.
 
 ## Tests
 

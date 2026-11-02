@@ -110,7 +110,7 @@ export interface DispatchList { dispatches: Dispatch[] }
 export interface Claim { origin: Position }
 export interface Approval { request_id: string; recommendation_id: string }
 
-// Phase 5C: simulated facilities become capacity-aware for approved bulk dispatch.
+// Simulated facilities become capacity-aware for approved bulk dispatch.
 export interface Facility {
   facility_id: string; name: string; zone_id: string; position: Position;
   parking_capacity: number | null; parking_available: number;

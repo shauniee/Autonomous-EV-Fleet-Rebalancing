@@ -2,7 +2,7 @@ import httpx
 from ev_fleet.demand.app import create_app
 from ev_fleet.demand.settings import DemandSettings
 from ev_fleet.contracts.demand import DemandUpdate
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 class DemandCluster(Cluster):

@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_concurrent_claims_and_idempotency(clock):

@@ -1,12 +1,12 @@
-# Phase 1 architecture
+# initial service foundation architecture
 
-The current Phase 3A extension is documented in [dynamic demand and heat-map composition](phase3a-demand-heatmap.md).
+The current demand and heat-map extension is documented in [dynamic demand and heat-map composition](demand-heatmap.md).
 It adds an optional simulator and a read-only API composition module inside Demand,
 using a Fleet HTTP snapshot without storing a second source of vehicle truth.
 
-This document records the preserved Phase 1 foundation. The implemented Phase 2
+This document records the preserved initial service foundation foundation. The implemented dispatch and relocation
 extension, including Dispatch Service, cloud-owned claims and moving simulators,
-is described in [Phase 2 dispatch](phase2-dispatch.md). References below to future
+is described in [dispatch and relocation dispatch](dispatch-relocation.md). References below to future
 dispatch describe the original design boundary; that boundary is now implemented.
 
 This project is independently implemented for Singapore point-to-point EV rental
@@ -111,7 +111,7 @@ completed; dependency availability is not folded into readiness, to avoid cascad
 withdrawal. A ready rebalancing process can still return 503/504 when a dependency
 fails. Instance IDs identify a new in-memory epoch. All state is lost on restart.
 
-Phase 2 adds approval and commands. Approval revalidates target and vehicle state,
+dispatch and relocation adds approval and commands. Approval revalidates target and vehicle state,
 then Fleet atomically claims the EV using its expected version. Competing approvals
 cannot both claim it. Cloud-owned claims remain separate from reported availability.
 Stable dispatch/command IDs support idempotency and reconciliation across service

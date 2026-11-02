@@ -15,7 +15,7 @@ from ev_fleet.facilities.datamall import (
     charging_sites, parking_sites, refresh_feed,
 )
 from ev_fleet.facilities.store import FacilitiesStore
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 from ev_fleet.contracts.dispatch import BatchApproval
 from tests.unit.test_persistence import MemoryRepository
 

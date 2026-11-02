@@ -4,7 +4,7 @@ import time
 import pytest
 from ev_fleet.common.clock import Clock
 from ev_fleet.simulator.commands import MovingNode
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def test_movement_continues_through_network_outage_then_reports_arrival():

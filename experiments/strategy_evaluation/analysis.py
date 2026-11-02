@@ -216,7 +216,7 @@ def analyze(raw_path, output_dir, bootstrap_samples=2000, analysis_seed=4242):
         conclusion = "Energy-aware selection produced more operationally poor outcomes in this simulation; the paired 95% confidence interval excluded zero."
     else:
         conclusion = "This simulation did not establish a measurable difference in operationally poor outcomes; the paired 95% confidence interval included zero."
-    report = ["# Phase 4 evaluation report", "", conclusion, "",
+    report = ["# EV-selection strategy evaluation report", "", conclusion, "",
               "The primary paired effect is energy-aware minus nearest EV. Negative values favour energy-aware selection for poor-outcome rate, distance, and time.", "",
               "## Equal-scenario descriptive means", "",
               "| Metric | Energy-aware | Nearest EV |", "|---|---:|---:|"]

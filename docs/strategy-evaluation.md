@@ -1,6 +1,6 @@
-# Phase 4: Experimental Evaluation and Baseline Comparison
+# EV-selection strategy evaluation and baseline comparison
 
-Phase 4 compares the existing energy-aware EV selector with a nearest-eligible-EV baseline. It adds research infrastructure, not a new product mode. The running Rebalancing Service still defaults to `ev-aware-v1`; Dispatch, Fleet, Demand and dashboard contracts are unchanged.
+This evaluation compares the existing energy-aware EV selector with a nearest-eligible-EV baseline. It adds research infrastructure, not a new product mode. The running Rebalancing Service still defaults to `ev-aware-v1`; Dispatch, Fleet, Demand and dashboard contracts are unchanged.
 
 ## Research question
 
@@ -29,19 +29,19 @@ Multiple-hotspot targets remain operator-defined. Neither selection algorithm ch
 From the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_phase4_evaluation.py --repetitions 30
+.\.venv\Scripts\python.exe scripts\run_strategy_evaluation.py --repetitions 30
 ```
 
-Use `--output results\phase4-evaluation\my-run` for a fixed output path. The runner refuses to overwrite an existing directory. A smaller non-evidentiary check can select scenarios and repetitions:
+Use `--output results\strategy-evaluation\my-run` for a fixed output path. The runner refuses to overwrite an existing directory. A smaller non-evidentiary check can select scenarios and repetitions:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_phase4_evaluation.py --repetitions 1 --scenarios balanced_fleet nearest_low_soc --output results\phase4-evaluation\smoke
+.\.venv\Scripts\python.exe scripts\run_strategy_evaluation.py --repetitions 1 --scenarios balanced_fleet nearest_low_soc --output results\strategy-evaluation\smoke
 ```
 
 Regenerate analysis without executing trials:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\analyze_phase4_results.py results\phase4-evaluation\<run-id>
+.\.venv\Scripts\python.exe scripts\analyze_strategy_results.py results\strategy-evaluation\<run-id>
 ```
 
 ## Outputs
@@ -64,4 +64,4 @@ Continuous metrics use descriptive summaries and deterministic percentile-bootst
 
 ## Limitations
 
-Locations, demand, charging availability and outages are synthetic. Distance uses approximate Singapore coordinates and a route factor rather than roads or traffic. Prediction and movement use related energy assumptions, so arrival-SOC error understates real-world uncertainty. Services run in memory and latency excludes deployed network/container behavior. The fleet is small, the six zones are coarse, and Phase 4 evaluates fixed policy weights rather than optimizing them.
+Locations, demand, charging availability and outages are synthetic. Distance uses approximate Singapore coordinates and a route factor rather than roads or traffic. Prediction and movement use related energy assumptions, so arrival-SOC error understates real-world uncertainty. Services run in memory and latency excludes deployed network/container behavior. The fleet is small, the six zones are coarse, and strategy evaluation evaluates fixed policy weights rather than optimizing them.

@@ -1,4 +1,4 @@
-# Phase 3A: dynamic demand and heat-map backend
+# Dynamic demand and heat-map backend
 
 The existing Demand Service now composes a read-only view of demand and Fleet
 capacity for the six Singapore simulation zones. There is no frontend, map API,
@@ -46,7 +46,7 @@ future-dated observation after a clock correction.
 
 Configuration is read on startup. There is no unauthenticated runtime control API;
 GET `/demand-simulation` reports settings and state. Disabled simulation leaves manual
-values untouched. A service restart still loses all in-memory state, as in Phase 2.
+values untouched. A service restart still loses all in-memory state, as in dispatch and relocation.
 
 ## Capacity and zone assignment
 
@@ -210,8 +210,8 @@ rerouting is introduced.
 The original 63 tests remain unchanged. New tests cover formulas, boundaries,
 classification, deterministic ticks, concurrency, dependency failure, simulation
 lifecycle and real HTTP demand updates during a moving EV journey. See
-[verification evidence](phase3a-verification.md) for actual outcomes and runtime limits.
+[verification evidence](demand-heatmap-verification.md) for actual outcomes and runtime limits.
 
-This phase remains in-memory, single-worker per state owner, simulation-only and
+This capability remains in-memory, single-worker per state owner, simulation-only and
 without frontend/ML/external map APIs. A later dashboard should consume `/heat-map`,
 not reinterpret the legacy raw-demand `/hotspots` as shortage severity.

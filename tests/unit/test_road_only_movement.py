@@ -15,7 +15,7 @@ from ev_fleet.dispatch.routing import RoutingSettings, driving_route, road_match
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.facilities.store import FacilitiesStore
 from ev_fleet.simulator.movement import Movement
-from tests.phase2_support import Cluster
+from tests.dispatch_support import Cluster
 
 
 def road_route(*points):

@@ -1,4 +1,4 @@
-# Phase 4 evaluation report
+# strategy evaluation evaluation report
 
 Energy-aware selection measurably reduced operationally poor outcomes in this simulation; the paired 95% confidence interval excluded zero.
 

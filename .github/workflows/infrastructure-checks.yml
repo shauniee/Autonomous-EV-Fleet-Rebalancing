@@ -1,4 +1,4 @@
-name: Phase 5C checks
+name: Infrastructure checks
 
 on:
   workflow_dispatch:

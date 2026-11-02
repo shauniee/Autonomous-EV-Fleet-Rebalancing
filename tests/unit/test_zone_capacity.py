@@ -5,7 +5,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.vehicles import VehicleState
 from ev_fleet.demand.aggregation import assigned_zone
 from ev_fleet.common.travel import distance_km
-from tests.phase3a_support import DemandCluster
+from tests.demand_heatmap_support import DemandCluster
 
 
 def zones(view):
