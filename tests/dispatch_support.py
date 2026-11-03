@@ -1,5 +1,7 @@
 """In-process HTTP cluster with injectable response loss, using the real service apps."""
 from contextlib import AsyncExitStack
+from unittest.mock import patch
+from tests.routing_fixture import fixture_driving_route
 from uuid import uuid4
 import httpx
 from ev_fleet.common.settings import Settings, DispatchSettings
@@ -31,6 +33,10 @@ class Cluster:
 
     async def __aenter__(self):
         await seed(self.demand)
+        # Legacy lifecycle tests used SIMULATED routes, but production now
+        # strictly requires ONEMAP. Supply an explicit, test-only road route.
+        self.stack.enter_context(patch(
+            "ev_fleet.dispatch.service.driving_route", new=fixture_driving_route))
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(self.route))
         await self.stack.enter_async_context(self.client)
         self.apps = {"fleet.test": fleet_app(self.fleet), "demand.test": demand_app(self.demand),
