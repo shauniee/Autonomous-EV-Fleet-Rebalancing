@@ -70,6 +70,7 @@ services:
     depends_on:
       fleet: {condition: service_healthy}
       demand: {condition: service_healthy}
+      redis: {condition: service_started}
   ev-01:
     build: .
     init: true
