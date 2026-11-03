@@ -75,10 +75,18 @@ def _load(run_id: str) -> dict:
 
 
 def _summary(run: dict) -> dict:
-    return {k: run.get(k) for k in
-            ("id", "preset", "simulated_evs", "telemetry_hz", "requests_per_second",
-             "duration_seconds", "started_at", "finished_at", "state",
-             "attempted", "success", "errors")}
+    result = {k: run.get(k) for k in
+              ("id", "preset", "simulated_evs", "telemetry_hz", "requests_per_second",
+               "duration_seconds", "started_at", "finished_at", "state",
+               "attempted", "success", "errors")}
+    samples = run.get("samples", [])
+    cpus = [s["hpa"]["current_cpu_pct"] for s in samples
+            if isinstance(s.get("hpa"), dict) and s["hpa"].get("current_cpu_pct") is not None]
+    replicas = [s["hpa"]["current_replicas"] for s in samples
+                if isinstance(s.get("hpa"), dict) and s["hpa"].get("current_replicas") is not None]
+    result["peak_hpa_cpu_pct"] = max(cpus, default=None)
+    result["peak_replicas"] = max(replicas, default=None)
+    return result
 
 
 def _percentile(values: list[float], proportion: float) -> float | None:
@@ -162,6 +170,8 @@ async def _infrastructure():
         try:
             containers = [c for item in results[2].get("items", [])
                           for c in item.get("containers", [])]
+            if not containers:
+                raise ValueError("No measured dashboard containers")
             usage = {"cpu_millicores": round(sum(_millicores(c["usage"]["cpu"])
                                                  for c in containers), 2),
                      "memory_mib": round(sum(_memory_mib(c["usage"]["memory"])
@@ -235,7 +245,9 @@ async def _drive(run: dict):
 def _run_snapshot(run: dict | None):
     if not run:
         return None
-    elapsed = max(0.001, (datetime.now(timezone.utc) -
+    end = (datetime.fromisoformat(run["finished_at"]) if run["finished_at"]
+           else datetime.now(timezone.utc))
+    elapsed = max(0.001, (end -
                           datetime.fromisoformat(run["started_at"])).total_seconds())
     return {**_summary(run), "rps_observed": round(run["attempted"] / elapsed, 2),
             "p95_latency_ms": _percentile(run["latencies_ms"], 0.95),
