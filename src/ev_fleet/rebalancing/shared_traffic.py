@@ -69,7 +69,7 @@ def _decode_rows(blob, digest):
     if hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("TRAFFIC_CACHE_HASH_MISMATCH")
     rows = json.loads(raw)
-    if not isinstance(rows, list) or len(rows) > 10000 or any(
+    if not isinstance(rows, list) or len(rows) > 30000 or any(
             not isinstance(row, dict) for row in rows):
         raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
     return rows
