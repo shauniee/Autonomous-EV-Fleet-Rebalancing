@@ -328,7 +328,7 @@ if ($ConnectOnly) {
         # ConfigMap/Secret environment values are read only when a container
         # starts. Restart every consumer after the validated settings exist.
         foreach ($workload in @(
-            "deployment/facilities", "deployment/rebalancing", "deployment/dispatch",
+            "deployment/facilities", "deployment/traffic-collector", "deployment/rebalancing", "deployment/dispatch",
             "deployment/simulation-console", "deployment/ev-moving-01",
             "deployment/ev-moving-02", "statefulset/ev-moving-extra"
         )) {
