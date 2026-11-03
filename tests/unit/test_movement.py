@@ -2,12 +2,16 @@ from uuid import uuid4
 import pytest
 from ev_fleet.contracts.common import utcnow
 from ev_fleet.simulator.movement import Movement
+from tests.routing_fixture import fixture_route
 
 
-def command():
+def command(origin=None):
+    origin = origin or {"latitude": 1.35, "longitude": 103.8513}
+    target = {"latitude": 1.283, "longitude": 103.8513}
     return {"command_id": str(uuid4()), "dispatch_id": str(uuid4()), "vehicle_id": "ev-1",
             "fleet_instance_id": str(uuid4()), "target_zone_id": "cbd",
-            "target_position": {"latitude": 1.283, "longitude": 103.8513},
+            "target_position": target,
+            "route": fixture_route(origin, target).model_dump(mode="json"),
             "issued_at": utcnow().isoformat(), "min_reserve_pct": 20,
             "route_factor": 1.3, "energy_margin_factor": 1.15}
 
@@ -54,6 +58,9 @@ def test_insufficient_local_soc_and_active_command_conflict():
 def test_zero_distance_arrival_and_battery_failure():
     cmd = command()
     moving = Movement(cmd["target_position"], 80)
+    # Zero-distance journeys must still have route geometry whose origin
+    # matches the physical EV position, not an off-road connector.
+    cmd["route"] = fixture_route(cmd["target_position"], cmd["target_position"]).model_dump(mode="json")
     moving.accept(cmd)
     moving.start()
     moving.advance(1, 30)

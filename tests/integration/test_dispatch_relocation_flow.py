@@ -33,7 +33,10 @@ def relocation_cluster(tmp_path):
         return process
     try:
         for service, port in zip(("fleet", "demand", "rebalancing", "dispatch"), ports):
-            start(service, ["-m", "uvicorn", f"ev_fleet.{service}.app:app", "--host", "127.0.0.1", "--port", str(port)])
+            # Real multi-process HTTP and Fleet/Dispatch state machines;
+            # only OneMap's external routing API is fixture-backed offline.
+            module = "tests.stubbed_dispatch_app:app" if service == "dispatch" else f"ev_fleet.{service}.app:app"
+            start(service, ["-m", "uvicorn", module, "--host", "127.0.0.1", "--port", str(port)])
         with httpx.Client(timeout=2, trust_env=False) as client:
             deadline = time.monotonic() + 20
             for url in urls:
