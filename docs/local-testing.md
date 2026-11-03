@@ -59,3 +59,33 @@ python -m pytest tests/unit/test_movement.py tests/unit/test_dispatch_lifecycle.
 python -m pytest tests/integration/test_dispatch_relocation_flow.py tests/integration/test_strategy_evaluation.py -q -x
 powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1
 ```
+
+
+## Vitest worker startup timeout on Windows
+
+The dashboard unit tests use Vitest with `jsdom`. On some machines,
+especially when Docker Desktop/Kubernetes is using significant CPU,
+the default parallel `forks` pool can fail **before any test executes**:
+
+```text
+[vitest-pool-runner]: Timeout waiting for worker to respond
+Test Files  no tests
+```
+
+The dashboard Vitest configuration now uses one isolated `threads`
+worker and runs test files sequentially (`fileParallelism: false`).
+This changes **only how tests are scheduled**, not production code or
+assertions. Vitest still gives each file its own isolated environment.
+
+Verify the dashboard separately first:
+
+```powershell
+npm.cmd --prefix dashboard test -- --run
+npm.cmd --prefix dashboard run build
+```
+
+If worker startup still times out, retry while the local Kubernetes/EV
+simulation is idle, and record `node --version` and whether running
+one test file succeeds. Increasing `testTimeout` does not fix a
+**worker-start** timeout; do not silently suppress the errors. Once the
+dashboard tests pass, run the full `scripts/test-local.ps1` workflow.
