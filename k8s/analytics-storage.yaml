@@ -1,0 +1,11 @@
+# Local-only durable experiment storage; not exposed by any Kubernetes Service.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: simulation-analytics-data
+  namespace: ev-fleet
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 256Mi

@@ -116,3 +116,59 @@ def test_expired_synthetic_conditions_revert_to_explicit_disabled(monkeypatch):
     clock.value += timedelta(minutes=2)
     assert store.merged_snapshot(disabled_feed())["mode"] == "DISABLED"
     assert store.list()["scenarios"] == []
+
+
+def test_simulator_feed_is_small_and_never_embeds_live_lta_rows(monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "true")
+    clock = Clock()
+    store = TrafficScenarios(clock)
+    event = store.create(request("ROAD_CLOSED"), route())["scenarios"][0]
+    simulated = store.simulation_snapshot()
+    assert simulated["source"] == "SIMULATION"
+    assert simulated["status"] == "FRESH"
+    assert simulated["simulated_events"] == [event]
+    assert "live_observations" not in simulated
+    assert "speeds" not in simulated
+    assert "incidents" not in simulated
+
+    live = live_feed()
+    live["speeds"] *= 1000  # A large observed feed stays on dashboard APIs.
+    combined = store.merged_snapshot(live)
+    assert len(combined["live_observations"]["speeds"]) == 1000
+    assert store.simulation_snapshot()["simulated_events"] == [event]
+
+    clock.value += timedelta(minutes=31)
+    after_expiry = store.simulation_snapshot()
+    assert after_expiry["source"] == "DISABLED"
+    assert after_expiry["status"] == "DISABLED"
+    assert after_expiry["simulated_events"] == []
+
+
+def test_moving_simulator_fetches_only_simulation_events(monkeypatch):
+    import asyncio
+    from ev_fleet.simulator.commands import MovingNode
+
+    monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "true")
+    node = MovingNode("http://fleet", "http://dispatch", "ev-demo", A, 80,
+                      road_match_initial=False)
+    called = []
+    event = {"id": "event-1", "kind": "ROAD_CLOSED"}
+    result = {"source": "SIMULATION", "status": "FRESH",
+              "simulated_events": [event]}
+
+    async def fake_request(method, url, body=None):
+        called.append((method, url))
+        return result
+
+    monkeypatch.setattr(node, "request", fake_request)
+    asyncio.run(node.refresh_traffic())
+    assert called == [
+        ("GET", node.rebalancing_url + "/api/v1/traffic/simulation-events")]
+    assert node.traffic_snapshot == result
+
+    async def no_events(method, url, body=None):
+        return {"source": "DISABLED", "status": "DISABLED",
+                "simulated_events": []}
+    monkeypatch.setattr(node, "request", no_events)
+    asyncio.run(node.refresh_traffic())
+    assert node.traffic_snapshot is None

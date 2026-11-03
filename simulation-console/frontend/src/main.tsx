@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { DemandForm } from './DemandForm';
 import { TrafficScenariosPanel } from './TrafficScenariosPanel';
 import { RentalPanel } from './RentalPanel';
+import { AnalyticsPanel } from './AnalyticsPanel';
 import type { RentalVehicle } from './RentalPanel';
 import type { Zone } from './DemandForm';
 import { applyTheme, initialTheme, type Theme } from './theme';
@@ -157,6 +158,7 @@ function App() {
       />
       <TrafficScenariosPanel dispatches={observations?.dispatches.data ?? []}
         available={!error && !!observations?.dispatches.data && !observations.dispatches.error}/>
+      <AnalyticsPanel />
       <RentalPanel vehicles={observations?.fleet.data ?? []} zones={observations?.zones.data ?? []}
         available={!error && !!observations?.fleet.data && !observations.fleet.error && !!observations?.zones.data && !observations.zones.error} />
       <section>

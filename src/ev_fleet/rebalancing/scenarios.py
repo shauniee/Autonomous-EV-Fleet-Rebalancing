@@ -107,6 +107,22 @@ class TrafficScenarios:
         self.version += 1
         return self.list()
 
+    def simulation_snapshot(self):
+        """Small read-only feed for EV simulators: never include live LTA rows.
+
+        The operator dashboard still uses merged_snapshot for independently
+        labelled live and simulated conditions. Simulators only need the
+        synthetic events that can cap movement on an approved road segment.
+        """
+        events = self._active()
+        return {
+            "source": "SIMULATION" if events else "DISABLED",
+            "status": "FRESH" if events else "DISABLED",
+            "generated_at": self.clock.now().isoformat(),
+            "scenario_version": self.version,
+            "simulated_events": events,
+        }
+
     def merged_snapshot(self, live):
         rows = self._active()
         if not rows:

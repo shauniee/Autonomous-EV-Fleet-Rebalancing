@@ -248,6 +248,18 @@ Available optional integrations include:
 
 The default system remains fully simulated when these integrations are disabled.
 
+## Simulation analytics and HPA observability
+
+The [Simulation Analytics guide](docs/simulation-analytics.md) describes a
+local-only Performance Analytics panel at <http://127.0.0.1:8090> with bounded
+Normal / High / Extreme HTTP load presets, read-only Dashboard HPA CPU and Pod
+metrics, observed scaling-event charts, and persistent experiment CSV exports.
+
+Presets describe **synthetic dashboard HTTP demand**, not real telemetry
+injections or active EV counts. This feature never modifies vehicle state or
+the dispatch workflow. Kubernetes Metrics Server must be healthy for resource
+measurements, and HPA scale-out depends on actual CPU utilisation.
+
 ## Dashboard autoscaling
 
 The Kubernetes resources include CPU-based autoscaling for the stateless operator

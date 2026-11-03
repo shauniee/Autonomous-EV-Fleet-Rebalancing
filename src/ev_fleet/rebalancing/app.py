@@ -144,6 +144,12 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         allowed_control(x_traffic_simulation_key)
         return app.state.traffic_scenarios.clear(expected_version)
 
+    @app.get("/api/v1/traffic/simulation-events")
+    async def simulation_events():
+        # The 20 moving EV simulators poll frequently and never need the
+        # large cached LTA speed-band dataset used by the operator dashboard.
+        return app.state.traffic_scenarios.simulation_snapshot()
+
     @app.get("/api/v1/traffic/conditions")
     async def traffic_conditions():
         # Each feed caches independently. Missing data is explicitly UNKNOWN.

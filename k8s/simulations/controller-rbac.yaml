@@ -33,3 +33,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: customer-rental-controller
+
+---
+# Analytics is read-only. No rights to scale applications or modify fleet operations.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simulation-console-observer
+  namespace: ev-fleet
+rules:
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    resourceNames: ["dashboard"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simulation-console-observability
+  namespace: ev-fleet
+subjects:
+  - kind: ServiceAccount
+    name: simulation-console-controller
+    namespace: ev-fleet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simulation-console-observer

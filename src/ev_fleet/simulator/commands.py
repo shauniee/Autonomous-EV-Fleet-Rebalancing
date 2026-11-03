@@ -177,7 +177,9 @@ class MovingNode:
             "distance_travelled_km": self.movement.distance, "reason": self.movement.reason})
 
     async def refresh_traffic(self):
-        latest = await self.request("GET", self.rebalancing_url + "/api/v1/traffic/conditions")
+        # Do not download full LTA traffic observations every two seconds:
+        # movement only consumes approved, synthetic segment disruptions.
+        latest = await self.request("GET", self.rebalancing_url + "/api/v1/traffic/simulation-events")
         if latest.get("source") == "SIMULATION" and latest.get("status") == "FRESH":
             self.traffic_snapshot = latest
         else:
