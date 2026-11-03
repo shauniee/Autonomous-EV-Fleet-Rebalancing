@@ -12,11 +12,11 @@ import httpx
 
 BASE = "https://datamall2.mytransport.sg/ltaodataservice"
 FEEDS = {
-    "speeds": ("v3/TrafficSpeedBands", 300, 900),
+    "speeds": ("v4/TrafficSpeedBands", 300, 900),
     "incidents": ("TrafficIncidents", 90, 300),
     "roadworks": ("RoadWorks", 86400, 172800),
 }
-MAX_PAGES = 20
+MAX_PAGES = 60  # bounded up to 30,000 rows for the larger v4 feed
 PAGE_SIZE = 500
 
 
@@ -90,6 +90,10 @@ class TrafficMonitor:
                     raise TrafficDataError("AUTH_FAILED")
                 if response.status_code == 429:
                     raise TrafficDataError("RATE_LIMITED")
+                if response.status_code == 404:
+                    raise TrafficDataError("ENDPOINT_NOT_FOUND")
+                if response.status_code >= 500:
+                    raise TrafficDataError("UPSTREAM_UNAVAILABLE")
                 response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
