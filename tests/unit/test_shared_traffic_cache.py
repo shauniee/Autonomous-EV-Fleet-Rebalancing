@@ -102,7 +102,7 @@ def test_shared_cache_versions_and_freshness_without_extra_blob_reads():
         # An upstream failure retains the last successful timestamp. It cannot
         # make data newer than it is, and must show the original failure code.
         await writer.error("speeds", "FETCH_FAILED")
-        clock[0] += timedelta(minutes=10)
+        clock[0] += timedelta(minutes=16)
         await reader.refresh()
         expired = reader.cached_snapshot()
         assert expired["status"] == "PARTIAL"
