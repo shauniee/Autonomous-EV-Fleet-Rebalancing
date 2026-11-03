@@ -302,7 +302,12 @@ async def status():
                   "attempted": run["attempted"], "success": run["success"],
                   "errors": run["errors"],
                   "p95_latency_ms": _percentile(run["latencies_ms"], 0.95)}
-        if not run["samples"] or run["samples"][-1]["timestamp"] != sample["timestamp"]:
+        # A completed experiment gets at most one final sample, not infinite idle points.
+        last = run["samples"][-1] if run["samples"] else None
+        needs_final = (run["finished_at"] is not None and
+                       (last is None or last["timestamp"] < run["finished_at"]))
+        if (run["state"] == "RUNNING" or needs_final) and (
+                last is None or last["timestamp"] != sample["timestamp"]):
             run["samples"].append(sample)
             run["samples"] = run["samples"][-100:]
             _save(run)
