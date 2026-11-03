@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from ev_fleet.common.logging import base_app
 from ev_fleet.common.dashboard_cache import DashboardCache
 from fastapi import Response, Query
@@ -16,6 +17,17 @@ def create_app(store=None, cache=None):
     app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('fleet', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
+
+    @asynccontextmanager
+    async def lifespan(app):
+        await state.start()
+        try:
+            yield
+        finally:
+            await display_cache.aclose()
+            await state.close()
+
+    app.router.lifespan_context = lifespan
 
     @app.post("/api/v1/vehicles", status_code=201, response_model=VehicleState)
     async def register(body: VehicleRegistration):
@@ -83,15 +95,6 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/claims/{dispatch_id}/release", response_model=VehicleClaim)
     async def release(vehicle_id: str, dispatch_id: UUID, body: ClaimRelease):
         return await state.release(vehicle_id, dispatch_id, body)
-
-    @app.on_event("shutdown")
-    async def stop_display_cache():
-        await display_cache.aclose()
-        await state.close()
-
-    @app.on_event("startup")
-    async def restore_state():
-        await state.start()
 
     return app
 

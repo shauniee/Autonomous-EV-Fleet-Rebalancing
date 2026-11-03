@@ -18,10 +18,10 @@ Open http://127.0.0.1:5173. Vite proxies `/api/fleet`, `/api/demand`, `/api/reba
 
 ```powershell
 $env:DEMAND_SIMULATION_ENABLED = 'true'
-docker compose --profile relocation up --build fleet demand rebalancing dispatch ev-moving-01 ev-moving-02 dashboard
+docker compose --profile relocation up --build dashboard ev-moving-01 ev-moving-02
 ```
 
-Open http://127.0.0.1:8080 (`DASHBOARD_PORT` changes the host port). Explicit service names avoid starting the stationary initial service foundation EVs, which do not consume dispatch commands. Do not run stationary and moving processes with the same vehicle ID. Existing default Compose behaviour is retained; dashboard is in the `relocation` profile.
+Open http://127.0.0.1:8080 (`DASHBOARD_PORT` changes the host port). The dashboard's Compose dependencies start Fleet, Demand, Rebalancing, Dispatch and Facilities; Rebalancing starts Redis and the traffic collector. The collector fetches enabled LTA feeds without exposing the account key to the browser. The explicit moving-EV service names avoid starting the stationary initial service foundation EVs, which do not consume dispatch commands. Do not run stationary and moving processes with the same vehicle ID. Existing default Compose behaviour is retained; dashboard is in the `relocation` profile.
 
 The opt-in environment variable enables demand and heat-map demand simulation. Without simulation or manual demand updates, unknown demand is correctly shown as Unknown. New simulator observations follow the configured interval (default 30 seconds).
 

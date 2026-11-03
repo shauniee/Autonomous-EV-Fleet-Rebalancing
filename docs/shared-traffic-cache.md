@@ -41,8 +41,8 @@ an actual successful LTA fetch; merely reading Redis cannot renew freshness.
 
 Speed Bands are *observed changing traffic speeds*, not legal speed limits.
 The v4 feed is paginated at up to 500 records per request. This collector
-retains a bounded pagination limit (60 pages / up to 30,000 records) and a
-12 MiB maximum normalised payload. If the provider exceeds those boundaries,
+retains a bounded pagination limit (400 pages / up to 200,000 records) and a
+40 MiB maximum normalised payload. If the provider exceeds those boundaries,
 the feed fails explicitly instead of silently accepting an incomplete
 dataset. The collector's logs identify safe error codes
 (`ENDPOINT_NOT_FOUND`, `AUTH_FAILED`, `RATE_LIMITED`,
@@ -79,7 +79,10 @@ the LTA AccountKey** in the Kubernetes manifests. A valid key is needed only
 when `TRAFFIC_SOURCE=LTA_DATAMALL`.
 
 The local Compose stack now includes a Redis and traffic-collector service.
-It also selects `TRAFFIC_CACHE_BACKEND=REDIS` for Rebalancing.
+It also selects `TRAFFIC_CACHE_BACKEND=REDIS` for Rebalancing. Rebalancing
+depends on the collector, and the dashboard depends on the backend services,
+so starting the Compose dashboard automatically starts the traffic data path.
+The browser never receives the LTA AccountKey or calls DataMall directly.
 
 **Important:** This PR modifies several Kubernetes deployments. Only
 redeploy after finishing and reconciling active rentals, relocations and

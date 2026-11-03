@@ -44,13 +44,16 @@ export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapsh
         commands are not silently changed. A closure requires a safe alternative route before new approval;
         missing alternatives are rejected.</p>
     </>}
-    {!simulated && !live && <p className="muted">
+    {!error && !simulated && !live && <p className="muted">
       Live LTA traffic ranking is disabled. Use the local Simulation Console for synthetic route disruptions
       (requires enabled operator control), or configure LTA DataMall for observed traffic.
       No conditions are assumed clear when data is unavailable.</p>}
     {live && <>
       <p className="muted">LTA DataMall observed traffic · snapshot {time(live.generated_at)}.
         Available speeds and incidents are observations, not guaranteed road closures.</p>
+      {live.speed_display_count != null && <p className="muted">
+        Map displays {live.speed_display_count} spatially sampled speed links from {live.feeds.speeds?.count ?? 0} validated observations;
+        route assessment uses the complete cached dataset.</p>}
       <div className="table-scroll"><table><thead><tr><th>Feed</th><th>Status</th><th>Observations</th><th>Last received</th></tr></thead>
         <tbody>{Object.entries(live.feeds).map(([name, feed]) =>
           <tr key={name}><td>{name}</td><td>{feed.status}</td><td>{feed.count}</td><td>{time(feed.observed_at)}</td></tr>)}</tbody>

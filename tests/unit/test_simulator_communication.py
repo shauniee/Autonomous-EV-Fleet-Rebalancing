@@ -10,8 +10,6 @@ from tests.dispatch_support import Cluster
 def test_movement_continues_through_network_outage_then_reports_arrival():
     async def scenario():
         async with Cluster(Clock()) as cluster:
-            cluster.config.stale_seconds = .2
-            cluster.config.offline_seconds = .3
             node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-1",
                 {"latitude": 1.35, "longitude": 103.8513}, 80,
                 telemetry_interval=.03, poll_interval=.03, tick_seconds=.01,
@@ -20,6 +18,8 @@ def test_movement_continues_through_network_outage_then_reports_arrival():
             # is covered separately and must not make this outage test timing-dependent.
             await node.send_telemetry()
             dispatch, _ = await cluster.approve()
+            cluster.config.stale_seconds = .2
+            cluster.config.offline_seconds = .3
             task = asyncio.create_task(node.run())
             try:
                 await asyncio.wait_for(node.ready.wait(), 2)

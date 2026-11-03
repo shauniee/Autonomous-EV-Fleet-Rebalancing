@@ -113,8 +113,10 @@ sections 1, 2.12, 2.28 and 2.29. API base:
   receives neutral parking utility rather than a fabricated occupancy ratio.
 - Reported availability stays separate from local simulated holds. Holds survive
   refreshes and subtract from available simulation slots, clamped at zero.
-  PostgreSQL snapshots preserve observations and holds under the existing
-  single-replica constraint; no database migration is required.
+  PostgreSQL snapshots preserve holds under the existing single-replica
+  constraint. Live observations are refreshed from DataMall after a restart
+  instead of being stored as a large durable snapshot; no database migration is
+  required.
 - Fetch timestamps are local retrieval times. Failed refreshes retain the original
   expiry. Expired locations show `UNKNOWN` and cannot receive new allocations.
   The dashboard reports each feed's freshness/errors; live mode never silently

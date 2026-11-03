@@ -174,8 +174,9 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       # These simulators are independent. Update a bounded batch at a time
-      # instead of waiting for every EV Pod sequentially.
-      maxUnavailable: 10%
+      # instead of waiting for every EV Pod sequentially. Five at a time keeps
+      # Fleet load bounded while reducing an 18-wave rollout to about 4 waves.
+      maxUnavailable: 25%
   selector:
     matchLabels:
       app.kubernetes.io/name: ev-moving-extra
@@ -233,9 +234,9 @@ spec:
           livenessProbe:
             exec:
               command: ["sh", "-c", "kill -0 1"]
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 8
           readinessProbe:
             exec:
               command:

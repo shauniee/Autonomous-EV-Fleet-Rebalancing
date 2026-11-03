@@ -179,6 +179,17 @@ spec:
             - secretRef:
                 name: ev-fleet-traffic-control
                 optional: true
+          # Keep this explicit so an old imperative `kubectl set env` value
+          # cannot remain on the Deployment and override the ConfigMap.
+          env:
+            - name: TRAFFIC_SOURCE
+              # Explicit null clears a legacy literal value during strategic
+              # merge before valueFrom is validated by the API server.
+              value: null
+              valueFrom:
+                configMapKeyRef:
+                  name: ev-fleet-config
+                  key: TRAFFIC_SOURCE
           ports:
             - name: http
               containerPort: 8000
@@ -210,10 +221,10 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 96Mi
+              memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -254,6 +265,15 @@ spec:
             - secretRef:
                 name: ev-fleet-routing
                 optional: true
+          # Dispatch and Rebalancing must observe the same provider selection.
+          env:
+            - name: TRAFFIC_SOURCE
+              # See Rebalancing: remove any legacy literal override on apply.
+              value: null
+              valueFrom:
+                configMapKeyRef:
+                  name: ev-fleet-config
+                  key: TRAFFIC_SOURCE
           ports:
             - name: http
               containerPort: 8000
@@ -341,22 +361,24 @@ spec:
               path: /health/live
               port: http
             periodSeconds: 2
-            timeoutSeconds: 1
-            failureThreshold: 30
+            timeoutSeconds: 5
+            # Allow one legacy live-catalogue snapshot to load and compact.
+            # Subsequent starts use the small durable-only snapshot.
+            failureThreshold: 120
           readinessProbe:
             httpGet:
               path: /health/ready
               port: http
             periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /health/live
               port: http
             periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
               cpu: 50m

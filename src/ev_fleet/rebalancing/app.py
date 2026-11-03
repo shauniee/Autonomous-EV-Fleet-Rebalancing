@@ -15,7 +15,7 @@ from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
 from .charging_advice import build_charging_advice
-from .traffic import TrafficMonitor, assess_traffic, rank_cost
+from .traffic import TrafficMonitor, assess_traffic, dashboard_traffic_snapshot, rank_cost
 from .shared_traffic import RedisTrafficReader, redis_client
 from .scenarios import TrafficScenarios, TrafficScenarioInput, allowed_control
 from ev_fleet.contracts.dispatch import Dispatch
@@ -171,7 +171,9 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     @app.get("/api/v1/traffic/conditions")
     async def traffic_conditions():
         # Each feed caches independently. Missing data is explicitly UNKNOWN.
-        return app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
+        merged = app.state.traffic_scenarios.merged_snapshot(
+            app.state.traffic_monitor.cached_snapshot())
+        return dashboard_traffic_snapshot(merged)
 
     @app.get("/api/v1/charging-advice")
     async def charging_advice():

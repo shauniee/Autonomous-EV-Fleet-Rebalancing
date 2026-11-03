@@ -22,28 +22,31 @@ def services(tmp_path):
         for sock in sockets:
             sock.close()
     processes, logs = [], []
-    env = dict(os.environ, STALE_SECONDS="1", OFFLINE_SECONDS="2", RECOMMENDATION_TTL_SECONDS="1",
+    env = dict(os.environ, DATABASE_URL="", STALE_SECONDS="1", OFFLINE_SECONDS="2", RECOMMENDATION_TTL_SECONDS="1",
                FLEET_URL=f"http://127.0.0.1:{ports[0]}", DEMAND_URL=f"http://127.0.0.1:{ports[1]}")
     try:
-        for service, port in zip(("fleet", "demand", "rebalancing"), ports):
-            log = open(tmp_path / f"{service}.log", "w")
-            logs.append(log)
-            processes.append(subprocess.Popen([sys.executable, "-m", "uvicorn",
-                f"ev_fleet.{service}.app:app", "--host", "127.0.0.1", "--port", str(port), "--workers", "1"],
-                env=env, stdout=log, stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         urls = [f"http://127.0.0.1:{port}" for port in ports]
-        with httpx.Client(timeout=1, trust_env=False) as client:
-            deadline = time.monotonic() + 15
-            for url in urls:
+        # Real Python processes can briefly be CPU-starved while Docker Desktop
+        # and the complete suite share the Windows host. Overall test deadlines
+        # still detect services that stop making progress.
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            for service, port, url in zip(("fleet", "demand", "rebalancing"), ports, urls):
+                log = open(tmp_path / f"{service}.log", "w")
+                logs.append(log)
+                process = subprocess.Popen([sys.executable, "-m", "uvicorn",
+                    f"ev_fleet.{service}.app:app", "--host", "127.0.0.1", "--port", str(port),
+                    "--workers", "1"], env=env, stdout=log, stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                processes.append(process)
+                deadline = time.monotonic() + 60
                 while True:
                     try:
                         if client.get(url + "/health/ready").status_code == 200:
                             break
                     except httpx.TransportError:
                         pass
-                    if time.monotonic() > deadline:
-                        pytest.fail("Service startup failed: " + "\n".join(
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        pytest.fail(f"{service} startup failed: " + "\n".join(
                             path.read_text() for path in tmp_path.glob("*.log")))
                     time.sleep(.05)
             yield client, urls

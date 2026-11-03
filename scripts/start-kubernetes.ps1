@@ -314,8 +314,11 @@ if ($ConnectOnly) {
         if ($LASTEXITCODE -ne 0) { throw "Namespace creation failed." }
         & kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
         if ($LASTEXITCODE -ne 0) { throw "Namespace did not become active." }
-        & kubectl apply --dry-run=client -f $manifestFile
-        if ($LASTEXITCODE -ne 0) { throw "Rendered manifest validation failed; nothing else applied." }
+        # Server validation catches strategic-merge conflicts with existing
+        # objects (for example value versus valueFrom) that client validation
+        # cannot see. This request does not persist any resources.
+        & kubectl apply --dry-run=server -f $manifestFile
+        if ($LASTEXITCODE -ne 0) { throw "Rendered manifest server validation failed; nothing else applied." }
         & kubectl apply -f $manifestFile
         if ($LASTEXITCODE -ne 0) { throw "Kubernetes apply failed. Inspect Pod images and events before retrying." }
 

@@ -16,8 +16,13 @@ FEEDS = {
     "incidents": ("TrafficIncidents", 90, 300),
     "roadworks": ("RoadWorks", 86400, 172800),
 }
-MAX_PAGES = 60  # bounded up to 30,000 rows for the larger v4 feed
 PAGE_SIZE = 500
+# TrafficSpeedBands currently contains about 144,000 rows. Keep a finite
+# provider/resource bound with headroom while allowing the complete dataset.
+# The shared Redis codec imports this same limit so publication and reads cannot
+# disagree about whether a successful collection is valid.
+MAX_RECORDS = 200_000
+DASHBOARD_SPEED_LIMIT = 800
 
 
 class TrafficDataError(Exception):
@@ -68,6 +73,50 @@ def normalize(name, rows):
     return result
 
 
+def _dashboard_speeds(rows):
+    """Return a small, spatially representative congestion display layer.
+
+    Routing retains every validated speed link. The browser receives at most
+    two links per roughly 2.5 km grid cell: the slowest and fastest observed
+    segments. This provides island-wide colour coverage without transferring
+    the full provider dataset every five seconds.
+    """
+    if len(rows) <= DASHBOARD_SPEED_LIMIT:
+        return rows
+    cells = {}
+    for row in rows:
+        midpoint = ((row["start"]["latitude"] + row["end"]["latitude"]) / 2,
+                    (row["start"]["longitude"] + row["end"]["longitude"]) / 2)
+        cell = (int((midpoint[0] - 1.1) / .025), int((midpoint[1] - 103.5) / .025))
+        average = (row["min_kph"] + row["max_kph"]) / 2
+        pair = cells.setdefault(cell, [None, None])
+        if pair[0] is None or average < pair[0][0]:
+            pair[0] = (average, row)
+        if pair[1] is None or average > pair[1][0]:
+            pair[1] = (average, row)
+    selected = []
+    for cell in sorted(cells):
+        slow, fast = cells[cell]
+        selected.append(slow[1])
+        if fast[1]["id"] != slow[1]["id"]:
+            selected.append(fast[1])
+    return selected[:DASHBOARD_SPEED_LIMIT]
+
+
+def dashboard_traffic_snapshot(snapshot):
+    """Bound only the public map projection; internal route scoring stays full."""
+    result = {**snapshot}
+    if snapshot.get("source") == "LTA_DATAMALL":
+        result["speeds"] = _dashboard_speeds(snapshot.get("speeds", []))
+        result["speed_display_count"] = len(result["speeds"])
+    observed = snapshot.get("live_observations")
+    if observed:
+        sampled = {**observed, "speeds": _dashboard_speeds(observed.get("speeds", []))}
+        sampled["speed_display_count"] = len(sampled["speeds"])
+        result["live_observations"] = sampled
+    return result
+
+
 class TrafficMonitor:
     def __init__(self, client, source=None, account_key=None, clock=None):
         self.client = client
@@ -81,7 +130,7 @@ class TrafficMonitor:
         path, _, _ = FEEDS[name]
         rows = []
         previous = None
-        for offset in range(0, MAX_PAGES * PAGE_SIZE, PAGE_SIZE):
+        for offset in range(0, MAX_RECORDS, PAGE_SIZE):
             try:
                 response = await self.client.get(f"{BASE}/{path}", params={"$skip": offset},
                     headers={"AccountKey": self.key, "Accept": "application/json"},
@@ -103,9 +152,11 @@ class TrafficMonitor:
                     raise TrafficDataError("INVALID_RESPONSE")
                 if page and page == previous:
                     raise TrafficDataError("INVALID_PAGINATION")
-                rows.extend(page)
+                # Normalise incrementally so the collector never holds both the
+                # entire raw and normalised speed dataset in memory.
+                rows.extend(normalize(name, page))
                 if len(page) < PAGE_SIZE:
-                    return normalize(name, rows)
+                    return rows
                 previous = page
             except (httpx.HTTPError, ValueError, TypeError):
                 raise TrafficDataError("FETCH_FAILED") from None

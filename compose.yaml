@@ -26,6 +26,12 @@ services:
     build: ./dashboard
     profiles: [relocation]
     ports: ["127.0.0.1:${DASHBOARD_PORT:-8080}:80"]
+    depends_on:
+      fleet: {condition: service_healthy}
+      demand: {condition: service_healthy}
+      rebalancing: {condition: service_healthy}
+      dispatch: {condition: service_healthy}
+      facilities: {condition: service_healthy}
   fleet:
     <<: *backend
     ports: ["127.0.0.1:${FLEET_PORT:-8001}:8000"]
@@ -84,6 +90,7 @@ services:
       fleet: {condition: service_healthy}
       demand: {condition: service_healthy}
       redis: {condition: service_started}
+      traffic-collector: {condition: service_started}
   ev-01:
     build: .
     init: true

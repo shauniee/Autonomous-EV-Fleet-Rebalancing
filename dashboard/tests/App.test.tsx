@@ -344,6 +344,16 @@ describe('dispatcher dashboard', () => {
     expect(within(panel).getByText('DISABLED')).toBeInTheDocument();
   });
 
+  it('reports an unavailable traffic service without calling it disabled', async () => {
+    server({ '/api/rebalancing/traffic/conditions': new Error('Rebalancing down') });
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Traffic/ }));
+    const panel = await screen.findByRole('region', { name: 'Traffic conditions and roadworks' });
+    expect(await within(panel).findByText(/Traffic feed unavailable: Rebalancing down/)).toBeInTheDocument();
+    expect(within(panel).getByText('UNAVAILABLE')).toBeInTheDocument();
+    expect(within(panel).queryByText(/Live LTA traffic ranking is disabled/)).not.toBeInTheDocument();
+  });
+
   it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {
     server({ '/api/rebalancing/traffic/conditions': {
       source: 'LTA_DATAMALL', status: 'FRESH', generated_at: new Date().toISOString(),

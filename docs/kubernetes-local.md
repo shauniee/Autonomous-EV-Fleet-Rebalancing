@@ -244,9 +244,9 @@ is also its Fleet vehicle ID, so Pod replacement preserves identity while still
 losing any process-local journey state as described above.
 
 StatefulSet scaling creates simulator Pods in parallel. Rolling updates use
-`maxUnavailable: 10%`, rounded up by Kubernetes, so independent EV simulators are
-replaced in bounded batches rather than one at a time. This updates two Pods at a
-time for the default 18 replicas and 20 at a time for 200 replicas. The rollout
+`maxUnavailable: 25%`, rounded up by Kubernetes, so independent EV simulators are
+replaced in bounded batches rather than one at a time. This updates five Pods at a
+time for the default 18 replicas and 50 at a time for 200 replicas. The rollout
 still waits for each batch to publish telemetry and pass its Fleet readiness check
 before continuing.
 
@@ -381,7 +381,7 @@ npm.cmd run build
 Pop-Location
 
 kubectl kustomize .\k8s
-kubectl apply --dry-run=client -k .\k8s
+kubectl apply --dry-run=server -k .\k8s
 git diff --check
 git diff --exit-code -- experiments results
 ```

@@ -7,7 +7,9 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from ev_fleet.contracts.routing import RoadRoute
-from ev_fleet.rebalancing.traffic import TrafficMonitor, assess_traffic, normalize, rank_cost
+from ev_fleet.rebalancing.traffic import (
+    TrafficMonitor, assess_traffic, dashboard_traffic_snapshot, normalize, rank_cost,
+)
 from ev_fleet.dispatch.traffic_routes import choose_traffic_route
 from ev_fleet.common.settings import Settings
 from ev_fleet.facilities.catalog import BY_ID
@@ -85,6 +87,44 @@ def test_traffic_monitor_caches_lta_pages_and_rejects_stale_missing_key():
             disabled = TrafficMonitor(client, source="DISABLED")
             assert (await disabled.snapshot())["status"] == "DISABLED"
     asyncio.run(scenario())
+
+
+def test_speed_feed_can_complete_beyond_previous_30000_row_limit():
+    requests = []
+
+    def handler(request):
+        offset = int(request.url.params["$skip"])
+        requests.append(offset)
+        count = 500 if offset < 30_000 else 1
+        return httpx.Response(200, json={"value": [{
+            "LinkID": offset + index, "RoadName": "Test Road",
+            "MinimumSpeed": 20, "MaximumSpeed": 40,
+            "StartLat": 1.30, "StartLon": 103.80,
+            "EndLat": 1.30, "EndLon": 103.81,
+        } for index in range(count)]})
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            monitor = TrafficMonitor(client, source="LTA_DATAMALL", account_key="fixture-key")
+            rows = await monitor._fetch("speeds")
+        assert len(rows) == 30_001
+        assert requests[-2:] == [29_500, 30_000]
+
+    asyncio.run(scenario())
+
+
+def test_dashboard_speed_projection_is_bounded_without_truncating_route_cache():
+    rows = [{**speed(minimum=index % 70, maximum=index % 70 + 10), "id": str(index)}
+            for index in range(1_000)]
+    snapshot = {**traffic(rows), "feeds": {
+        "speeds": {"status": "FRESH", "observed_at": NOW.isoformat(),
+                   "count": len(rows), "error": None}}}
+    projected = dashboard_traffic_snapshot(snapshot)
+    assert len(projected["speeds"]) == 2
+    assert projected["speed_display_count"] == 2
+    assert projected["feeds"]["speeds"]["count"] == 1_000
+    assert {row["min_kph"] for row in projected["speeds"]} == {0, 69}
+    assert snapshot["speeds"] is rows and len(snapshot["speeds"]) == 1_000
 
 
 def test_incident_closure_blocks_route_and_roadworks_only_add_delay():

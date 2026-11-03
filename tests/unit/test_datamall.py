@@ -223,6 +223,35 @@ def test_live_updates_preserve_simulated_holds_and_never_report_negative_capacit
     asyncio.run(scenario())
 
 
+def test_live_reads_do_not_wait_for_slow_feed_persistence(clock):
+    class BlockingRepository:
+        def __init__(self):
+            self.save_started = asyncio.Event()
+            self.release_save = asyncio.Event()
+
+        async def save(self, payload):
+            self.save_started.set()
+            await self.release_save.wait()
+
+    async def scenario():
+        store = live_store(clock)
+        repository = BlockingRepository()
+        store.repository = repository
+        sites = parking_sites([parking_row()], clock.now(), 180)
+        update = asyncio.create_task(store.replace_feed("parking", sites, clock.now()))
+        await repository.save_started.wait()
+        try:
+            snapshot = await asyncio.wait_for(store.view(), timeout=.1)
+            parking = await asyncio.wait_for(store.vehicle_parking("ev-1"), timeout=.1)
+            assert snapshot.facilities[0].facility_id == sites[0].facility_id
+            assert parking == {"vehicle_id": "ev-1", "parking": None, "pending": False}
+        finally:
+            repository.release_save.set()
+            await update
+
+    asyncio.run(scenario())
+
+
 def test_missing_key_returns_explicit_empty_live_snapshot_without_mock_fallback(clock):
     async def scenario():
         store = FacilitiesStore(clock=clock, settings=FacilitiesSettings(source="LTA_DATAMALL"))
@@ -263,7 +292,7 @@ def test_app_lifecycle_starts_independent_feeds_and_cancels_pollers(clock, monke
     asyncio.run(scenario())
 
 
-def test_real_observations_and_holds_restore_without_resetting_freshness(clock):
+def test_live_observations_refresh_after_restart_while_holds_restore(clock):
     async def scenario():
         repository = MemoryRepository()
         original = live_store(clock)
@@ -279,10 +308,11 @@ def test_real_observations_and_holds_restore_without_resetting_freshness(clock):
         restored.repository = repository
         await restored.start()
         snapshot = await restored.view()
-        assert snapshot.facilities[0].availability_observed_at == site.availability_observed_at
-        assert snapshot.facilities[0].status == "UNKNOWN"
-        assert snapshot.feeds[0].status == "STALE"
+        assert snapshot.facilities == []
+        assert all(feed.status == "PENDING" for feed in snapshot.feeds)
         assert (await restored.get_hold(receipt["dispatch_id"]))["status"] == "RESERVED"
+        assert repository.payload["catalogue"] == {}
+        assert repository.payload["feeds"] == {}
     asyncio.run(scenario())
 
 

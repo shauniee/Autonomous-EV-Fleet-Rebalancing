@@ -15,13 +15,13 @@ import zlib
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from .traffic import FEEDS, TrafficDataError, TrafficMonitor
+from .traffic import FEEDS, MAX_RECORDS, TrafficDataError, TrafficMonitor
 
 LOGGER = logging.getLogger(__name__)
 META_KEY = "ev-fleet:traffic:v1:meta"
 DATA_KEY_PREFIX = "ev-fleet:traffic:v1:data"
-MAX_ENCODED_BYTES = 12 * 1024 * 1024
-MAX_COMPRESSED_BYTES = 8 * 1024 * 1024
+MAX_ENCODED_BYTES = 40 * 1024 * 1024
+MAX_COMPRESSED_BYTES = 16 * 1024 * 1024
 
 
 def utcnow():
@@ -72,7 +72,7 @@ def _decode_rows(blob, digest):
     if hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("TRAFFIC_CACHE_HASH_MISMATCH")
     rows = json.loads(raw)
-    if not isinstance(rows, list) or len(rows) > 30000 or any(
+    if not isinstance(rows, list) or len(rows) > MAX_RECORDS or any(
             not isinstance(row, dict) for row in rows):
         raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
     return rows
@@ -159,7 +159,9 @@ class RedisTrafficReader:
                         rows = previous[name]["rows"]
                     else:
                         blob = await self.redis.get(data_key(name, digest))
-                        rows = _decode_rows(blob, digest)
+                        # A full v4 speed snapshot is large. Decode outside the
+                        # API event loop so health checks and requests stay live.
+                        rows = await asyncio.to_thread(_decode_rows, blob, digest)
                     updated[name] = {
                         "error": meta.get("error"), "digest": digest,
                         "observed_at": observed_at, "rows": rows,

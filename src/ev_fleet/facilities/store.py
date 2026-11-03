@@ -35,10 +35,11 @@ class FacilitiesStore:
             self.version = payload["version"]
             self.holds = payload["holds"]
             if self.settings.source == "LTA_DATAMALL":
-                self.catalogue = {key: site for key, site in payload.get("catalogue", {}).items()
-                                  if site.source == "LTA_DATAMALL"}
-                if self.settings.account_key.get_secret_value():
-                    self.feeds.update(payload.get("feeds", {}))
+                # Live observations are an external cache, not durable state.
+                # Re-fetch them after startup instead of decoding and repeatedly
+                # saving a large tagged-JSON catalogue. Persist once here to
+                # compact snapshots created by older versions of the service.
+                await self.persist()
         else:
             await self.persist()
 
@@ -46,11 +47,12 @@ class FacilitiesStore:
         await self.repository.close()
 
     async def persist(self):
+        live_source = self.settings.source == "LTA_DATAMALL"
         await self.repository.save({"instance_id": self.instance_id,
                                     "version": self.version,
                                     "holds": self.holds,
-                                    "catalogue": self.catalogue,
-                                    "feeds": self.feeds})
+                                    "catalogue": {} if live_source else self.catalogue,
+                                    "feeds": {} if live_source else self.feeds})
 
     async def replace_feed(self, name, sites, observed_at):
         async with self.lock:
@@ -81,11 +83,13 @@ class FacilitiesStore:
         return views
 
     async def view(self, zone_id=None):
-        async with self.lock:
-            return FacilitiesSnapshot(
-                generated_at=self.clock.now(), data_source=self.settings.source,
-                facilities=[self.effective(site) for site in self.catalogue.values()
-                            if zone_id is None or site.zone_id == zone_id], feeds=self.feed_views())
+        # Reads contain no await and therefore run atomically on the service's
+        # single asyncio event loop. Do not queue them behind a potentially
+        # slow PostgreSQL save performed by a feed or hold mutation.
+        return FacilitiesSnapshot(
+            generated_at=self.clock.now(), data_source=self.settings.source,
+            facilities=[self.effective(site) for site in self.catalogue.values()
+                        if zone_id is None or site.zone_id == zone_id], feeds=self.feed_views())
 
     def effective(self, facility):
         claims = [h for h in self.holds.values() if h["facility_id"] == facility.facility_id
@@ -103,16 +107,14 @@ class FacilitiesStore:
             "status": "UNKNOWN" if stale else facility.status})
 
     async def snapshot(self, zone_id=None):
-        async with self.lock:
-            return [self.effective(site) for site in self.catalogue.values()
-                    if zone_id is None or site.zone_id == zone_id]
+        return [self.effective(site) for site in self.catalogue.values()
+                if zone_id is None or site.zone_id == zone_id]
 
     async def get(self, facility_id):
-        async with self.lock:
-            site = self.catalogue.get(facility_id)
-            if not site:
-                raise HTTPException(404, "FACILITY_NOT_FOUND")
-            return self.effective(site)
+        site = self.catalogue.get(facility_id)
+        if not site:
+            raise HTTPException(404, "FACILITY_NOT_FOUND")
+        return self.effective(site)
 
     async def reserve(self, facility_id, body):
         async with self.lock:
@@ -187,26 +189,24 @@ class FacilitiesStore:
             return deepcopy(entry["receipt"])
 
     async def get_hold(self, dispatch_id):
-        async with self.lock:
-            entry = self.holds.get(str(dispatch_id))
-            if not entry:
-                raise HTTPException(404, "PARKING_HOLD_NOT_FOUND")
-            return deepcopy(entry["receipt"])
+        entry = self.holds.get(str(dispatch_id))
+        if not entry:
+            raise HTTPException(404, "PARKING_HOLD_NOT_FOUND")
+        return deepcopy(entry["receipt"])
 
     async def vehicle_parking(self, vehicle_id):
-        async with self.lock:
-            entries = [entry for entry in self.holds.values()
-                       if entry["receipt"]["vehicle_id"] == vehicle_id]
-            occupied = next((entry for entry in entries if entry["status"] == "OCCUPIED"), None)
-            parking = None
-            if occupied:
-                site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
-                if site:
-                    parking = {"facility_id": site.facility_id, "name": site.name,
-                        "position": occupied["request"].access_position or site.position,
-                        "zone_id": site.zone_id, "source": site.source,
-                        "charging_allocated": occupied["charging_allocated"],
-                        "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
-                        "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
-            return {"vehicle_id": vehicle_id, "parking": parking,
-                    "pending": any(entry["status"] == "RESERVED" for entry in entries)}
+        entries = [entry for entry in self.holds.values()
+                   if entry["receipt"]["vehicle_id"] == vehicle_id]
+        occupied = next((entry for entry in entries if entry["status"] == "OCCUPIED"), None)
+        parking = None
+        if occupied:
+            site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
+            if site:
+                parking = {"facility_id": site.facility_id, "name": site.name,
+                    "position": occupied["request"].access_position or site.position,
+                    "zone_id": site.zone_id, "source": site.source,
+                    "charging_allocated": occupied["charging_allocated"],
+                    "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
+                    "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
+        return {"vehicle_id": vehicle_id, "parking": parking,
+                "pending": any(entry["status"] == "RESERVED" for entry in entries)}

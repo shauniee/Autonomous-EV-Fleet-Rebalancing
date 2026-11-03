@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import httpx
 from fastapi import HTTPException, Response
 from ev_fleet.common.dashboard_cache import DashboardCache
@@ -18,6 +19,29 @@ def create_app(store=None, cache=None):
     display_cache = cache if cache is not None else DashboardCache.from_env('facilities', state.instance_id, 2)
     app.state.dashboard_cache = display_cache
     zone_ids = {item[0] for item in SINGAPORE_ZONES}
+
+    @asynccontextmanager
+    async def lifespan(app):
+        await state.start()
+        app.state.feed_tasks = []
+        if state.settings.source == "LTA_DATAMALL" and state.settings.account_key.get_secret_value():
+            client = httpx.AsyncClient()
+            app.state.datamall_client = client
+            provider = DataMallClient(client, state.settings.account_key)
+            app.state.feed_tasks = [asyncio.create_task(poll_feed(state, provider, name))
+                                    for name in ("parking", "charging")]
+        try:
+            yield
+        finally:
+            for task in app.state.feed_tasks:
+                task.cancel()
+            await asyncio.gather(*app.state.feed_tasks, return_exceptions=True)
+            if getattr(app.state, "datamall_client", None):
+                await app.state.datamall_client.aclose()
+            await display_cache.aclose()
+            await state.close()
+
+    app.router.lifespan_context = lifespan
 
     @app.get("/api/v1/facilities", response_model=FacilitiesSnapshot)
     async def facilities(zone_id: str | None = None):
@@ -61,27 +85,6 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/holds/{dispatch_id}/release", response_model=ParkingHold)
     async def release(dispatch_id: str):
         return await state.change(dispatch_id, "RELEASED")
-
-    @app.on_event("shutdown")
-    async def stop_display_cache():
-        for task in getattr(app.state, "feed_tasks", []):
-            task.cancel()
-        await asyncio.gather(*getattr(app.state, "feed_tasks", []), return_exceptions=True)
-        if getattr(app.state, "datamall_client", None):
-            await app.state.datamall_client.aclose()
-        await display_cache.aclose()
-        await state.close()
-
-    @app.on_event("startup")
-    async def restore_state():
-        await state.start()
-        app.state.feed_tasks = []
-        if state.settings.source == "LTA_DATAMALL" and state.settings.account_key.get_secret_value():
-            client = httpx.AsyncClient()
-            app.state.datamall_client = client
-            provider = DataMallClient(client, state.settings.account_key)
-            app.state.feed_tasks = [asyncio.create_task(poll_feed(state, provider, name))
-                                    for name in ("parking", "charging")]
 
     return app
 

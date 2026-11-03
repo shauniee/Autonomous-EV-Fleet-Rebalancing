@@ -20,7 +20,7 @@ def relocation_cluster(tmp_path):
         for sock in sockets:
             sock.close()
     urls = [f"http://127.0.0.1:{port}" for port in ports]
-    env = dict(os.environ, FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2],
+    env = dict(os.environ, DATABASE_URL="", FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2],
                RECONCILE_INTERVAL_SECONDS="0.1", STALE_SECONDS="5", OFFLINE_SECONDS="10",
                RECOMMENDATION_TTL_SECONDS="10", ACK_TIMEOUT_SECONDS="3", PROGRESS_TIMEOUT_SECONDS="5")
     processes, logs = [], []
@@ -32,27 +32,50 @@ def relocation_cluster(tmp_path):
         processes.append(process)
         return process
     try:
-        for service, port in zip(("fleet", "demand", "rebalancing", "dispatch"), ports):
-            # Real multi-process HTTP and Fleet/Dispatch state machines;
-            # only OneMap's external routing API is fixture-backed offline.
-            module = "tests.stubbed_dispatch_app:app" if service == "dispatch" else f"ev_fleet.{service}.app:app"
-            start(service, ["-m", "uvicorn", module, "--host", "127.0.0.1", "--port", str(port)])
-        with httpx.Client(timeout=2, trust_env=False) as client:
-            deadline = time.monotonic() + 20
-            for url in urls:
+        # These are real processes, so allow for brief CPU starvation while a
+        # loaded Docker Desktop VM and the full test suite share the host.
+        # Test-level deadlines still detect a service that stops progressing.
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            for service, port, url in zip(
+                    ("fleet", "demand", "rebalancing", "dispatch"), ports, urls):
+                # Starting and checking each process separately avoids a burst of
+                # four Python imports competing with Docker Desktop for local CPU
+                # and OneDrive-backed disk access on Windows.
+                module = ("tests.stubbed_dispatch_app:app" if service == "dispatch"
+                          else f"ev_fleet.{service}.app:app")
+                process = start(service, ["-m", "uvicorn", module, "--host", "127.0.0.1",
+                                                  "--port", str(port)])
+                deadline = time.monotonic() + 30
                 while True:
                     try:
                         if client.get(url + "/health/ready").status_code == 200:
                             break
                     except httpx.TransportError:
                         pass
-                    if time.monotonic() > deadline:
-                        pytest.fail("Startup failed: " + "\n".join(path.read_text() for path in tmp_path.glob("*.log")))
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        pytest.fail(f"{service} startup failed: " +
+                                    "\n".join(path.read_text() for path in tmp_path.glob("*.log")))
                     time.sleep(.05)
+            simulators = []
             for name, zone, soc in [("moving-01", "bishan", "90"), ("moving-02", "tampines", "60")]:
-                start(name, ["-m", "ev_fleet.simulator.cli", "--fleet-url", urls[0], "--dispatch-url", urls[3],
+                process = start(name, ["-m", "ev_fleet.simulator.cli", "--fleet-url", urls[0], "--dispatch-url", urls[3],
                     "--vehicle-id", name, "--zone", zone, "--soc", soc, "--interval", ".15",
                     "--poll-interval", ".1", "--tick-seconds", ".05", "--time-scale", "240"])
+                simulators.append((name, process))
+            # Launch both imports before the first simulator begins its polling
+            # loop, then verify registration independently with a host-load-aware
+            # deadline.
+            for name, process in simulators:
+                deadline = time.monotonic() + 60
+                while True:
+                    vehicles = client.get(urls[0] + "/api/v1/vehicles").json()["vehicles"]
+                    vehicle = next((item for item in vehicles if item["vehicle_id"] == name), None)
+                    if vehicle and vehicle["telemetry"] and not vehicle["stale"]:
+                        break
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        pytest.fail(f"{name} startup failed: " +
+                                    "\n".join(path.read_text() for path in tmp_path.glob("*.log")))
+                    time.sleep(.05)
             yield client, urls, tmp_path
     finally:
         for process in processes:

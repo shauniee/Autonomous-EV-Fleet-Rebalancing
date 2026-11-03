@@ -254,9 +254,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     }
     const observed = traffic.source === 'LTA_DATAMALL' ? traffic : traffic.live_observations;
     if (!observed) return () => { layer.remove(); };
-    // Rendering bound: show at most 500 observed road segments at a time.
+    // The backend supplies a bounded, spatially representative projection.
     // This layer is descriptive only; geometry is not a routable network.
-    for (const segment of observed.speeds.slice(0, 500)) {
+    for (const segment of observed.speeds.slice(0, 800)) {
       const average = (segment.min_kph + segment.max_kph) / 2;
       const colour = average < 20 ? '#bd453b' : average < 40 ? '#d6a137' : '#23826e';
       const label = document.createElement('span');
