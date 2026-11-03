@@ -9,6 +9,19 @@ x-backend: &backend
     start_period: 5s
 
 services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+  traffic-collector:
+    build: .
+    init: true
+    command: ["python", "-m", "ev_fleet.rebalancing.shared_traffic"]
+    environment:
+      TRAFFIC_SOURCE: ${TRAFFIC_SOURCE:-DISABLED}
+      REDIS_URL: redis://redis:6379/0
+      LTA_DATAMALL_ACCOUNT_KEY: ${LTA_DATAMALL_ACCOUNT_KEY:-}
+    depends_on:
+      redis: {condition: service_started}
   dashboard:
     build: ./dashboard
     profiles: [relocation]
