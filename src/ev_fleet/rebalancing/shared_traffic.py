@@ -223,6 +223,10 @@ async def collect_feed(monitor, publisher, name, *, sleeper=asyncio.sleep):
     while True:
         try:
             rows = await monitor._fetch(name)
+            # An empty incidents/works feed is plausible. Empty speed coverage
+            # for all Singapore roads is not useful and must not be "FRESH".
+            if name == "speeds" and not rows:
+                raise TrafficDataError("EMPTY_SPEED_FEED")
             await publisher.success(name, rows, utcnow())
             LOGGER.info("traffic feed=%s collected=%d", name, len(rows))
         except TrafficDataError as exc:
