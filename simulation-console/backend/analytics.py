@@ -86,6 +86,10 @@ def _summary(run: dict) -> dict:
                 if isinstance(s.get("hpa"), dict) and s["hpa"].get("current_replicas") is not None]
     result["peak_hpa_cpu_pct"] = max(cpus, default=None)
     result["peak_replicas"] = max(replicas, default=None)
+    end = (datetime.fromisoformat(run["finished_at"]) if run.get("finished_at")
+           else datetime.now(timezone.utc))
+    seconds = max(0.001, (end - datetime.fromisoformat(run["started_at"])).total_seconds())
+    result["mean_rps"] = round(run.get("attempted", 0) / seconds, 2)
     return result
 
 
