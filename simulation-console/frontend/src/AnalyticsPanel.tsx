@@ -9,7 +9,7 @@ type Experiment = { id: string; preset: string; state: string; started_at: strin
   duration_seconds: number; simulated_evs: number; telemetry_hz: number; requests_per_second: number;
   attempted: number; success: number; errors: number; p95_latency_ms: number | null;
   rps_observed: number; samples: Sample[] };
-type Recorded = Pick<Experiment, 'id' | 'preset' | 'state' | 'started_at' | 'attempted' | 'errors'>;
+type Recorded = Pick<Experiment, 'id' | 'preset' | 'state' | 'started_at' | 'attempted' | 'errors'> & { peak_hpa_cpu_pct: number | null; peak_replicas: number | null; mean_rps: number };
 type Infra = { observed_at: string; hpa: Hpa | null;
   pods: { ready: number; total: number } | null;
   usage: { cpu_millicores: number; memory_mib: number } | null;
@@ -136,6 +136,13 @@ export function AnalyticsPanel() {
     const seconds = (Date.parse(sample.timestamp) - Date.parse(previous.timestamp)) / 1000;
     return seconds > 0 ? Math.max(0, (sample.attempted - previous.attempted) / seconds) : null;
   });
+  const scalingEvents = samples.slice(1).flatMap((sample, i) => {
+    const previous = samples[i];
+    const before = previous.hpa?.current_replicas;
+    const after = sample.hpa?.current_replicas;
+    return before != null && after != null && before !== after
+      ? [{time:sample.timestamp, before, after}] : [];
+  });
   return <section className="analytics-section" aria-labelledby="analytics-title">
     <div className="analytics-heading">
       <div><p className="eyebrow">SIMULATION · OBSERVABILITY</p>
@@ -202,15 +209,24 @@ export function AnalyticsPanel() {
       <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
         maxValue={100} measure={s=>s.usage?.cpu_millicores}/>
     </div>
+    <h3>Observed scaling events</h3>
+    {scalingEvents.length ? <div className="analytics-events">
+      {scalingEvents.map((event, i) => <p key={i}>
+        {sgt(event.time)} · Dashboard replicas {event.before} → {event.after}
+      </p>)}
+    </div> : <p className="description">
+      No measured replica-count change during this experiment. HPA may remain at one replica
+      even when HTTP load is generated.
+    </p>}
     <h3>Recorded experiments</h3>
     <p className="description">CSV contains timestamped CPU and HPA observations, replica counts,
       throughput, errors and latency. Missing Kubernetes measurements are left blank.
       Experiments persist through restarts when the analytics volume is retained.</p>
     <div className="table-wrap"><table><thead><tr>
-      <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Requests</th><th>Errors</th><th>Export</th>
+      <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Mean req/s</th><th>Peak CPU</th><th>Peak Pods</th><th>Requests</th><th>Errors</th><th>Export</th>
     </tr></thead><tbody>
       {records.map(r=><tr key={r.id}><td>{sgt(r.started_at)}</td><td>{r.preset}</td>
-        <td>{r.state}</td><td>{r.attempted}</td><td>{r.errors}</td>
+        <td>{r.state}</td><td>{fmt(r.mean_rps)}</td><td>{fmt(r.peak_hpa_cpu_pct, '%')}</td><td>{fmt(r.peak_replicas)}</td><td>{r.attempted}</td><td>{r.errors}</td>
         <td><a href={'/api/probe/v1/analytics/runs/' + r.id + '/csv'}>CSV</a></td></tr>)}
     </tbody></table></div>
     {!records.length && <p className="description">No experiments recorded yet.</p>}
