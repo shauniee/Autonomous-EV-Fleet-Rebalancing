@@ -8,6 +8,7 @@ resources:
   - configmaps.yaml
   - services.yaml
   - backends.yaml
+  - traffic-collector.yaml
   - simulators.yaml
   - dashboard.yaml
   - hpa-dashboard.yaml

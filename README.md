@@ -260,6 +260,12 @@ injections or active EV counts. This feature never modifies vehicle state or
 the dispatch workflow. Kubernetes Metrics Server must be healthy for resource
 measurements, and HPA scale-out depends on actual CPU utilisation.
 
+## Shared live traffic cache
+
+The [Shared Traffic Cache guide](docs/shared-traffic-cache.md) describes a
+single LTA collector, versioned Redis snapshots, per-feed freshness enforcement,
+and the lightweight reads used by Rebalancing. Missing traffic remains unknown.
+
 ## Dashboard autoscaling
 
 The Kubernetes resources include CPU-based autoscaling for the stateless operator
