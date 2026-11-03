@@ -6,10 +6,16 @@ fixtures unless a valid LTA DataMall AccountKey is explicitly configured.
 
 ## 1. LTA feeds and dashboard
 
-The Rebalancing Service caches independent, backend-only LTA HTTPS feeds:
-- `v3/TrafficSpeedBands` (5-minute cache): link endpoints and min/max speed;
-- `TrafficIncidents` (90-second cache): geolocated incident types/messages;
-- `RoadWorks` (24-hour cache): road names and approved start/end dates.
+The dedicated single-replica collector retrieves three independent backend-only
+LTA HTTPS feeds and publishes validated compressed observations to Redis:
+- `v4/TrafficSpeedBands` (5-minute refresh): link endpoints and min/max speed;
+- `TrafficIncidents` (90-second refresh): geolocated incident types/messages;
+- `RoadWorks` (24-hour refresh): road names and approved start/end dates.
+
+Rebalancing uses a locally cached, background-refreshed Redis read model,
+never making LTA calls on a request path. See
+[Shared Traffic Cache](shared-traffic-cache.md) for consistency and failure
+handling.
 
 Source: LTA DataMall API User Guide, Traffic sections 2.16, 2.18, 2.19.
 A valid `LTA_DATAMALL_ACCOUNT_KEY` is needed. DataMall pagination is bounded
