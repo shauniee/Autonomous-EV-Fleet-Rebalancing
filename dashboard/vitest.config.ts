@@ -1,2 +1,14 @@
 import { defineConfig } from 'vitest/config';
-export default defineConfig({ test: { environment: 'jsdom', setupFiles: ['tests/setup.ts'], include: ['tests/**/*.test.ts*'] } });
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['tests/setup.ts'],
+    include: ['tests/**/*.test.ts*'],
+    // Windows/Docker Desktop laptops can time out starting several forked
+    // jsdom workers simultaneously. Use one isolated worker thread so test
+    // startup stays bounded without changing any test assertions.
+    pool: 'threads',
+    fileParallelism: false,
+  },
+});
