@@ -8,6 +8,8 @@ from .routing import road_match_spawn
 from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
+from .recovery import assess_recovery
+from ev_fleet.contracts.recovery import RecoveryAssessment
 
 
 def create_app(settings=None, client=None, clock=None, background=True):
@@ -68,6 +70,10 @@ def create_app(settings=None, client=None, clock=None, background=True):
     @app.get("/api/v1/dispatches/{dispatch_id}/traffic-check")
     async def traffic_check(dispatch_id: UUID):
         return await app.state.service.traffic_check(dispatch_id)
+
+    @app.get("/api/v1/dispatches/{dispatch_id}/recovery", response_model=RecoveryAssessment)
+    async def recovery_assessment(dispatch_id: UUID):
+        return await assess_recovery(app.state.service, dispatch_id)
 
     @app.get("/api/v1/dispatches/{dispatch_id}", response_model=Dispatch)
     async def dispatch(dispatch_id: UUID):
