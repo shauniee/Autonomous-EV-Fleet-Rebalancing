@@ -1,6 +1,8 @@
 """Isolated real-service trial cluster with deterministic simulated time."""
 import asyncio
 from contextlib import AsyncExitStack
+from unittest.mock import patch
+from tests.routing_fixture import fixture_driving_route
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from uuid import uuid4
@@ -60,6 +62,10 @@ class EvaluationCluster:
 
     async def __aenter__(self):
         await seed_zones(self.demand)
+        # Experiment scenarios are offline and deterministic; approval still
+        # exercises the production OneMap-only route validation and claims.
+        self.stack.enter_context(patch(
+            "ev_fleet.dispatch.service.driving_route", new=fixture_driving_route))
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(self.route), timeout=5)
         await self.stack.enter_async_context(self.client)
         self.apps = {
