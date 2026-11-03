@@ -168,3 +168,37 @@ def test_shared_cache_disabled_mode_never_serves_live_data():
     assert reader.cached_snapshot()["speeds"] == []
     assert FEEDS["speeds"][1] == 300
     assert FEEDS["incidents"][1] == 90
+
+
+def test_empty_speed_feed_is_failure_but_empty_incidents_allowed():
+    from ev_fleet.rebalancing.shared_traffic import collect_feed
+
+    class Monitor:
+        async def _fetch(self, name):
+            return []
+
+    class Publisher:
+        def __init__(self):
+            self.succeeded = []
+            self.failed = []
+        async def success(self, name, rows, timestamp):
+            self.succeeded.append((name, rows))
+        async def error(self, name, code):
+            self.failed.append((name, code))
+
+    async def stop_after_one_interval(_):
+        raise asyncio.CancelledError
+
+    async def once():
+        writer = Publisher()
+        with pytest.raises(asyncio.CancelledError):
+            await collect_feed(Monitor(), writer, "speeds",
+                               sleeper=stop_after_one_interval)
+        assert writer.succeeded == []
+        assert writer.failed == [("speeds", "EMPTY_SPEED_FEED")]
+        with pytest.raises(asyncio.CancelledError):
+            await collect_feed(Monitor(), writer, "incidents",
+                               sleeper=stop_after_one_interval)
+        assert writer.succeeded == [("incidents", [])]
+
+    asyncio.run(once())
