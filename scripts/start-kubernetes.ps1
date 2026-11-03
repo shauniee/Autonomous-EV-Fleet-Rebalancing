@@ -344,6 +344,7 @@ if ($ConnectOnly) {
     # preventing an old Fleet Pod rejecting new simulator telemetry contracts.
     Wait-Rollout statefulset postgres
     Wait-Rollout deployment redis
+    Wait-Rollout deployment traffic-collector
     foreach ($deployment in @("fleet", "demand", "facilities", "rebalancing", "dispatch", "dashboard", "simulation-console", "ev-moving-01", "ev-moving-02")) {
         Wait-Rollout deployment $deployment
     }
