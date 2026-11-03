@@ -61,8 +61,11 @@ def _encode_rows(rows):
 def _decode_rows(blob, digest):
     if not isinstance(blob, bytes) or len(blob) > MAX_COMPRESSED_BYTES:
         raise ValueError("TRAFFIC_CACHE_BLOB_INVALID")
-    decompressor = zlib.decompressobj()
-    raw = decompressor.decompress(blob, MAX_ENCODED_BYTES + 1)
+    try:
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(blob, MAX_ENCODED_BYTES + 1)
+    except zlib.error as exc:
+        raise ValueError("TRAFFIC_CACHE_BLOB_INVALID") from exc
     if (len(raw) > MAX_ENCODED_BYTES or decompressor.unconsumed_tail
             or not decompressor.eof or decompressor.unused_data):
         raise ValueError("TRAFFIC_CACHE_BLOB_INVALID")
