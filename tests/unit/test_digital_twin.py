@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from ev_fleet.contracts.vehicles import TelemetryUpdate
 from ev_fleet.simulator.commands import MovingNode
 from ev_fleet.simulator.movement import Movement
+from tests.routing_fixture import fixture_route
 from tests.dispatch_support import Cluster
 
 
@@ -33,6 +34,9 @@ def test_adaptive_telemetry_frequency_and_synthetic_condition_fields():
 
     command = {"command_id": str(uuid4()), "dispatch_id": str(uuid4()),
                "target_position": {"latitude": 1.36, "longitude": 103.86},
+               "route": fixture_route(
+                   {"latitude": 1.35, "longitude": 103.85},
+                   {"latitude": 1.36, "longitude": 103.86}).model_dump(mode="json"),
                "min_reserve_pct": 20, "route_factor": 1.3, "energy_margin_factor": 1.15}
     assert model.accept(command) is True
     model.start()
