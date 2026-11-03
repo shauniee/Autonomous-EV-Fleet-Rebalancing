@@ -177,9 +177,6 @@ spec:
             - secretRef:
                 name: ev-fleet-database
             - secretRef:
-                name: ev-fleet-facilities
-                optional: true
-            - secretRef:
                 name: ev-fleet-traffic-control
                 optional: true
           ports:
