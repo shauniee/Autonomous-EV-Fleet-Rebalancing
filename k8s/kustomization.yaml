@@ -12,6 +12,7 @@ resources:
   - dashboard.yaml
   - hpa-dashboard.yaml
   - simulation-console.yaml
+  - analytics-storage.yaml
   - simulations/controller-rbac.yaml
   - simulations/customer-deployment.yaml
 
