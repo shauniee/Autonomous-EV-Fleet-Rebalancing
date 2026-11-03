@@ -16,6 +16,7 @@ from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from .batch import rank_pairs
 from .charging_advice import build_charging_advice
 from .traffic import TrafficMonitor, assess_traffic, rank_cost
+from .shared_traffic import RedisTrafficReader, redis_client
 from .scenarios import TrafficScenarios, TrafficScenarioInput, allowed_control
 from ev_fleet.contracts.dispatch import Dispatch
 from .clients import get_json
@@ -40,15 +41,32 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
                 app.state.client = client or owned
-                app.state.traffic_monitor = TrafficMonitor(app.state.client, clock=clock.now)
-                traffic_task = (asyncio.create_task(app.state.traffic_monitor.refresh_loop())
-                                if app.state.traffic_monitor.source == "LTA_DATAMALL" else None)
+                # In Redis mode Rebalancing NEVER calls the LTA API. A separate,
+                # single-replica collector owns all external traffic polling.
+                # Legacy INLINE mode stays available for isolated unit tests.
+                cache_mode = os.getenv("TRAFFIC_CACHE_BACKEND", "INLINE").upper()
+                if cache_mode not in ("INLINE", "REDIS"):
+                    raise RuntimeError("TRAFFIC_CACHE_BACKEND must be INLINE or REDIS")
+                if cache_mode == "REDIS":
+                    try:
+                        shared = redis_client()
+                    except ValueError:
+                        shared = None  # Missing cache fails closed, not back to LTA.
+                    monitor = RedisTrafficReader(
+                        shared, source=os.getenv("TRAFFIC_SOURCE"), clock=clock.now)
+                else:
+                    monitor = TrafficMonitor(app.state.client, clock=clock.now)
+                app.state.traffic_monitor = monitor
+                traffic_task = (asyncio.create_task(monitor.refresh_loop())
+                                if monitor.source == "LTA_DATAMALL" else None)
                 try:
                     yield
                 finally:
                     if traffic_task:
                         traffic_task.cancel()
                         await asyncio.gather(traffic_task, return_exceptions=True)
+                    if isinstance(monitor, RedisTrafficReader):
+                        await monitor.aclose()
         finally:
             await store.close()
             await batch_store.close()
