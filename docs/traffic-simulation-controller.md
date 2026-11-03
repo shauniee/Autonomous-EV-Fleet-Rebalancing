@@ -163,3 +163,41 @@ Invoke-RestMethod http://127.0.0.1:18003/api/v1/traffic/conditions |
 The frontend's cached condition warning is intentional. Never treat
 unknown conditions as an unobstructed road or disable fail-closed route
 checks to suppress a 502. Never post real API keys in logs or screenshots.
+
+
+### Diagnosed from the 3 November 2026 local Kubernetes logs
+
+The operator-supplied logs showed `rebalancing-6464858fd8-zbhqt` in
+`CrashLoopBackOff` with 17 restarts, while Nginx logged `connect() failed
+(111: Connection refused)` for **both** traffic conditions and charging advice.
+Before shutdown, Rebalancing returned 200 for traffic, but some calls and
+even health requests took over 8 seconds. This supports upstream
+unavailability as the proxied HTTP 502 cause; it **does not** establish
+whether the termination was due to liveness failures, OOMKill or another
+reason.
+
+The default Rebalancing liveness probe allows 2 seconds per check,
+failure threshold 3. Capture Pod termination status and probe events
+**before another redeploy**:
+
+```powershell
+kubectl -n ev-fleet describe pod rebalancing-6464858fd8-zbhqt
+kubectl -n ev-fleet logs rebalancing-6464858fd8-zbhqt --previous --tail=100
+kubectl -n ev-fleet get events --sort-by=.lastTimestamp
+```
+
+With traffic simulation enabled, each of 20 moving EV simulators previously
+downloaded `/api/v1/traffic/conditions` every two seconds. This can include
+large live LTA speed-band payloads irrelevant to their simulated movement.
+The simulator now requests the small, bounded
+`/api/v1/traffic/simulation-events` projection containing only approved,
+unexpired simulated road conditions. The dashboard's full live
+`/api/v1/traffic/conditions` remains unchanged, and the movement module's
+expiry checks remain active.
+
+This removes avoidable high-frequency response generation and transfer;
+it is **a targeted load reduction, not a demonstrated CrashLoopBackOff cure**.
+Verify locally with the old and new workloads, check liveness events and
+CPU metrics, and keep any unknown route conditions unknown. Do not paper
+over the issue by disabling readiness/liveness or replacing missing LTA
+reports with clear-road assumptions.
