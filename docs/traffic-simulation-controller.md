@@ -122,3 +122,44 @@ Do not expose the mutation API directly to unauthorised networks.
 - The user must perform a controlled live Kubernetes + OneMap smoke test.
   Offline unit/frontend/Compose tests do not prove actual Singapore road
   access, real traffic coverage, EV motion or measured time savings.
+
+## Troubleshooting: dashboard traffic feed HTTP 502
+
+The operator dashboard calls `/api/rebalancing/traffic/conditions` through its
+Nginx reverse proxy. The Rebalancing endpoint reads **cached** DataMall traffic
+snapshots; the upstream polling loop normally reports `PARTIAL`, `STALE`,
+`MISSING_KEY` or a specific feed error as JSON without turning a missing LTA
+reading into a successful clear-road observation. Thus a browser-side
+`HTTP 502` by itself is **not** proof the LTA AccountKey is bad; it often
+means Nginx cannot reach Rebalancing or its upstream response failed.
+
+On the local Docker Desktop Kubernetes cluster, inspect:
+
+```powershell
+kubectl -n ev-fleet get pods -l app.kubernetes.io/name=rebalancing
+kubectl -n ev-fleet get endpointslices -l kubernetes.io/service-name=rebalancing
+kubectl -n ev-fleet logs deployment/rebalancing --tail=100
+kubectl -n ev-fleet logs deployment/dashboard --tail=100
+kubectl -n ev-fleet port-forward service/rebalancing 18003:8000
+```
+
+In a **second PowerShell terminal** while the port-forward runs:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:18003/api/v1/traffic/conditions |
+  ConvertTo-Json -Depth 8
+```
+
+- Direct endpoint **HTTP 200** with `PARTIAL` or `STALE` feed entries:
+  the Rebalancing API is reachable, but some live LTA data are not fresh.
+  Check each entry's `error` and `observed_at`, then check the
+  configured traffic source and whether the backend secret was loaded.
+- Direct endpoint **HTTP 200** but browser still sees **502**:
+  inspect Dashboard Nginx proxy logs and the Service/EndpointSlice.
+- Direct endpoint fails or the Rebalancing Pod restarts:
+  investigate Rebalancing startup/readiness and backend logs before
+  changing any credentials or traffic-assessment rules.
+
+The frontend's cached condition warning is intentional. Never treat
+unknown conditions as an unobstructed road or disable fail-closed route
+checks to suppress a 502. Never post real API keys in logs or screenshots.
