@@ -15,7 +15,8 @@ import zlib
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from .traffic import FEEDS, MAX_RECORDS, TrafficDataError, TrafficMonitor
+from .traffic import (FEEDS, MAX_RECORDS, TrafficDataError, TrafficMonitor,
+                      build_speed_index, _dashboard_speeds)
 
 LOGGER = logging.getLogger(__name__)
 META_KEY = "ev-fleet:traffic:v1:meta"
@@ -78,6 +79,11 @@ def _decode_rows(blob, digest):
     return rows
 
 
+def _decode_index_and_sample(blob, digest):
+    rows = _decode_rows(blob, digest)
+    return rows, build_speed_index(rows), _dashboard_speeds(rows)
+
+
 class TrafficCachePublisher:
     """Single-writer, atomic per-feed publication; valid data before metadata."""
 
@@ -87,7 +93,9 @@ class TrafficCachePublisher:
     async def success(self, name, rows, observed_at):
         if name not in FEEDS:
             raise ValueError("UNKNOWN_TRAFFIC_FEED")
-        digest, encoded = _encode_rows(rows)
+        # Compression of the full v4 feed is CPU-heavy; do not block the
+        # collector's other independent feed coroutines.
+        digest, encoded = await asyncio.to_thread(_encode_rows, rows)
         if len(encoded) > MAX_COMPRESSED_BYTES:
             raise ValueError("TRAFFIC_PAYLOAD_TOO_LARGE")
         max_age = FEEDS[name][2]
@@ -155,16 +163,25 @@ class RedisTrafficReader:
                         continue
                     if not isinstance(digest, str) or len(digest) != 64:
                         raise ValueError("INVALID_DIGEST")
-                    if previous.get(name, {}).get("digest") == digest:
-                        rows = previous[name]["rows"]
+                    prior = previous.get(name, {})
+                    if prior.get("digest") == digest:
+                        rows = prior["rows"]
+                        spatial = prior.get("index")
+                        display = prior.get("display")
                     else:
                         blob = await self.redis.get(data_key(name, digest))
-                        # A full v4 speed snapshot is large. Decode outside the
-                        # API event loop so health checks and requests stay live.
-                        rows = await asyncio.to_thread(_decode_rows, blob, digest)
+                        # Decompression and indexing of ~144k links must never
+                        # monopolise the health-checked API event loop.
+                        if name == "speeds":
+                            rows, spatial, display = await asyncio.to_thread(
+                                _decode_index_and_sample, blob, digest)
+                        else:
+                            rows = await asyncio.to_thread(_decode_rows, blob, digest)
+                            spatial = display = None
                     updated[name] = {
                         "error": meta.get("error"), "digest": digest,
                         "observed_at": observed_at, "rows": rows,
+                        "index": spatial, "display": display,
                     }
                 except (ValueError, TypeError, KeyError, zlib.error):
                     updated[name] = {"error": "CACHE_INVALID", "rows": [],
@@ -202,6 +219,9 @@ class RedisTrafficReader:
                 "error": failure,
             }
             data[name] = entry.get("rows", []) if fresh else []
+            if name == "speeds" and fresh:
+                data["_speed_index"] = entry.get("index")
+                data["_speed_display"] = entry.get("display")
         return {
             "source": "LTA_DATAMALL", "generated_at": now.isoformat(),
             "status": ("FRESH" if all(f["status"] == "FRESH"
