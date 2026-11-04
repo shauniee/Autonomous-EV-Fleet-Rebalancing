@@ -23,7 +23,13 @@ to 400 pages of 500 entries *per feed*; reaching the limit fails that feed
 instead of silently declaring coverage complete. Missing/stale feeds are
 reported as unavailable/partial and are **not** treated as clear roads.
 Cached results expire independently. A known stale speed reading cannot
-be used indefinitely. API: `GET /api/v1/traffic/conditions` on Rebalancing.
+be used indefinitely. `GET /api/v1/traffic/conditions` is a **bounded map display
+projection**. Dispatch uses read-only `POST /api/v1/traffic/assess-route`
+with actual road geometry, length and ETA to score against the **full**
+indexed Speed Bands snapshot. `GET /api/v1/traffic/cache-status` reports
+per-feed freshness and error metadata without downloading rows.
+This route assessor checks fresh observed closures even while synthetic
+traffic scenarios are active. Unknown feeds remain explicitly unknown.
 Dashboard at http://127.0.0.1:8080 shows source, freshness, incidents,
 active roadworks, observed speed segments and caveats. A traffic overlay
 is optional and bounded to 800 spatially sampled speed links / 100 incident markers.
