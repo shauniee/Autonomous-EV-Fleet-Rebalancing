@@ -67,8 +67,13 @@ class DispatchService:
             self.store.records[key] = record
 
     async def close(self):
-        await self.persist()
-        await self.repository.close()
+        # Do not retry an ambiguous write during shutdown: reconciliation must
+        # load the known durable state on the next process start.
+        try:
+            if getattr(self.repository, "ready", True):
+                await self.persist()
+        finally:
+            await self.repository.close()
 
     async def persist(self):
         async with self.persist_lock:
