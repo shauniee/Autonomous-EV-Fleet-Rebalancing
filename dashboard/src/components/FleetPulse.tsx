@@ -43,7 +43,7 @@ export function FleetPulse({ fleet, heat, dispatches, now }: Props) {
       <p>Current service observations. Missing data is never shown as zero.</p>
     </div>
     <dl className="fleet-pulse-grid">
-      <Metric label="Vehicles online" value={online} description="Fresh telemetry"/>
+      <Metric label="Reporting EVs" value={online} description="Fresh telemetry"/>
       <Metric label="Available EVs" value={available} description="Eligible availability state" tone="accent"/>
       <Metric label="Open dispatches" value={open} description="Including unresolved outcomes"/>
       <Metric label="Critical zones" value={critical} description="Demand hotspots" tone={critical ? 'warning' : undefined}/>
