@@ -46,7 +46,7 @@ Local Simulation Console ─demand/load/rental controls + analytics
 1. A recommendation must **never** itself dispatch an EV.
 2. A single EV cannot hold two conflicting claims; parking allocations cannot exceed capacity.
 3. Missing/old telemetry and uncertain command outcomes must **not** create available vehicles by default.
-4. Routes must be explicit approved road geometries. OneMap remains primary, and a configured OSRM route must satisfy the same vehicle-road contract; no straight-line production fallback.
+4. Routes must be explicit approved road geometries. OneMap remains primary, and a configured OSRM route must satisfy the same vehicle-road contract; no straight-line production fallback. **Critical demo prerequisite:** production \`ROUTING_PROVIDER=SIMULATED\` returns no road route and Dispatch currently rejects it with \`ONEMAP_ROUTE_REQUIRED\`; do not promise a live EV movement demo without valid OneMap routing. The existing offline test-only route fixtures can demonstrate the safety contract, but must never be represented as real road routing.
 5. Live closures must not be masked by artificial scenarios. Traffic display samples are **not** the source for approval-time scoring.
 6. PostgreSQL failure and ambiguous commits must fail closed without silently rolling back/overwriting durable ownership.
 7. Redis is an ephemeral cache; stale, missing or erroneous feeds remain visibly unknown. Its liveness is separate from actual successful LTA collection.
@@ -94,7 +94,7 @@ Reuse `scripts/run_strategy_evaluation.py`, `scripts/analyze_strategy_results.py
 
 Write around 3,000 words in **at most six pages** (IEEE/ACM), including abstract (≤200 words), motivation, contribution, system design, implementation/concurrency/fault handling, evaluation graphs and limitations, related work, conclusion, cited references. Do not claim first-of-kind autonomy; originality should be framed as the **specific integration and evaluated engineering tradeoffs** and supported by a short related-work comparison.
 
-Deliver `GROUPNN.pdf`, `GROUPNN_INSTRUCTIONS.pdf`, source/repository, and a 10–15-minute video. Instructions must permit a marker to reproduce the basic safe demo **without private OneMap/LTA credentials** (explain optional real integrations), and state exactly which tests were/weren't run. Preserve a clean submission tag and video/figure revision trace.
+Deliver `GROUPNN.pdf`, `GROUPNN_INSTRUCTIONS.pdf`, source/repository, and a 10–15-minute video. Instructions must permit a marker to reproduce **credential-free startup, read-only fleet/heat-map views, recommendation-only workflow and explicit refusal of unroutable approvals** without private OneMap/LTA credentials. Full production-container vehicle movement currently requires a valid OneMap route/token; if the group cannot provision this, demonstrate the routed lifecycle separately through an explicitly labelled, isolated **test-only fixture** with no production safety bypass. State which steps depend on private external integrations and which tests were/weren't run. Preserve a clean submission tag and video/figure revision trace.
 
 **Exit:** all four submission artefacts exist and have been cross-checked against the final committed source and the course brief before **15 November 2026 23:59**.
 
@@ -134,7 +134,7 @@ A feature is `ready to merge` only when test and safety gates relevant to that f
 
 - Confirm the project's intended claim of originality and the report's research question.
 - Confirm which team member owns backend/cluster, UI, experiments, report and final submission.
-- Decide whether optional live LTA/OneMap demonstration is available; fallback remains the truthful, repeatable mock/synthetic demo.
+- Decide by **6 November** whether a valid OneMap token and permissible network access will be available for the live routed demo. Without it, use the truthful credential-free limited demo plus labelled offline fixture lifecycle; no production straight-line routing fallback.
 - Approve this design and associated **planning drafts** before any implementation changes.
 
 ## Linked task plans
