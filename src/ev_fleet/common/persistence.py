@@ -85,6 +85,9 @@ class SnapshotRepository:
         self.namespace = namespace
         self.url = url
         self.pool = None
+        # A failed/ambiguous commit must not leave RAM considered authoritative.
+        # The owner must restart and reload the durable snapshot.
+        self.faulted = False
 
     @classmethod
     def from_env(cls, namespace: str):
@@ -96,7 +99,7 @@ class SnapshotRepository:
 
     @property
     def ready(self):
-        return not self.enabled or self.pool is not None
+        return not self.enabled or (self.pool is not None and not self.faulted)
 
     async def start(self):
         if not self.enabled or self.pool is not None:
@@ -133,6 +136,7 @@ class SnapshotRepository:
                             CREATE INDEX IF NOT EXISTS telemetry_samples_vehicle_time_idx
                             ON telemetry_samples(vehicle_id, received_at DESC)
                         """)
+                self.faulted = False
                 return
             except (OSError, asyncpg.PostgresError) as exc:
                 last_error = exc
@@ -162,31 +166,49 @@ class SnapshotRepository:
     async def save(self, payload, *, telemetry_sample=None):
         if not self.enabled:
             return
+        if self.faulted:
+            raise RuntimeError("PERSISTENCE_STATE_UNCERTAIN")
         if self.pool is None:
             raise RuntimeError("Snapshot repository has not been started")
-        encoded = json.dumps(encode_state(payload), allow_nan=False, separators=(",", ":"))
-        async with self.pool.acquire() as connection:
-            async with connection.transaction():
-                await connection.execute("""
+        try:
+            # Fleet's frequent telemetry updates previously serialized the
+            # whole model on the ASGI event loop. Offload CPU encoding while
+            # its owner already holds its single-writer lock.
+            def encode():
+                return json.dumps(encode_state(payload), allow_nan=False, separators=(",", ":"))
+            encoded = (await asyncio.to_thread(encode) if telemetry_sample is not None
+                       else encode())
+            async with self.pool.acquire() as connection:
+                async with connection.transaction():
+                    await connection.execute("""
                     INSERT INTO service_snapshots(namespace, payload)
                     VALUES ($1, $2::jsonb)
                     ON CONFLICT(namespace) DO UPDATE SET
                         payload = EXCLUDED.payload,
                         revision = service_snapshots.revision + 1,
                         updated_at = NOW()
-                """, self.namespace, encoded)
-                if telemetry_sample is not None:
-                    # Snapshot and append-only history commit atomically.
-                    await connection.execute("""
+                    """, self.namespace, encoded)
+                    if telemetry_sample is not None:
+                        # Snapshot and append-only history commit atomically.
+                        await connection.execute("""
                         INSERT INTO telemetry_samples (
                             vehicle_id, session_id, sequence, observed_at,
                             received_at, payload
                         ) VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
                         ON CONFLICT(vehicle_id, session_id, sequence) DO NOTHING
-                    """, telemetry_sample["vehicle_id"], str(telemetry_sample["session_id"]),
+                        """, telemetry_sample["vehicle_id"], str(telemetry_sample["session_id"]),
                         telemetry_sample["sequence"], telemetry_sample["observed_at"],
                         telemetry_sample["received_at"],
                         json.dumps(telemetry_sample["telemetry"], allow_nan=False))
+        except Exception:
+            # Even a timeout after COMMIT is ambiguous: never rollback only in
+            # memory, nor continue accepting commands using possibly uncommitted
+            # state. Readiness becomes false until a durable reload on restart.
+            self.faulted = True
+            logging.getLogger(__name__).error(
+                "snapshot persistence uncertain for namespace=%s; restart required",
+                self.namespace)
+            raise
 
     async def telemetry_history(self, vehicle_id, limit=100):
         if not self.enabled:
@@ -213,5 +235,7 @@ class SnapshotRepository:
             self.pool = None
 
     def status(self):
+        if self.faulted:
+            return "uncertain"
         return "postgresql" if self.enabled else "ephemeral"
 
