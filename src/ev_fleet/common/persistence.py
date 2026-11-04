@@ -200,7 +200,8 @@ class SnapshotRepository:
                         telemetry_sample["sequence"], telemetry_sample["observed_at"],
                         telemetry_sample["received_at"],
                         json.dumps(telemetry_sample["telemetry"], allow_nan=False))
-        except Exception:
+        except (Exception, asyncio.CancelledError):
+            # Cancellation during a DB transaction can be ambiguous too.
             # Even a timeout after COMMIT is ambiguous: never rollback only in
             # memory, nor continue accepting commands using possibly uncommitted
             # state. Readiness becomes false until a durable reload on restart.
