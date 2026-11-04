@@ -172,3 +172,25 @@ def test_moving_simulator_fetches_only_simulation_events(monkeypatch):
     monkeypatch.setattr(node, "request", no_events)
     asyncio.run(node.refresh_traffic())
     assert node.traffic_snapshot is None
+
+
+def test_real_roadblock_remains_blocking_during_unrelated_simulation(monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SIMULATION_ENABLED", "true")
+    store = TrafficScenarios(Clock())
+    store.create(request("CONGESTION", speed=20), route())
+    live = live_feed()
+    live["incidents"] = [{
+        "id": "confirmed-block", "type": "ROAD BLOCK",
+        "position": B, "message": "Live closure on the route",
+    }]
+    merged = store.merged_snapshot(live)
+    blocked = assess_traffic([A, B, C], 2, 240, merged)
+    assert blocked["blocked"] is True
+    assert blocked["live_closures"] == 1
+    assert rank_cost(blocked, 2) is None
+    # A different approved road corridor remains eligible.
+    elsewhere = [C, {"latitude": 1.315, "longitude": 103.81}]
+    clear = assess_traffic(elsewhere, 2, 240, merged)
+    assert clear["live_closures"] == 0
+    assert clear["blocked"] is False
+    assert merged["incidents"] == []  # live and synthetic are still labelled separately
