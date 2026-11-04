@@ -108,7 +108,7 @@
 - [ ] **Step 5: Verify.** Rerun focused tests and full `python -m pytest -q`; then run the existing real-HTTP/Compose routing smoke on disposable fixtures.
 - [ ] **Step 6: Commit to PR #29 and record exact SHA.** Do not merge yet.
 
-**Acceptance:** no missing road route can be approved or executed, and real closures cannot be erased by a simulation overlay.
+**Acceptance:** no missing road route can be approved or executed, and real closures cannot be erased by a simulation overlay. **Preflight:** `ROUTING_PROVIDER=SIMULATED` deliberately produces no authoritative road geometry; the live route/EV acceptance test is BLOCKED without OneMap credentials or a properly isolated test-only fixture.
 
 ### Task 5: Review PR #29 traffic-index and Redis consistency (G2)
 
@@ -161,7 +161,7 @@
 
 - [ ] **Step 1: Run full Python suite** on exact PR revision; record exit code and warning count, not just successful lines.
 - [ ] **Step 2: Run frontend type/build as relevant** because PR #29 edits `dashboard/src/App.tsx`; `npm.cmd --prefix dashboard run build`.
-- [ ] **Step 3: Run disposable Compose smoke** using documented `docker compose --profile relocation up --build -d --wait` and cleanup. Confirm recommendation alone does not dispatch, approval creates one claim, command follows a valid road route, acknowledgement and arrival reconcile.
+- [ ] **Step 3: Run disposable Compose smoke** using documented `docker compose --profile relocation up --build -d --wait` and cleanup. First check provider configuration: with `ROUTING_PROVIDER=SIMULATED`, production Dispatch must fail closed (`ONEMAP_ROUTE_REQUIRED`), so do **not** assert that EV movement succeeds. Exercise complete approval/ack/arrival only with a valid OneMap setup; alternatively use an explicitly isolated test-only route fixture and label it accordingly.
 - [ ] **Step 4: Run safe local Kubernetes smoke** only when zero active rentals, relocations and charging tasks. Inspect Pod events/logs/restarts, 20-EV idle telemetry, Redis feed status, PostgreSQL readiness and operational flags.
 - [ ] **Step 5: Check explicit block/recovery scenarios.** Unknown traffic, redis down, Fleet communication failure, duplicate approval, parking full. Never infer correctness from green liveness alone.
 - [ ] **Step 6: Record PASS/FAIL/BLOCKED per check and peer-review change impact.** Merge PR #29 only if all safety-critical checks pass; otherwise fix or defer it and proceed with submission baseline.
