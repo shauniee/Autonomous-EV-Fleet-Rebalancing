@@ -4,6 +4,8 @@ from datetime import timedelta
 from uuid import uuid4, UUID
 import os
 from fastapi import Header, Query
+from pydantic import BaseModel, Field
+from ev_fleet.contracts.common import Position
 import httpx
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
@@ -22,6 +24,13 @@ from ev_fleet.contracts.dispatch import Dispatch
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
+
+
+class TrafficRouteQuery(BaseModel):
+    """Internal read-only route assessment; no provider data or keys returned."""
+    geometry: list[Position] = Field(min_length=2, max_length=10000)
+    distance_km: float = Field(ge=0, le=300)
+    duration_seconds: float = Field(ge=0, le=86400)
 
 
 def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
@@ -167,6 +176,22 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
         # The 20 moving EV simulators poll frequently and never need the
         # large cached LTA speed-band dataset used by the operator dashboard.
         return app.state.traffic_scenarios.simulation_snapshot()
+
+    @app.post("/api/v1/traffic/assess-route")
+    async def traffic_assess_route(body: TrafficRouteQuery):
+        # Dispatch requests a result for the EXACT approved road geometry,
+        # rather than fetching a sampled 800-link map feed and guessing locally.
+        traffic = app.state.traffic_scenarios.merged_snapshot(
+            app.state.traffic_monitor.cached_snapshot())
+        return assess_traffic([p.model_dump() for p in body.geometry],
+                              body.distance_km, body.duration_seconds, traffic, clock.now())
+
+    @app.get("/api/v1/traffic/cache-status")
+    async def traffic_cache_status():
+        snapshot = app.state.traffic_monitor.cached_snapshot()
+        return {"source": snapshot["source"], "status": snapshot["status"],
+                "generated_at": snapshot["generated_at"],
+                "feeds": snapshot.get("feeds", {})}
 
     @app.get("/api/v1/traffic/conditions")
     async def traffic_conditions():
