@@ -56,7 +56,8 @@ async def _osrm_alternatives(client, origin, destination, *, base_url):
 
 
 async def choose_traffic_route(client, primary, origin, destination, tolerance_km,
-                               traffic, now, *, facility=False, osrm_url=None):
+                               traffic, now, *, facility=False, osrm_url=None,
+                               assess_route=None):
     """Choose the least-disrupted validated road route at dispatch approval.
 
     OneMap remains primary. OSRM offers distinct *candidate* geometries and
@@ -66,7 +67,25 @@ async def choose_traffic_route(client, primary, origin, destination, tolerance_k
     if not primary or traffic.get("source") not in ("LTA_DATAMALL", "SIMULATION"):
         return primary
     endpoint_limit = MAX_FACILITY_ROAD_ACCESS_KM if facility else tolerance_km
-    base = _candidate(primary, traffic, now)
+    async def evaluate(route):
+        if assess_route is None:
+            return _candidate(route, traffic, now)
+        evaluation = await assess_route(route)
+        if (not isinstance(evaluation, dict) or
+                not isinstance(evaluation.get("blocked"), bool) or
+                evaluation.get("status") not in ("FRESH", "PARTIAL", "UNKNOWN")):
+            raise HTTPException(503, "TRAFFIC_ASSESSMENT_INVALID")
+        if evaluation["blocked"]:
+            return None
+        eta = evaluation.get("estimated_duration_seconds")
+        risk = evaluation.get("risk")
+        if eta is not None and (not isinstance(eta, (int, float)) or eta < 0):
+            raise HTTPException(503, "TRAFFIC_ASSESSMENT_INVALID")
+        if risk is not None and (not isinstance(risk, (int, float)) or not 0 <= risk <= 1):
+            raise HTTPException(503, "TRAFFIC_ASSESSMENT_INVALID")
+        return (eta if eta is not None else route.duration_seconds) + 180*(risk or 0), evaluation
+
+    base = await evaluate(primary)
     choices = []
     if base is not None:
         choices.append((base[0], primary, base[1]))
@@ -76,7 +95,7 @@ async def choose_traffic_route(client, primary, origin, destination, tolerance_k
             if (distance_km(origin, alt.geometry[0].model_dump()) > .005
                     or distance_km(destination, alt.geometry[-1].model_dump()) > endpoint_limit):
                 continue
-            result = _candidate(alt, traffic, now)
+            result = await evaluate(alt)
             if result is not None:
                 choices.append((result[0], alt, result[1]))
     if not choices:

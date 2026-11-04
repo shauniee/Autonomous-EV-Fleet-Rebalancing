@@ -7,7 +7,7 @@ geolocated road-block/diversion incidents cause a hard route exclusion.
 import asyncio
 import os
 from datetime import date, datetime, timedelta, timezone
-from math import cos, radians, isfinite
+from math import cos, radians, isfinite, floor
 import httpx
 
 BASE = "https://datamall2.mytransport.sg/ltaodataservice"
@@ -104,14 +104,15 @@ def _dashboard_speeds(rows):
 
 
 def dashboard_traffic_snapshot(snapshot):
-    """Bound only the public map projection; internal route scoring stays full."""
-    result = {**snapshot}
+    """Bound public map traffic and omit internal indexes from JSON responses."""
+    result = {key: value for key, value in snapshot.items() if not key.startswith("_")}
     if snapshot.get("source") == "LTA_DATAMALL":
-        result["speeds"] = _dashboard_speeds(snapshot.get("speeds", []))
+        result["speeds"] = snapshot.get("_speed_display") if snapshot.get("_speed_display") is not None else _dashboard_speeds(snapshot.get("speeds", []))
         result["speed_display_count"] = len(result["speeds"])
     observed = snapshot.get("live_observations")
     if observed:
-        sampled = {**observed, "speeds": _dashboard_speeds(observed.get("speeds", []))}
+        sampled = {key: value for key, value in observed.items() if not key.startswith("_")}
+        sampled["speeds"] = observed.get("_speed_display") if observed.get("_speed_display") is not None else _dashboard_speeds(observed.get("speeds", []))
         sampled["speed_display_count"] = len(sampled["speeds"])
         result["live_observations"] = sampled
     return result
@@ -254,6 +255,41 @@ def _near_route(point, geometry, threshold_km=.12):
     return any(_segment_distance(point, a, b) <= threshold_km for a, b in zip(geometry, geometry[1:]))
 
 
+# Index speed-link ENDPOINTS, because the legacy matching rule checks whether
+# either endpoint lies close to a route. This is a spatial prefilter only:
+# _near_route remains the authoritative exact geometric predicate.
+_SPEED_GRID_DEGREES = 0.01
+
+
+def build_speed_index(rows):
+    cells = {}
+    for i, row in enumerate(rows):
+        for point in (row["start"], row["end"]):
+            tile = (floor(point["latitude"] / _SPEED_GRID_DEGREES),
+                    floor(point["longitude"] / _SPEED_GRID_DEGREES))
+            cells.setdefault(tile, []).append(i)
+    return cells
+
+
+def _candidate_speed_rows(rows, index, geometry):
+    if not index:
+        return rows
+    selected = set()
+    for a, b in zip(geometry, geometry[1:]):
+        # 0.002 degrees is greater than the 100 m threshold in Singapore;
+        # include every tile that could contain a matching endpoint.
+        lower_lat = floor((min(a["latitude"], b["latitude"]) - .002) / _SPEED_GRID_DEGREES)
+        upper_lat = floor((max(a["latitude"], b["latitude"]) + .002) / _SPEED_GRID_DEGREES)
+        lower_lon = floor((min(a["longitude"], b["longitude"]) - .002) / _SPEED_GRID_DEGREES)
+        upper_lon = floor((max(a["longitude"], b["longitude"]) + .002) / _SPEED_GRID_DEGREES)
+        if (upper_lat-lower_lat+1)*(upper_lon-lower_lon+1) > 10000:
+            return rows  # Pathologically broad geometry: preserve exact semantics.
+        for lat in range(lower_lat, upper_lat+1):
+            for lon in range(lower_lon, upper_lon+1):
+                selected.update(index.get((lat, lon), ()))
+    return (rows[i] for i in selected)
+
+
 def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
     """Pure scoring: assessed routes only, unknown feed != clear road."""
     when = when or datetime.now(timezone.utc)
@@ -268,20 +304,32 @@ def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
         affected = [e for e in traffic.get("simulated_events", [])
                     if _near_route(e["start"], geometry, .025)
                     and _near_route(e["end"], geometry, .025)]
-        blocked = any(e["kind"] == "ROAD_CLOSED" for e in affected)
+        simulated_blocked = any(e["kind"] == "ROAD_CLOSED" for e in affected)
+        # Synthetic events are an overlay, not permission to ignore actual
+        # fresh LTA roadblocks on the same corridor.
+        live = traffic.get("live_observations") or {}
+        live_closures = [row for row in live.get("incidents", [])
+                         if row["type"] in ("ROAD BLOCK", "DIVERSION")
+                         and _near_route(row["position"], geometry, .12)]
+        blocked = simulated_blocked or bool(live_closures)
         controlled = [e for e in affected if e["kind"] != "ROAD_CLOSED"]
         normal_speed = 40.0  # Explicit synthetic baseline, not measured LTA speed
         factor = max((normal_speed / e["speed_kph"] for e in controlled), default=1)
         risk = min(1, .25 * sum(e["kind"] == "ROADWORKS" for e in affected)
-                      + .4 * sum(e["kind"] == "ROAD_CLOSED" for e in affected))
+                      + .4 * (sum(e["kind"] == "ROAD_CLOSED" for e in affected) + len(live_closures)))
         return {"status": "FRESH", "blocked": blocked,
+                "live_closures": len(live_closures),
+                "live_incident_feed_status": (live.get("feeds", {}).get("incidents", {}).get("status")
+                                              if live else None),
                 "delay_factor": round(factor, 3),
                 "estimated_duration_seconds": round(duration_seconds * factor, 1),
                 "risk": risk, "matched_speed_segments": len(controlled),
                 "roadworks": sum(e["kind"] == "ROADWORKS" for e in affected),
                 "incidents": sum(e["kind"] == "ROAD_CLOSED" for e in affected),
                 "affected_simulation_ids": [e["id"] for e in affected]}
-    matched = [row for row in traffic.get("speeds", []) if
+    speed_rows = traffic.get("speeds", [])
+    candidates = _candidate_speed_rows(speed_rows, traffic.get("_speed_index"), geometry)
+    matched = [row for row in candidates if
                _near_route(row["start"], geometry, .10) or _near_route(row["end"], geometry, .10)]
     road_names = {item["road"] for item in matched if item["road"]}
     # Roadworks dates are Singapore local calendar dates, not UTC dates.

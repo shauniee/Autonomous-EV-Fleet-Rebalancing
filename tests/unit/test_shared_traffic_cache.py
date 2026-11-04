@@ -202,3 +202,48 @@ def test_empty_speed_feed_is_failure_but_empty_incidents_allowed():
         assert writer.succeeded == [("incidents", [])]
 
     asyncio.run(once())
+
+
+def test_failed_redis_blob_write_preserves_previous_metadata_version():
+    async def scenario():
+        redis = FakeRedis()
+        writer = TrafficCachePublisher(redis)
+        await writer.success("speeds", [SPEED], START)
+        previous = await redis.hget(META_KEY, "speeds")
+
+        async def out_of_memory(*_args, **_kwargs):
+            raise RedisError("OOM simulation")
+
+        redis.set = out_of_memory
+        changed = {**SPEED, "min_kph": 25, "max_kph": 30}
+        with pytest.raises(RedisError):
+            await writer.success("speeds", [changed], START + timedelta(minutes=5))
+        assert await redis.hget(META_KEY, "speeds") == previous
+    asyncio.run(scenario())
+
+
+def test_route_spatial_index_and_display_are_reused_by_digest():
+    from ev_fleet.rebalancing.traffic import assess_traffic, dashboard_traffic_snapshot
+
+    async def scenario():
+        redis = FakeRedis()
+        clock = [START]
+        writer = TrafficCachePublisher(redis)
+        reader = RedisTrafficReader(redis, source="LTA_DATAMALL",
+                                    clock=lambda: clock[0])
+        await writer.success("speeds", [SPEED], clock[0])
+        await reader.refresh()
+        snapshot = reader.cached_snapshot()
+        assert snapshot["_speed_index"]
+        assert snapshot["_speed_display"] == [SPEED]
+        assert assess_traffic([SPEED["start"], SPEED["end"]], 2, 200,
+                              snapshot, START)["matched_speed_segments"] == 1
+        reduced = dashboard_traffic_snapshot(snapshot)
+        assert "_speed_index" not in reduced
+        assert "_speed_display" not in reduced
+        before = snapshot["_speed_index"]
+        clock[0] += timedelta(minutes=5)
+        await writer.success("speeds", [SPEED], clock[0])
+        await reader.refresh()
+        assert reader.cached_snapshot()["_speed_index"] is before
+    asyncio.run(scenario())

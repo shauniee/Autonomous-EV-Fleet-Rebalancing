@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from ev_fleet.contracts.routing import RoadRoute
 from ev_fleet.rebalancing.traffic import (
     TrafficMonitor, assess_traffic, dashboard_traffic_snapshot, normalize, rank_cost,
+    build_speed_index,
 )
 from ev_fleet.dispatch.traffic_routes import choose_traffic_route
 from ev_fleet.common.settings import Settings
@@ -205,3 +206,54 @@ def test_synthetic_comparison_covers_four_conditions_and_avoids_known_roadblock(
     assert blocked["baseline_blocked"] is True
     assert blocked["traffic_choice"] == "long"
     assert blocked["traffic_blocked"] is False
+
+
+def test_speed_index_is_semantically_identical_to_full_route_search():
+    """Endpoint grid is only a prefilter; it may not omit true matches."""
+    near = speed(start=START, end=END)
+    far = speed(start={"latitude": 1.40, "longitude": 103.9},
+                end={"latitude": 1.41, "longitude": 103.92})
+    crossing = speed(start={"latitude": 1.301, "longitude": 103.79},
+                     end={"latitude": 1.301, "longitude": 103.802})
+    rows = [near, far, crossing]
+    indexed = traffic(rows)
+    indexed["_speed_index"] = build_speed_index(rows)
+    for path in ([START, END],
+                 [{"latitude": 1.301, "longitude": 103.8}, END],
+                 [far["start"], far["end"]],
+                 [{"latitude": 1.39, "longitude": 103.89},
+                  {"latitude": 1.39, "longitude": 103.91}]):
+        full = assess_traffic(path, 2, 180, traffic(rows), NOW)
+        fast = assess_traffic(path, 2, 180, indexed, NOW)
+        assert fast == full
+    # The spatial index stays server-side; map payload never leaks it.
+    projection = dashboard_traffic_snapshot(indexed)
+    assert "_speed_index" not in projection
+    assert projection["speed_display_count"] == len(projection["speeds"])
+
+
+def test_configured_osrm_route_uses_full_feed_remote_assessment(monkeypatch):
+    from ev_fleet.dispatch import traffic_routes
+    primary = route()
+    detour = {"latitude": 1.306, "longitude": 103.81}
+    alternative = RoadRoute(source="OSRM", fetched_at=NOW,
+        geometry=[START, detour, END], distance_km=4, duration_seconds=600)
+    calls = []
+    async def get_alternatives(_client, _origin, _destination, *, base_url):
+        assert base_url == "http://osrm.local:5000"
+        return [alternative]
+    async def assess(remote_route):
+        calls.append(remote_route.source)
+        return {
+            "status": "FRESH", "blocked": remote_route.source == "ONEMAP",
+            "estimated_duration_seconds": 650, "risk": .2,
+        }
+    monkeypatch.setattr(traffic_routes, "_osrm_alternatives", get_alternatives)
+    monkeypatch.setenv("OSRM_ROUTING_URL", "http://osrm.local:5000")
+    selected = asyncio.run(choose_traffic_route(
+        None, primary, START, END, .05,
+        {"source": "LTA_DATAMALL"}, NOW, assess_route=assess))
+    assert calls == ["ONEMAP", "OSRM"]
+    assert selected.source == "OSRM"
+    assert selected.rerouted is True
+    assert selected.traffic_assessment["blocked"] is False

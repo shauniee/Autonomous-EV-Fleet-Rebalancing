@@ -77,9 +77,17 @@ export default function App() {
     catch { /* In-memory retry still works when browser storage is blocked. */ }
   }, []);
   useEffect(() => {
-    if (pending && dispatches.data?.dispatches.some(d => d.request_id === pending.request_id)) {
+    const matching = pending && dispatches.data?.dispatches.find(d => d.request_id === pending.request_id);
+    if (matching && (matching.claim_held === true ||
+        ['REJECTED', 'FAILED', 'SUCCEEDED'].includes(matching.state))) {
       setPending(null); setRecommendation(null); setConfirming(false);
-      setNotice('Approval reconciled. Follow its backend status in Relocations.'); setError('');
+      if (matching.state === 'REJECTED' || matching.state === 'FAILED') {
+        setNotice('');
+        setError(`Dispatch ${matching.dispatch_id}: ${matching.state} — ${matching.failure_reason || 'Approval unsuccessful'}.`);
+      } else {
+        setNotice(`Dispatch ${matching.dispatch_id}: ${matching.state}. Follow its backend state in Relocations.`);
+        setError('');
+      }
     }
   }, [dispatches.data, pending, setPending]);
   const choose = useCallback((id: string) => {
@@ -138,9 +146,21 @@ export default function App() {
     try {
       const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', body: JSON.stringify(approval) });
       if (!mounted.current) return;
-      setPending(null); setRecommendation(null);
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
-      setNotice(`Dispatch ${result.dispatch_id}: approval recorded. Follow its live backend status below.`);
+      if (result.state === 'UNKNOWN' ||
+          (!['REJECTED', 'FAILED', 'SUCCEEDED'].includes(result.state) &&
+           result.claim_held !== true)) {
+        // HTTP 202 only confirms the coordinator received the request, not
+        // that Fleet has acknowledged an atomic claim.
+        setError(`Dispatch ${result.dispatch_id}: approval not yet confirmed (${result.state}). Reconcile or retry the same request ID.`);
+      } else {
+        setPending(null); setRecommendation(null);
+        if (result.state === 'REJECTED' || result.state === 'FAILED') {
+          setError(`Dispatch ${result.dispatch_id}: ${result.state} — ${result.failure_reason || 'Approval unsuccessful'}.`);
+        } else {
+          setNotice(`Dispatch ${result.dispatch_id}: ${result.state}. Follow its live backend status below.`);
+        }
+      }
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) {

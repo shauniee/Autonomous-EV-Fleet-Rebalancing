@@ -219,7 +219,7 @@ spec:
         - name: redis
           image: redis:7.4-alpine
           imagePullPolicy: IfNotPresent
-          args: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+          args: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
           ports:
             - name: redis
               containerPort: 6379
@@ -238,10 +238,10 @@ spec:
           resources:
             requests:
               cpu: 25m
-              memory: 32Mi
+              memory: 64Mi
             limits:
               cpu: 250m
-              memory: 96Mi
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

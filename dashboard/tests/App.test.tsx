@@ -48,6 +48,43 @@ describe('dispatcher dashboard', () => {
     await screen.findByText(/Dispatch dispatch-1:/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
+  it('does not report HTTP 202 with a rejected dispatch as approved', async () => {
+    const rejected = makeDispatch();
+    rejected.state = 'REJECTED';
+    rejected.failure_reason = 'ONEMAP_ROUTE_REQUIRED';
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) =>
+      String(input) === '/api/dispatch/dispatches' && init?.method === 'POST'
+        ? new Response(JSON.stringify(rejected), { status: 202 })
+        : base(input, init));
+    render(<App/>);
+    await selectAndRecommend();
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('ONEMAP_ROUTE_REQUIRED');
+    expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the same approval pending while HTTP 202 reports UNKNOWN', async () => {
+    const uncertain = makeDispatch();
+    uncertain.state = 'UNKNOWN';
+    uncertain.failure_reason = 'CLAIM_UNCONFIRMED';
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) =>
+      String(input) === '/api/dispatch/dispatches' && init?.method === 'POST'
+        ? new Response(JSON.stringify(uncertain), { status: 202 })
+        : base(input, init));
+    render(<App/>);
+    await selectAndRecommend();
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
+    expect(await screen.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Unresolved approval/)).toBeInTheDocument();
+    expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
+  });
+
   it('keeps partial demand visible and null supply unknown', async () => {
     const heat = makeHeat(); heat.status = 'PARTIAL'; heat.fleet_status = 'UNAVAILABLE'; heat.issues = ['FLEET_UNAVAILABLE'];
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';

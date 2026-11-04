@@ -67,8 +67,13 @@ class DispatchService:
             self.store.records[key] = record
 
     async def close(self):
-        await self.persist()
-        await self.repository.close()
+        # Do not retry an ambiguous write during shutdown: reconciliation must
+        # load the known durable state on the next process start.
+        try:
+            if getattr(self.repository, "ready", True):
+                await self.persist()
+        finally:
+            await self.repository.close()
 
     async def persist(self):
         async with self.persist_lock:
@@ -95,6 +100,14 @@ class DispatchService:
 
     def claim_url(self, record):
         return f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}/claims/{record.data['dispatch_id']}"
+
+    async def route_traffic_assessment(self, geometry, distance, duration):
+        # Read-only bounded POST. Rebalancing owns the full 144k-link index;
+        # Dispatch must never use its 800-link dashboard projection.
+        return await request_json(self.client, "POST",
+            f"{self.settings.rebalancing_url}/api/v1/traffic/assess-route",
+            {"geometry": geometry, "distance_km": distance,
+             "duration_seconds": duration})
 
     async def prepare(self, record):
         recommendation = await request_json(self.client, "GET",
@@ -139,13 +152,16 @@ class DispatchService:
         if route is None or route.source != "ONEMAP":
             raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
         if route and self.traffic_enabled:
-            traffic = await request_json(self.client, "GET",
-                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions")
-            # A confirmed, geolocated closure must not be bypassed. Missing
-            # traffic feeds are visible as UNKNOWN, not an all-clear.
+            # No full Speed Bands JSON or map sampling on the Dispatch path.
+            # A valid configured OSRM alternate is considered before rejection.
+            async def score(chosen):
+                return await self.route_traffic_assessment(
+                    [p.model_dump() for p in chosen.geometry],
+                    chosen.distance_km, chosen.duration_seconds)
             route = await choose_traffic_route(self.client, route, origin,
                 destination.model_dump(), self.settings.arrival_tolerance_km,
-                traffic, self.clock.now(), facility=parking is not None, osrm_url="")
+                {"source": "LTA_DATAMALL"}, self.clock.now(),
+                facility=parking is not None, assess_route=score)
         if route:
             # Physical destination is the road endpoint, NOT the carpark's
             # off-road map coordinate. Fleet keeps the strict 50 m arrival rule.
@@ -271,11 +287,8 @@ class DispatchService:
             return {"status": "UNKNOWN", "action": "NONE", "reason": "NO_LIVE_ROAD_ROUTE"}
         if record["state"] in TERMINAL:
             return {"status": "FINISHED", "action": "NONE", "reason": "JOURNEY_TERMINAL"}
-        traffic, fleet = await asyncio.gather(
-            request_json(self.client, "GET",
-                f"{self.settings.rebalancing_url}/api/v1/traffic/conditions"),
-            request_json(self.client, "GET",
-                f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
+        fleet = await request_json(self.client, "GET",
+            f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot)
         vehicle = next((v for v in fleet.vehicles if v.vehicle_id == record["vehicle_id"]), None)
         if vehicle is None or vehicle.stale or vehicle.telemetry is None:
             return {"status": "UNKNOWN", "action": "NONE", "reason": "TELEMETRY_UNAVAILABLE"}
@@ -290,7 +303,7 @@ class DispatchService:
         estimated_length = sum(distance_km(p, q) for p, q in zip(remaining, remaining[1:]))
         total_geometry_length = sum(distance_km(p, q) for p, q in zip(points, points[1:]))
         baseline = cmd["route"]["duration_seconds"] * estimated_length / max(.001, total_geometry_length)
-        report = assess_traffic(remaining, estimated_length, baseline, traffic, self.clock.now())
+        report = await self.route_traffic_assessment(remaining, estimated_length, baseline)
         if report["blocked"]:
             return {"status": "BLOCKED_AHEAD", "action": "OPERATOR_REVIEW_REQUIRED",
                     "reason": "CLOSURE_ON_REMAINING_ROUTE", "assessment": report}

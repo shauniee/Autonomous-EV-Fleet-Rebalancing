@@ -15,6 +15,19 @@ def base_app(name: str) -> FastAPI:
     @app.middleware("http")
     async def request_log(request: Request, call_next):
         request.state.request_id = str(uuid4())
+        configured = getattr(app.state, "persistence", None)
+        repositories = (configured if isinstance(configured, tuple) else
+                        (() if configured is None else (configured,)))
+        if (request.url.path not in ("/health/live", "/health/ready") and
+                any(getattr(repository, "faulted", False) for repository in repositories)):
+            # A PostgreSQL commit response may be lost after the write. All
+            # normal reads/mutations are denied until a durable reload instead
+            # of exposing RAM that might not match the persisted snapshot.
+            response = JSONResponse(status_code=503, content={"error": {
+                "code": "PERSISTENCE_STATE_UNCERTAIN",
+                "request_id": request.state.request_id}})
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
         start = perf_counter()
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
