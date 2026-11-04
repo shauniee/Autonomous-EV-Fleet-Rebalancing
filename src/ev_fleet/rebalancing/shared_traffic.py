@@ -103,10 +103,11 @@ class TrafficCachePublisher:
             "digest": digest, "observed_at": observed_at.isoformat(),
             "count": len(rows), "error": None,
         }
-        async with self.redis.pipeline(transaction=True) as pipe:
-            pipe.set(data_key(name, digest), encoded, ex=max_age + 300)
-            pipe.hset(META_KEY, name, json.dumps(metadata, separators=(",", ":")))
-            await pipe.execute()
+        # Redis MULTI does NOT roll back a successful HSET when an earlier
+        # SET fails at runtime (e.g. OOM/noeviction). Publish payload first;
+        # only then atomically switch the metadata pointer to the new blob.
+        await self.redis.set(data_key(name, digest), encoded, ex=max_age + 300)
+        await self.redis.hset(META_KEY, name, json.dumps(metadata, separators=(",", ":")))
         return digest
 
     async def error(self, name, reason):
