@@ -60,9 +60,14 @@ without printing API keys or full requests.
   `CACHE_PENDING` / `CACHE_INVALID`; routes are **never assumed clear**.
 - A collector crash cannot kill Rebalancing. Conversely, a working API is not
   evidence that live LTA observations are available.
-- Redis is **ephemeral** in this local demo (64 MiB max memory, LRU). Data may
-  need another successful refresh after a Redis restart; no persistence
-  guarantee or HA ownership is claimed.
+- Redis is **ephemeral** in this local demo (128 MiB application memory budget;
+  Kubernetes memory limit 256 MiB). It uses **noeviction** to prevent silent
+  replacement of traffic metadata/data by unrelated display-cache writes.
+  At capacity a new write fails explicitly and previous observations expire
+  by age; no persistent data or high availability is promised.
+- Traffic payload publication writes the compressed blob before changing the
+  small metadata pointer. Redis MULTI is **not** relied upon for rollback of
+  partially failed commands.
 - Collector runs as a single replica with `Recreate` strategy. Do not scale
   it horizontally without a leader-election / lease design.
 - Under `TRAFFIC_SOURCE=DISABLED` the collector stays idle and all live
