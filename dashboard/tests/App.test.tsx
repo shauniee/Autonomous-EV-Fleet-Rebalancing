@@ -80,7 +80,7 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByText(/outcome UNKNOWN/)).toBeInTheDocument();
+    expect(await screen.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeInTheDocument();
     expect(screen.getByText(/Unresolved approval/)).toBeInTheDocument();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
