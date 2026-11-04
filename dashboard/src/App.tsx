@@ -78,7 +78,8 @@ export default function App() {
   }, []);
   useEffect(() => {
     const matching = pending && dispatches.data?.dispatches.find(d => d.request_id === pending.request_id);
-    if (matching && matching.state !== 'UNKNOWN') {
+    if (matching && (matching.claim_held === true ||
+        ['REJECTED', 'FAILED', 'SUCCEEDED'].includes(matching.state))) {
       setPending(null); setRecommendation(null); setConfirming(false);
       if (matching.state === 'REJECTED' || matching.state === 'FAILED') {
         setNotice('');
@@ -146,10 +147,12 @@ export default function App() {
       const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', body: JSON.stringify(approval) });
       if (!mounted.current) return;
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
-      if (result.state === 'UNKNOWN') {
+      if (result.state === 'UNKNOWN' ||
+          (!['REJECTED', 'FAILED', 'SUCCEEDED'].includes(result.state) &&
+           result.claim_held !== true)) {
         // HTTP 202 only confirms the coordinator received the request, not
         // that Fleet has acknowledged an atomic claim.
-        setError(`Dispatch ${result.dispatch_id}: outcome UNKNOWN. Reconcile or retry the same request ID.`);
+        setError(`Dispatch ${result.dispatch_id}: approval not yet confirmed (${result.state}). Reconcile or retry the same request ID.`);
       } else {
         setPending(null); setRecommendation(null);
         if (result.state === 'REJECTED' || result.state === 'FAILED') {
