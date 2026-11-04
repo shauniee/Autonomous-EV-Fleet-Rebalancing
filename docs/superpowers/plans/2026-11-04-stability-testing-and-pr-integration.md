@@ -74,7 +74,8 @@
 
 **Files:**
 - Modify conditionally: `src/ev_fleet/fleet/store.py`, `src/ev_fleet/simulator/commands.py`
-- Test: `tests/unit/test_fleet.py`, `tests/unit/test_moving_simulator.py` **if present**; otherwise create `tests/unit/test_availability_transitions.py`.
+- Review existing: `tests/unit/test_vehicle_claims.py`, `tests/unit/test_road_only_movement.py`.
+- Create for a confirmed regression: `tests/unit/test_availability_transitions.py`.
 - Create: `docs/evidence/2026-11-04/availability-diagnosis.md`
 
 **Interfaces:**
