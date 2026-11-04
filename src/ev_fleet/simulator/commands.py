@@ -3,6 +3,7 @@ import logging
 import random
 import time
 import os
+from math import isfinite
 from .traffic_motion import segment_speed
 from contextlib import suppress
 from uuid import uuid4
@@ -17,9 +18,11 @@ class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
                  speed_kph=30, time_scale=10, client=None, facilities_url=None,
-                 road_match_initial=True):
+                 road_match_initial=True, facilities_grace_seconds=10):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
+        if not isfinite(facilities_grace_seconds) or facilities_grace_seconds < 0:
+            raise ValueError("facilities grace must be finite and non-negative")
         self.fleet_url, self.dispatch_url, self.vehicle_id = fleet_url, dispatch_url, vehicle_id
         self.telemetry_interval, self.poll_interval = telemetry_interval, poll_interval
         self.tick_seconds, self.speed_kph, self.time_scale = tick_seconds, speed_kph, time_scale
@@ -33,8 +36,10 @@ class MovingNode:
         self.initialized = False
         self.ready = asyncio.Event()
         self.facilities_url = facilities_url
+        self.facilities_grace_seconds = facilities_grace_seconds
         self.road_match_initial = road_match_initial
         self.parking_verified = not bool(facilities_url)
+        self.parking_verified_at = None
         self.telemetry_changed = asyncio.Event()
         self.traffic_enabled = os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true"
         self.rebalancing_url = os.getenv("REBALANCING_URL", "http://rebalancing:8000").rstrip("/")
@@ -92,12 +97,7 @@ class MovingNode:
             if state["vehicle_id"] != self.vehicle_id:
                 raise RuntimeError("Parking response belongs to another vehicle")
         except Exception:
-            # Once a refresh has definitely failed, stale parking authority
-            # must not leave the EV advertised as available.
-            self.movement.park(None)
-            self.parking_verified = False
-            if previous_verified or self.movement.charging_state != previous_charging:
-                self.telemetry_changed.set()
+            self._parking_authority_current()
             raise
         self.movement.park(None)
         if state["pending"]:
@@ -106,9 +106,28 @@ class MovingNode:
             self.parking_verified = self.movement.park(state["parking"])
         else:
             self.parking_verified = True
+        self.parking_verified_at = time.monotonic() if self.parking_verified else None
         if (self.parking_verified != previous_verified
                 or self.movement.charging_state != previous_charging):
             self.telemetry_changed.set()
+
+    def _invalidate_parking_authority(self):
+        previous_verified = self.parking_verified
+        previous_charging = self.movement.charging_state
+        self.movement.park(None)
+        self.parking_verified = False
+        self.parking_verified_at = None
+        if previous_verified or self.movement.charging_state != previous_charging:
+            self.telemetry_changed.set()
+
+    def _parking_authority_current(self):
+        if not self.parking_verified:
+            return False
+        if (self.parking_verified_at is not None
+                and time.monotonic() - self.parking_verified_at <= self.facilities_grace_seconds):
+            return True
+        self._invalidate_parking_authority()
+        return False
 
     async def send_telemetry(self):
         if self.session is None:
@@ -116,8 +135,9 @@ class MovingNode:
         sequence = self.sequence
         self.sequence += 1  # A lost response must never reuse this number with a different payload.
         try:
+            parking_current = not self.facilities_url or self._parking_authority_current()
             physical = self.movement.telemetry()
-            if self.facilities_url and not self.parking_verified:
+            if not parking_current:
                 physical["availability"] = "UNAVAILABLE"
             await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry", {
                 "session_id": self.session, "sequence": sequence, "observed_at": utcnow().isoformat(),
@@ -145,6 +165,10 @@ class MovingNode:
             if previous and previous["completed"]:
                 return  # Never execute a completed command again.
             self.movement.accept(command)
+            if self.facilities_url:
+                # A verification belongs to one physical location. Never reuse
+                # origin parking authority after a journey begins.
+                self._invalidate_parking_authority()
             self.telemetry_changed.set()
             self.acknowledged = False
             self.event_sequence = 0
@@ -227,6 +251,8 @@ class MovingNode:
         while True:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
+            if self.facilities_url:
+                self._parking_authority_current()
             previous = (self.movement.state, self.movement.charging_state)
             speed = segment_speed(self.movement, self.speed_kph, self.traffic_snapshot)
             blocked = speed == 0 and self.movement.state == "RELOCATING"

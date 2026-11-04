@@ -27,7 +27,8 @@ def test_simulator_follows_road_corner_using_route_duration_and_distance():
     origin = {"latitude": 1.30, "longitude": 103.80}
     corner = {"latitude": 1.30, "longitude": 103.81}
     destination = {"latitude": 1.31, "longitude": 103.81}
-    route = {"geometry": [origin, corner, destination], "distance_km": 2, "duration_seconds": 200}
+    route = {"source": "ONEMAP", "geometry": [origin, corner, destination],
+             "distance_km": 2, "duration_seconds": 200}
     command = {"command_id": str(uuid4()), "dispatch_id": str(uuid4()),
                "target_position": destination, "route_factor": 1.3,
                "energy_margin_factor": 1.15, "min_reserve_pct": 20, "route": route}

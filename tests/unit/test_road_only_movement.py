@@ -127,10 +127,13 @@ def test_parked_ev_stays_at_drivable_road_access_without_teleport():
     asyncio.run(scenario())
 
 
-def test_parking_refresh_keeps_verified_availability_until_response_arrives():
+def test_parking_refresh_keeps_verified_state_through_ten_second_failure_grace(monkeypatch):
     from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
 
     async def scenario():
+        tick = [100.0]
+        monkeypatch.setattr(commands.time, "monotonic", lambda: tick[0])
         position = {"latitude": 1.436, "longitude": 103.786}
         parking = {
             "facility_id": "test-woodlands-parking", "name": "Test parking",
@@ -139,10 +142,12 @@ def test_parking_refresh_keeps_verified_availability_until_response_arrives():
             "charging_target_soc_pct": 80,
         }
         node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-parking-refresh",
-                          position, 70, facilities_url="http://facilities.test")
+                          position, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
         node.session = str(uuid4())
         node.initialized = True
         node.parking_verified = True
+        node.parking_verified_at = tick[0]
         assert node.movement.park(parking)
 
         request_started = asyncio.Event()
@@ -181,10 +186,230 @@ def test_parking_refresh_keeps_verified_availability_until_response_arrives():
             raise RuntimeError("Facilities response invalid")
 
         node.request = failed_request
+        tick[0] = 110.0
+        with pytest.raises(RuntimeError, match="Facilities response invalid"):
+            await node.refresh_parking()
+        assert node.parking_verified is True
+        assert node.movement.parking == parking
+
+        tick[0] = 110.001
         with pytest.raises(RuntimeError, match="Facilities response invalid"):
             await node.refresh_parking()
         assert node.parking_verified is False
         assert node.movement.parking is None
+
+    asyncio.run(scenario())
+
+
+def test_parking_refresh_has_no_grace_before_first_verification(monkeypatch):
+    from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
+
+    async def scenario():
+        monkeypatch.setattr(commands.time, "monotonic", lambda: 100.0)
+        position = {"latitude": 1.436, "longitude": 103.786}
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-no-authority",
+                          position, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
+
+        async def failed_request(method, url, body=None):
+            raise RuntimeError("Facilities unavailable")
+
+        node.request = failed_request
+        with pytest.raises(RuntimeError, match="Facilities unavailable"):
+            await node.refresh_parking()
+        assert node.parking_verified is False
+        assert node.movement.parking is None
+
+    asyncio.run(scenario())
+
+
+def test_valid_parking_response_resets_grace_and_pending_fails_closed(monkeypatch):
+    from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
+
+    async def scenario():
+        tick = [100.0]
+        monkeypatch.setattr(commands.time, "monotonic", lambda: tick[0])
+        position = {"latitude": 1.436, "longitude": 103.786}
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-reset-grace",
+                          position, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
+        response = {"vehicle_id": node.vehicle_id, "parking": None, "pending": False}
+
+        async def facilities_response(method, url, body=None):
+            return response
+
+        async def failed_request(method, url, body=None):
+            raise RuntimeError("Facilities unavailable")
+
+        node.request = facilities_response
+        await node.refresh_parking()
+        tick[0] = 109.0
+        node.request = failed_request
+        with pytest.raises(RuntimeError, match="Facilities unavailable"):
+            await node.refresh_parking()
+        assert node.parking_verified is True
+
+        tick[0] = 109.0
+        node.request = facilities_response
+        await node.refresh_parking()
+        tick[0] = 118.5
+        node.request = failed_request
+        with pytest.raises(RuntimeError, match="Facilities unavailable"):
+            await node.refresh_parking()
+        assert node.parking_verified is True
+
+        response["pending"] = True
+        node.request = facilities_response
+        await node.refresh_parking()
+        assert node.parking_verified is False
+        tick[0] = 118.6
+        node.request = failed_request
+        with pytest.raises(RuntimeError, match="Facilities unavailable"):
+            await node.refresh_parking()
+        assert node.parking_verified is False
+
+    asyncio.run(scenario())
+
+
+def test_expired_parking_grace_fails_closed_before_next_refresh(monkeypatch):
+    from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
+
+    async def scenario():
+        tick = [100.0]
+        monkeypatch.setattr(commands.time, "monotonic", lambda: tick[0])
+        position = {"latitude": 1.436, "longitude": 103.786}
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-expired-grace",
+                          position, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
+        node.session = str(uuid4())
+        node.initialized = True
+        telemetry = []
+
+        async def request(method, url, body=None):
+            if method == "GET" and url.endswith("/parking"):
+                return {"vehicle_id": node.vehicle_id, "parking": None, "pending": False}
+            if method == "POST" and url.endswith("/telemetry"):
+                telemetry.append(body)
+                return {}
+            raise AssertionError(f"Unexpected request: {method} {url}")
+
+        node.request = request
+        await node.refresh_parking()
+        tick[0] = 110.001
+        await node.send_telemetry()
+        assert telemetry[-1]["availability"] == "UNAVAILABLE"
+        assert node.parking_verified is False
+
+    asyncio.run(scenario())
+
+
+def test_expired_parking_grace_stops_charging_without_refresh(monkeypatch):
+    from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
+
+    class StopAfterTick(Exception):
+        pass
+
+    async def scenario():
+        tick = [100.0]
+        monkeypatch.setattr(commands.time, "monotonic", lambda: tick[0])
+        position = {"latitude": 1.436, "longitude": 103.786}
+        parking = {
+            "facility_id": "test-charger", "name": "Test charger", "position": position,
+            "zone_id": "woodlands", "source": "MOCK", "charging_allocated": True,
+            "charging_power_kw": 50, "charging_target_soc_pct": 80,
+        }
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-expired-charge",
+                          position, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
+
+        async def parking_response(method, url, body=None):
+            return {"vehicle_id": node.vehicle_id, "parking": parking, "pending": False}
+
+        node.request = parking_response
+        await node.refresh_parking()
+        assert node.movement.charging_state == "CHARGING"
+        sleep_calls = [0]
+
+        async def one_tick(_seconds):
+            if sleep_calls[0]:
+                raise StopAfterTick
+            sleep_calls[0] += 1
+            tick[0] = 110.001
+
+        monkeypatch.setattr(commands.asyncio, "sleep", one_tick)
+        with pytest.raises(StopAfterTick):
+            await node.movement_loop()
+        assert node.movement.soc_pct == 70
+        assert node.movement.charging_state == "NOT_CHARGING"
+        assert node.parking_verified is False
+
+    asyncio.run(scenario())
+
+
+def test_relocation_invalidates_origin_parking_grace(monkeypatch):
+    from ev_fleet.contracts.common import utcnow
+    from ev_fleet.simulator.commands import MovingNode
+    from ev_fleet.simulator import commands
+    from tests.routing_fixture import fixture_route
+
+    async def scenario():
+        tick = [100.0]
+        monkeypatch.setattr(commands.time, "monotonic", lambda: tick[0])
+        origin = {"latitude": 1.436, "longitude": 103.786}
+        destination = {"latitude": 1.437, "longitude": 103.787}
+        node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-relocation-grace",
+                          origin, 70, facilities_url="http://facilities.test",
+                          facilities_grace_seconds=10)
+        node.session = str(uuid4())
+        node.initialized = True
+        node.ready.set()
+        command = {
+            "dispatch_id": str(uuid4()), "command_id": str(uuid4()),
+            "vehicle_id": node.vehicle_id, "fleet_instance_id": str(uuid4()),
+            "target_zone_id": "woodlands", "target_position": destination,
+            "issued_at": utcnow().isoformat(), "min_reserve_pct": 20,
+            "route_factor": 1.3, "energy_margin_factor": 1.15,
+            "route": fixture_route(origin, destination).model_dump(mode="json"),
+        }
+        phase = ["dispatch"]
+        telemetry = []
+
+        async def request(method, url, body=None):
+            if method == "GET" and url.endswith("/parking"):
+                if phase[0] == "destination-failure":
+                    raise RuntimeError("Facilities unavailable at destination")
+                return {"vehicle_id": node.vehicle_id, "parking": None, "pending": False}
+            if method == "GET" and url.endswith("/commands"):
+                return {"commands": [command]}
+            if method == "POST" and url.endswith("/acknowledgements"):
+                return {}
+            if method == "GET" and f"/dispatches/{command['dispatch_id']}" in url:
+                return {"state": "SUCCEEDED" if phase[0] == "destination-failure" else "IN_PROGRESS",
+                        "claim_held": phase[0] != "destination-failure"}
+            if method == "POST" and url.endswith("/events"):
+                return {}
+            if method == "POST" and url.endswith("/telemetry"):
+                telemetry.append(body)
+                return {}
+            raise AssertionError(f"Unexpected request: {method} {url}")
+
+        node.request = request
+        await node.command_step()
+        assert node.parking_verified is False
+        assert node.parking_verified_at is None
+
+        node.movement.state = "ARRIVED"
+        node.movement.position = destination.copy()
+        phase[0] = "destination-failure"
+        tick[0] = 102.0
+        with pytest.raises(RuntimeError, match="Facilities unavailable at destination"):
+            await node.command_step()
+        await node.send_telemetry()
+        assert telemetry[-1]["availability"] == "UNAVAILABLE"
 
     asyncio.run(scenario())
 
