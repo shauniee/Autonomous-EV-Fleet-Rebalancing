@@ -4,6 +4,7 @@ import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, Charg
 import { api, ApiError, message } from './api/client';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
+import { FleetPulse } from './components/FleetPulse';
 import { SingaporeMap } from './components/SingaporeMap';
 import { HotspotToasts } from './components/HotspotToasts';
 import { ChargingOperations } from './components/ChargingOperations';
@@ -203,7 +204,7 @@ export default function App() {
   }
   return <div className="app">
     <HotspotToasts zones={heat.data?.zones}/>
-    <header><div className="brand-icon" aria-hidden="true">↗</div><div><div className="eyebrow">Operations / Singapore</div><h1>Fleet Dispatch</h1></div><div className="header-actions"><span className="simulation">SIMULATION</span><div className="theme-toggle" role="group" aria-label="Color theme">
+    <header className="app-header"><div className="brand-lockup"><div className="brand-icon" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 28L18 20L25 24L31 12"/><circle cx="10" cy="28" r="3.5" fill="currentColor" stroke="none"/><circle cx="18" cy="20" r="3.5" fill="currentColor" stroke="none"/><circle cx="31" cy="12" r="3.5" fill="currentColor" stroke="none"/></svg></div><div className="brand-copy"><h1>Fleet Dispatch</h1><p>Singapore operations</p></div></div><div className="header-actions"><span className="simulation">SIMULATION</span><div className="theme-toggle" role="group" aria-label="Color theme">
           <button type="button" className="theme-option" aria-label="Light mode" aria-pressed={theme === 'light'} onClick={() => { applyTheme('light', true); setTheme('light'); }}>
             <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></span>Light
           </button>
@@ -213,7 +214,7 @@ export default function App() {
         </div></div></header>
     <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name={liveFacilities ? 'Facilities (LTA)' : 'Facilities (mock)'} resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
     <main>
-      <div className="page-intro"><div><h2>A clear view. An informed move.</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); }}>Refresh now</button></div>
+      <div className="page-intro"><div><h2>Operations overview</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button className="refresh-action" onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); }}>Refresh now</button></div>
       {(heat.error || fleet.error || dispatches.error) && <p className="warning" role="status">Some services are unavailable. Retained observations are last known, not live. Healthy panels continue updating.</p>}
       {heat.data?.status === 'PARTIAL' && <p className="warning" role="status">Demand response is partial · Fleet {heat.data.fleet_status}. {heat.data.issues.join(' · ')}</p>}
       {error && <p className="warning" role="alert">{error}</p>}{notice && <p className="notice" role="status">{notice}</p>}
@@ -222,6 +223,7 @@ export default function App() {
         catch (e) { setError(message(e)); }
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
+      <FleetPulse fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
       <div className="workspace"><section ref={mapPanel} tabIndex={-1} aria-labelledby="map-title" className="panel map-panel workspace-main"><div className="section-title"><h2 id="map-title">Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
         <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} telemetryFeedHealthy={fleetFeedHealthy} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
