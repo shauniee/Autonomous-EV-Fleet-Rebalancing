@@ -258,8 +258,16 @@ async def collect_feed(monitor, publisher, name, *, sleeper=asyncio.sleep):
             except (RedisError, OSError):
                 LOGGER.warning("traffic feed=%s cache write unavailable", name)
             LOGGER.warning("traffic feed=%s failed=%s", name, str(exc))
-        except (RedisError, OSError, ValueError):
-            LOGGER.warning("traffic feed=%s cache unavailable or invalid", name)
+        except ValueError:
+            # A decoded but oversized/invalid payload is NOT a successful feed.
+            # Preserve its last success time and expose a bounded error code.
+            try:
+                await publisher.error(name, "PAYLOAD_INVALID")
+            except (RedisError, OSError):
+                pass
+            LOGGER.warning("traffic feed=%s invalid published payload", name)
+        except (RedisError, OSError):
+            LOGGER.warning("traffic feed=%s cache unavailable", name)
         await sleeper(refresh_seconds)
 
 
