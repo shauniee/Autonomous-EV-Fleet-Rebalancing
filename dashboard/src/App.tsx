@@ -202,6 +202,8 @@ export default function App() {
       }
     }
   }
+  // Present the operator's progression without changing dispatch eligibility or approval.
+  const workflowStep = pending || pendingBatch ? 3 : recommendation || batch ? 2 : zone ? 1 : 0;
   return <div className="app">
     <HotspotToasts zones={heat.data?.zones}/>
     <header className="app-header"><div className="brand-lockup"><div className="brand-icon" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 28L18 20L25 24L31 12"/><circle cx="10" cy="28" r="3.5" fill="currentColor" stroke="none"/><circle cx="18" cy="20" r="3.5" fill="currentColor" stroke="none"/><circle cx="31" cy="12" r="3.5" fill="currentColor" stroke="none"/></svg></div><div className="brand-copy"><h1>Fleet Dispatch</h1><p>Singapore operations</p></div></div><div className="header-actions"><span className="simulation">SIMULATION</span><div className="theme-toggle" role="group" aria-label="Color theme">
@@ -212,7 +214,7 @@ export default function App() {
             <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.5 13.2A8.5 8.5 0 0 1 10.8 3.5a8.5 8.5 0 1 0 9.7 9.7Z"/></svg></span>Dark
           </button>
         </div></div></header>
-    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name={liveFacilities ? 'Facilities (LTA)' : 'Facilities (mock)'} resource={facilities}/><span className="refresh-note">Auto-refresh · 2 seconds · SGT</span></div>
+    <div className="service-bar"><ServiceStatus name="Demand" resource={heat}/><ServiceStatus name="Fleet" resource={fleet}/><ServiceStatus name="Dispatch" resource={dispatches}/><ServiceStatus name={liveFacilities ? 'Facilities (LTA)' : 'Facilities (mock)'} resource={facilities}/><span className="refresh-note">Polling intervals vary · Times in SGT</span></div>
     <main>
       <div className="page-intro"><div><h2>Operations overview</h2><p>Monitor demand, review a recommendation, then approve a relocation.</p></div><button className="refresh-action" onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); }}>Refresh now</button></div>
       {(heat.error || fleet.error || dispatches.error) && <p className="warning" role="status">Some services are unavailable. Retained observations are last known, not live. Healthy panels continue updating.</p>}
@@ -224,16 +226,32 @@ export default function App() {
       }}>Reconcile batch</button></div>}
       {pending && <div className="warning" role="status"><strong>{submitting ? 'Submitting approval…' : 'Unresolved approval'}</strong><p>Request {pending.request_id}. New approvals are paused until this request is resolved.</p><button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button> <button onClick={dispatches.refresh}>Reconcile status</button></div>}
       <FleetPulse fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
-      <div className="workspace"><section ref={mapPanel} tabIndex={-1} aria-labelledby="map-title" className="panel map-panel workspace-main"><div className="section-title"><h2 id="map-title">Singapore demand & EV routes</h2><span className="muted">6 operating zones</span></div>
+      <section className="dispatch-flow" aria-label="Dispatch workflow">
+        <ol>
+          <li data-state={workflowStep > 0 ? 'complete' : 'current'} aria-current={workflowStep === 0 ? 'step' : undefined}>
+            <span className="flow-number" aria-hidden="true">1</span>
+            <span className="flow-body"><strong>Choose a zone</strong><span>{zone ? zone.name : 'From the map or zone list'}</span></span>
+          </li>
+          <li data-state={workflowStep > 1 ? 'complete' : workflowStep === 1 ? 'current' : 'upcoming'} aria-current={workflowStep === 1 ? 'step' : undefined}>
+            <span className="flow-number" aria-hidden="true">2</span>
+            <span className="flow-body"><strong>Request a recommendation</strong><span>{recommending ? 'Evaluating eligible EVs' : recommendation || batch || pending || pendingBatch ? 'Proposal prepared' : 'Check supply, battery and suitability'}</span></span>
+          </li>
+          <li data-state={workflowStep >= 2 ? 'current' : 'upcoming'} aria-current={workflowStep >= 2 ? 'step' : undefined}>
+            <span className="flow-number" aria-hidden="true">3</span>
+            <span className="flow-body"><strong>Review and approve</strong><span>{pending || pendingBatch ? 'Reconcile the pending outcome' : 'Requires explicit dispatcher approval'}</span></span>
+          </li>
+        </ol>
+      </section>
+      <div className="workspace"><section ref={mapPanel} tabIndex={-1} aria-labelledby="map-title" className="panel map-panel workspace-main"><div className="section-title"><h2 id="map-title">Singapore demand & EV routes</h2><span className="muted">{zones.length ? `${zones.length} operating zones` : 'Awaiting zone feed'}</span></div>
         <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data} telemetryFeedHealthy={fleetFeedHealthy} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch} onSelectDispatch={setSelectedDispatch}/>
         <div className="legend">Hotspot severity {['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
         <p className="snapshot">Demand snapshot {time(heat.data?.demand_snapshot_at)} · Fleet snapshot {time(heat.data?.fleet_snapshot_at)} · EV markers follow reported telemetry</p>
       </section>
       <aside ref={inspector} tabIndex={-1} className="panel target-panel" aria-labelledby="inspector-title">
-        <div className="section-title"><h2 id="inspector-title">Dispatch inspector</h2></div>
-        <div className="zone-list" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
+        <div className="section-title"><h2 id="inspector-title">Dispatch inspector</h2><span className="inspector-hint">Operator controlled</span></div>
+        <div className="zone-list" role="group" aria-label="Select target zone">{zones.map(z => <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}><strong>{z.name}</strong><Badge value={z.hotspot_severity}/></button>)}</div>
         {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
-        {zone ? <details className="destination-details"><summary>{zone.name} · Demand & supply details</summary><ZoneDetails zone={zone}/></details> : <p className="empty">Select a zone on the map or from the list to review its demand and request a recommendation.</p>}
+        {zone ? <details className="destination-details"><summary>{zone.name} · Demand & supply details</summary><ZoneDetails zone={zone}/></details> : <p className="empty inspector-empty">Select a zone on the map or from the list to review its demand and request a recommendation.</p>}
       {zone && <section className="relocation-request" aria-labelledby="relocation-request-title"><div className="section-title"><h3 id="relocation-request-title">Relocation request</h3><span className="muted">1–20 EVs</span></div>
           <div className="request-fields"><div className="request-field">
           <label htmlFor="relocation-purpose">Destination purpose</label>
