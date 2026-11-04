@@ -28,7 +28,7 @@ describe('operational dashboard snapshot', () => {
     />);
 
     expect(screen.getByRole('heading', { name: 'Operational snapshot' })).toBeInTheDocument();
-    expect(metric('Vehicles online').getByText('1')).toBeInTheDocument();
+    expect(metric('Reporting EVs').getByText('1')).toBeInTheDocument();
     expect(metric('Available EVs').getByText('1')).toBeInTheDocument();
     expect(metric('Open dispatches').getByText('1')).toBeInTheDocument();
     expect(metric('Critical zones').getByText('1')).toBeInTheDocument();
@@ -46,7 +46,7 @@ describe('operational dashboard snapshot', () => {
       dispatches={{ data: { dispatches: [] }, error: 'Connection lost', updatedAt: fresh }}
       now={now}
     />);
-    expect(metric('Vehicles online').getByLabelText('Vehicles online: unavailable')).toHaveTextContent('—');
+    expect(metric('Reporting EVs').getByLabelText('Reporting EVs: unavailable')).toHaveTextContent('—');
     expect(metric('Available EVs').getByLabelText('Available EVs: unavailable')).toHaveTextContent('—');
     expect(metric('Critical zones').getByLabelText('Critical zones: unavailable')).toHaveTextContent('—');
     expect(metric('Open dispatches').getByLabelText('Open dispatches: unavailable')).toHaveTextContent('—');
@@ -66,7 +66,7 @@ describe('operational dashboard snapshot', () => {
       dispatches={{ data: { dispatches: [] }, updatedAt }}
       now={now}
     />);
-    for (const label of ['Vehicles online', 'Available EVs', 'Open dispatches', 'Critical zones']) {
+    for (const label of ['Reporting EVs', 'Available EVs', 'Open dispatches', 'Critical zones']) {
       expect(metric(label).getByText('0')).toBeInTheDocument();
     }
   });
