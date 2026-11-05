@@ -49,6 +49,14 @@ class RecoveryAssessment(Model):
     evidence: RecoveryEvidence
 
 
+class SimulatorConfiguration(Model):
+    model_version: Literal["movement-v1"] = "movement-v1"
+    capacity_kwh: float = Field(gt=0, le=300)
+    consumption_kwh_per_km: float = Field(gt=0, le=2)
+    speed_kph: float = Field(gt=0)
+    time_scale: float = Field(gt=0)
+
+
 class SimulatorCheckpoint(Model):
     schema_version: Literal[1] = 1
     vehicle_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
@@ -62,6 +70,7 @@ class SimulatorCheckpoint(Model):
     pending_event: DispatchEvent | None = None
     next_event_sequence: int = Field(default=0, ge=0)
     completed_command_id: UUID | None = None
+    simulation: SimulatorConfiguration | None = None
 
     @model_validator(mode="after")
     def coherent_execution(self):

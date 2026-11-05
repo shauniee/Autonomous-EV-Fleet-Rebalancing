@@ -135,6 +135,12 @@ class SimulatorRecovery:
         store, physical, command = self.store, checkpoint.physical, checkpoint.command
         if checkpoint.vehicle_id != vehicle_id or str(checkpoint.fleet_instance_id) != store.instance_id:
             raise HTTPException(409, "SIMULATOR_CHECKPOINT_IDENTITY_MISMATCH")
+        configuration = checkpoint.simulation
+        registration = record["registration"]
+        if configuration is not None and (configuration.capacity_kwh != registration.battery_capacity_kwh
+                or configuration.consumption_kwh_per_km != registration.consumption_kwh_per_km
+                or configuration.time_scale != self.settings.simulation_time_scale):
+            raise HTTPException(409, "SIMULATOR_CONFIGURATION_MISMATCH")
         if (physical.observed_at - store.clock.now()).total_seconds() > 5:
             raise HTTPException(422, "OBSERVATION_TIME_INVALID")
         if record["active_rental"] or record["active_charging_task"]:
