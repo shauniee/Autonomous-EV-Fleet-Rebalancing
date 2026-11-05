@@ -8,10 +8,11 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings
 from ev_fleet.common.travel import distance_km, predicted_soc
 from ev_fleet.common.persistence import SnapshotRepository
+from .recovery import SimulatorRecovery
 
 
 class FleetStore:
-    def __init__(self, settings=None, clock=None, repository=None):
+    def __init__(self, settings=None, clock=None, repository=None, recovery_settings=None):
         self.settings = settings or DispatchSettings.from_env()
         self.clock = clock or Clock()
         self.lock = asyncio.Lock()
@@ -21,6 +22,8 @@ class FleetStore:
         self.version = 0
         self.repository = repository or SnapshotRepository.from_env("fleet")
         self.history_cache = {}  # bounded ephemeral-only cache; PostgreSQL is durable
+        self.persistence_uncertain = False
+        self.simulator_recovery = SimulatorRecovery(self, recovery_settings)
 
     async def start(self):
         await self.repository.start()
@@ -31,6 +34,8 @@ class FleetStore:
             self.vehicles = payload["vehicles"]
             for record in self.vehicles.values():
                 record.setdefault("control_version", record["state_version"])
+                record.setdefault("simulator_owner", None)
+                record.setdefault("simulator_checkpoint", None)
             self.charging_tasks = payload.get("charging_tasks", {})
             now, tick = self.clock.now(), self.clock.monotonic()
             for record in self.vehicles.values():
@@ -44,7 +49,20 @@ class FleetStore:
     async def close(self):
         await self.repository.close()
 
+    @property
+    def enabled(self):
+        return self.repository.enabled
+
+    @property
+    def ready(self):
+        return self.repository.ready and not self.persistence_uncertain
+
+    def ensure_consistent(self):
+        if self.persistence_uncertain:
+            raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN")
+
     async def persist(self, telemetry_sample=None):
+        self.ensure_consistent()
         payload = {"instance_id": self.instance_id, "version": self.version,
                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks}
         if telemetry_sample is None:
@@ -54,6 +72,7 @@ class FleetStore:
 
     async def register(self, registration):
         async with self.lock:
+            self.ensure_consistent()
             key = registration.vehicle_id
             if key in self.vehicles:
                 if self.vehicles[key]["registration"] != registration:
@@ -65,13 +84,15 @@ class FleetStore:
                       "control_version": 1,
                       "active_claim": None, "claims": {}, "current_zone_id": None,
                       "active_rental": None, "active_charging_task": None, "rentals": {},
-                      "rental_start_requests": {}, "rental_return_requests": {}}
+                      "rental_start_requests": {}, "rental_return_requests": {},
+                      "simulator_owner": None, "simulator_checkpoint": None}
             self.vehicles[key] = record
             self.version += 1
             await self.persist()
             return self.view(record)
 
     def record(self, vehicle_id):
+        self.ensure_consistent()
         if vehicle_id not in self.vehicles:
             raise HTTPException(404, "VEHICLE_NOT_FOUND")
         return self.vehicles[vehicle_id]
@@ -79,6 +100,8 @@ class FleetStore:
     async def session(self, vehicle_id, request_id):
         async with self.lock:
             record = self.record(vehicle_id)
+            if self.simulator_recovery.guarded(vehicle_id, record):
+                raise HTTPException(409, "SIMULATOR_SESSION_REQUIRED")
             if request_id in record["retired_requests"]:
                 raise HTTPException(409, "SESSION_REQUEST_SUPERSEDED")
             if request_id != record["session_request_id"]:
@@ -96,49 +119,62 @@ class FleetStore:
     async def telemetry(self, vehicle_id, update):
         async with self.lock:
             record = self.record(vehicle_id)
-            if update.session_id != record["session_id"]:
-                raise HTTPException(409, "SESSION_INVALID")
-            previous = record["telemetry"]
-            if previous and previous.session_id == update.session_id:
-                if update.sequence == previous.sequence and update == previous:
-                    return {"accepted": False, "duplicate": True, "vehicle": self.view(record)}
-                if update.sequence <= previous.sequence:
-                    raise HTTPException(409, "SEQUENCE_CONFLICT")
-                if update.observed_at < previous.observed_at:
-                    raise HTTPException(409, "OBSERVATION_OUT_OF_ORDER")
-            now = self.clock.now()
-            age = (now - update.observed_at).total_seconds()
-            if age < -5 or age >= self.settings.stale_seconds:
-                raise HTTPException(422, "OBSERVATION_TIME_INVALID")
-            # Reject impossible relocation telemetry BEFORE mutating the vehicle record.
-            if record["active_rental"] is not None and (update.relocation_state != "IDLE" or update.active_dispatch_id is not None):
-                raise HTTPException(409, "RENTED_RELOCATION_CONFLICT")
-            # Continuous speed/SOC/GPS reports do not invalidate a pending
-            # operator approval. Control transitions still advance the separate
-            # compare-and-swap epoch and claims recheck current physical data.
-            changed_control = previous is None or any(
-                getattr(previous, field) != getattr(update, field) for field in (
-                    "availability", "relocation_state", "active_dispatch_id",
-                    "charging_state", "parked_facility_id"))
-            record.update(telemetry=update, received_at=now,
-                          received_tick=self.clock.monotonic(), initial_age=max(0, age))
-            if update.relocation_state == "RELOCATING" or record["active_rental"] is not None:
-                record["current_zone_id"] = None
-            record["state_version"] += 1
-            if changed_control:
-                record["control_version"] += 1
+            if self.simulator_recovery.guarded(vehicle_id, record):
+                raise HTTPException(409, "SIMULATOR_CHECKPOINT_REQUIRED")
+            sample = self.stage_telemetry(vehicle_id, record, update)
+            if sample is None:
+                return {"accepted": False, "duplicate": True, "vehicle": self.view(record)}
             self.version += 1
-            sample = {"vehicle_id": vehicle_id, "session_id": update.session_id,
-                      "sequence": update.sequence, "observed_at": update.observed_at,
-                      "received_at": now, "telemetry": update.model_dump(mode="json")}
             await self.persist(telemetry_sample=sample)
-            if not getattr(self.repository, "enabled", False):
-                self.history_cache.setdefault(vehicle_id, deque(maxlen=500)).append({
-                    **{k: v for k, v in sample.items() if k != "telemetry"},
-                    "session_id": str(update.session_id),
-                    "observed_at": update.observed_at.isoformat(), "received_at": now.isoformat()})
-                self.history_cache[vehicle_id][-1]["telemetry"] = sample["telemetry"]
+            self.cache_telemetry(sample)
             return {"accepted": True, "duplicate": False, "vehicle": self.view(record)}
+
+    def stage_telemetry(self, vehicle_id, record, update):
+        """Validate/apply to the supplied record; caller owns the lock and commit."""
+        if update.session_id != record["session_id"]:
+            raise HTTPException(409, "SESSION_INVALID")
+        previous = record["telemetry"]
+        if previous and previous.session_id == update.session_id:
+            if update.sequence == previous.sequence and update == previous:
+                return None
+            if update.sequence <= previous.sequence:
+                raise HTTPException(409, "SEQUENCE_CONFLICT")
+            if update.observed_at < previous.observed_at:
+                raise HTTPException(409, "OBSERVATION_OUT_OF_ORDER")
+        now = self.clock.now()
+        age = (now - update.observed_at).total_seconds()
+        if age < -5 or age >= self.settings.stale_seconds:
+            raise HTTPException(422, "OBSERVATION_TIME_INVALID")
+        # Reject impossible relocation telemetry BEFORE mutating the vehicle record.
+        if record["active_rental"] is not None and (update.relocation_state != "IDLE" or update.active_dispatch_id is not None):
+            raise HTTPException(409, "RENTED_RELOCATION_CONFLICT")
+        # Continuous speed/SOC/GPS reports do not invalidate a pending
+        # operator approval. Control transitions still advance the separate
+        # compare-and-swap epoch and claims recheck current physical data.
+        changed_control = previous is None or any(
+            getattr(previous, field) != getattr(update, field) for field in (
+                "availability", "relocation_state", "active_dispatch_id",
+                "charging_state", "parked_facility_id"))
+        record.update(telemetry=update, received_at=now,
+                      received_tick=self.clock.monotonic(), initial_age=max(0, age))
+        if update.relocation_state == "RELOCATING" or record["active_rental"] is not None:
+            record["current_zone_id"] = None
+        record["state_version"] += 1
+        if changed_control:
+            record["control_version"] += 1
+        sample = {"vehicle_id": vehicle_id, "session_id": update.session_id,
+                  "sequence": update.sequence, "observed_at": update.observed_at,
+                  "received_at": now, "telemetry": update.model_dump(mode="json")}
+        return sample
+
+    def cache_telemetry(self, sample):
+        if not self.enabled:
+            self.history_cache.setdefault(sample["vehicle_id"], deque(maxlen=500)).append({
+                **{k: v for k, v in sample.items() if k != "telemetry"},
+                "session_id": str(sample["session_id"]),
+                "observed_at": sample["observed_at"].isoformat(),
+                "received_at": sample["received_at"].isoformat(),
+                "telemetry": deepcopy(sample["telemetry"])})
 
     async def telemetry_history(self, vehicle_id, limit=100):
         async with self.lock:
@@ -156,10 +192,24 @@ class FleetStore:
         age = None if telemetry is None else record["initial_age"] + max(
             0, self.clock.monotonic() - record["received_tick"])
         current_session = telemetry is not None and telemetry.session_id == record["session_id"]
-        stale = not current_session or age >= self.settings.stale_seconds
+        owner = record.get("simulator_owner")
+        guarded = self.simulator_recovery.guarded(record["registration"].vehicle_id, record)
+        configured = (self.simulator_recovery.settings.enabled
+                      and record["registration"].vehicle_id in self.simulator_recovery.settings.vehicle_ids)
+        lease_active = not guarded or (configured and owner is not None and owner["expires_at"] > self.clock.now())
+        stale = not current_session or age >= self.settings.stale_seconds or not lease_active or self.persistence_uncertain
+        checkpoint = record.get("simulator_checkpoint")
+        recovery = None if owner is None else {
+            "generation": owner["generation"], "owner_revision": owner["revision"],
+            "expires_at": owner["expires_at"],
+            "status": "BLOCKED" if self.persistence_uncertain or not configured else "ACTIVE" if lease_active else "EXPIRED",
+            "checkpoint_revision": checkpoint["revision"] if checkpoint else 0,
+            "checkpoint_at": checkpoint["data"]["physical"]["observed_at"] if checkpoint else None,
+            "durable": self.enabled}
         return {**record["registration"].model_dump(mode="json"),
                 "state_version": record["state_version"],
                 "control_version": record.get("control_version", record["state_version"]),
+                "simulator_recovery": recovery,
                 "telemetry": telemetry.model_dump(mode="json") if telemetry else None,
                 "received_at": record["received_at"].isoformat() if telemetry else None,
                 "telemetry_age_seconds": age, "stale": stale,

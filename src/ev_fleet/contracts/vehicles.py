@@ -54,6 +54,16 @@ class SessionRequest(Model):
     request_id: UUID
 
 
+class SimulatorRecoveryState(Model):
+    generation: int = Field(ge=1)
+    owner_revision: int = Field(ge=1)
+    expires_at: AwareDatetime
+    status: Literal["ACTIVE", "EXPIRED", "BLOCKED"]
+    checkpoint_revision: int = Field(ge=0)
+    checkpoint_at: AwareDatetime | None = None
+    durable: bool
+
+
 class VehicleState(VehicleRegistration):
     state_version: int = Field(ge=1)
     control_version: int = Field(default=1, ge=1)
@@ -68,6 +78,7 @@ class VehicleState(VehicleRegistration):
     effective_availability: Availability = Availability.UNAVAILABLE
     current_zone_id: str | None = None
     effective_relocation_state: RelocationState = RelocationState.IDLE
+    simulator_recovery: SimulatorRecoveryState | None = None
 
     @model_validator(mode="after")
     def telemetry_metadata(self):

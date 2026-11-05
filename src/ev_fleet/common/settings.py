@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from ev_fleet.contracts.common import Model
@@ -35,6 +36,34 @@ class DispatchSettings(Settings):
     progress_timeout_seconds: float = Field(default=30, gt=0)
     reconcile_interval_seconds: float = Field(default=1, gt=0)
     arrival_tolerance_km: float = Field(default=.05, gt=0, le=1)
+
+
+class SimulatorRecoverySettings(Model):
+    enabled: bool = False
+    vehicle_ids: list[str] = Field(default_factory=list, max_length=1000)
+    lease_seconds: float = Field(default=30, gt=0, le=300)
+    simulation_time_scale: float = Field(default=10, gt=0)
+
+    @field_validator("vehicle_ids", mode="before")
+    @classmethod
+    def parse_vehicle_ids(cls, value):
+        values = [v.strip() for v in value.split(",") if v.strip()] if isinstance(value, str) else value
+        if any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", v) for v in values):
+            raise ValueError("simulator recovery requires explicit valid vehicle IDs")
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def explicit_identities(self):
+        if self.enabled and not self.vehicle_ids:
+            raise ValueError("simulator recovery requires a server-configured vehicle allowlist")
+        return self
+
+    @classmethod
+    def from_env(cls):
+        values = {name: os.environ["SIMULATOR_RECOVERY_" + name.upper()]
+                  for name in cls.model_fields if "SIMULATOR_RECOVERY_" + name.upper() in os.environ}
+        values.setdefault("simulation_time_scale", os.getenv("SIMULATION_TIME_SCALE", "10"))
+        return cls(**values)
 
 
 class CrdsSettings(Model):

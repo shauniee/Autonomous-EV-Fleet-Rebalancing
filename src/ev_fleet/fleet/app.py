@@ -8,13 +8,14 @@ from uuid import UUID
 from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
 from ev_fleet.contracts.charging_tasks import ChargingTaskCreate, ChargingTaskUpdate
+from ev_fleet.contracts.recovery import SimulatorSessionRequest, SimulatorSession, SimulatorCheckpointRequest, SimulatorCheckpointReceipt
 
 
 def create_app(store=None, cache=None):
     app = base_app("Fleet State Service")
     state = store or FleetStore()
     app.state.store = state
-    app.state.persistence = state.repository
+    app.state.persistence = state
     display_cache = cache if cache is not None else DashboardCache.from_env('fleet', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
 
@@ -59,6 +60,14 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/telemetry")
     async def telemetry(vehicle_id: str, body: TelemetryUpdate):
         return await state.telemetry(vehicle_id, body)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/simulator-sessions", response_model=SimulatorSession)
+    async def simulator_session(vehicle_id: str, body: SimulatorSessionRequest):
+        return await state.simulator_recovery.session(vehicle_id, body)
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/simulator-checkpoint", response_model=SimulatorCheckpointReceipt)
+    async def simulator_checkpoint(vehicle_id: str, body: SimulatorCheckpointRequest):
+        return await state.simulator_recovery.checkpoint(vehicle_id, body)
 
     @app.post("/api/v1/vehicles/{vehicle_id}/rentals", status_code=201, response_model=RentalRecord)
     async def start_rental(vehicle_id: str, body: RentalStart):
