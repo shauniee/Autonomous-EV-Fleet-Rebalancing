@@ -7,7 +7,7 @@ from ev_fleet.contracts.common import utcnow
 
 
 async def run_node(fleet_url, vehicle_id, position, soc_pct, interval=5, updates=None,
-                   dispatch_url=None, **simulation):
+                   dispatch_url=None, runtime=None, **simulation):
     """Stationary node. Registration/session retries are idempotent; telemetry is fresh."""
     if interval <= 0:
         raise ValueError("interval must be positive")
@@ -16,7 +16,7 @@ async def run_node(fleet_url, vehicle_id, position, soc_pct, interval=5, updates
             raise ValueError("--updates is only supported in stationary mode")
         from .commands import MovingNode
         await MovingNode(fleet_url, dispatch_url, vehicle_id, position, soc_pct,
-                         telemetry_interval=interval, **simulation).run()
+                         telemetry_interval=interval, runtime=runtime, **simulation).run()
         return
     session = None
     session_request = str(uuid4())
@@ -25,6 +25,8 @@ async def run_node(fleet_url, vehicle_id, position, soc_pct, interval=5, updates
     attempt = 0
     async with httpx.AsyncClient(base_url=fleet_url, timeout=2) as client:
         while updates is None or completed < updates:
+            if runtime:
+                runtime.progress()
             try:
                 if session is None:
                     response = await client.post("/api/v1/vehicles", json={
@@ -48,10 +50,16 @@ async def run_node(fleet_url, vehicle_id, position, soc_pct, interval=5, updates
                 response.raise_for_status()
                 attempt = 0
                 completed += 1
+                if runtime:
+                    runtime.progress()
+                    runtime.state("RUNNING")
                 logging.info("vehicle=%s telemetry=%s accepted", vehicle_id, payload["sequence"])
                 if updates is None or completed < updates:
                     await asyncio.sleep(interval)
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if runtime:
+                    runtime.progress()
+                    runtime.state("RETRYING", type(exc).__name__)
                 # Never overwrite an ambiguously accepted sequence with a different payload.
                 if isinstance(exc, httpx.TransportError):
                     sequence += 1

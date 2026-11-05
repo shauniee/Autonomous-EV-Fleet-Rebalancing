@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from ev_fleet.common.logging import base_app
+from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.contracts.vehicles import DashboardFleetSnapshot, SimulatorRuntimeReport
 from ev_fleet.common.dashboard_cache import DashboardCache
 from fastapi import Response, Query
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, SessionRequest, VehicleState, FleetSnapshot
@@ -22,12 +24,19 @@ def create_app(store=None, cache=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        await state.start()
+        repository = state.repository
+        if isinstance(repository, SnapshotRepository):
+            repository.enable_recovery_exit()
         try:
+            await state.start()
             yield
         finally:
-            await display_cache.aclose()
-            await state.close()
+            try:
+                await display_cache.aclose()
+            finally:
+                await state.close()
+                if isinstance(repository, SnapshotRepository):
+                    repository.disable_recovery_exit()
 
     app.router.lifespan_context = lifespan
 
@@ -39,10 +48,13 @@ def create_app(store=None, cache=None):
     async def vehicles():
         return await state.snapshot()
 
-    @app.get("/api/v1/dashboard/vehicles", response_model=FleetSnapshot)
+    @app.get("/api/v1/dashboard/vehicles", response_model=DashboardFleetSnapshot)
     async def dashboard_vehicles(response: Response):
+        async def producer():
+            return await state.snapshot(include_runtime=True)
+
         result, status = await display_cache.get_or_compute(
-            f"vehicles:{state.version}", state.snapshot, FleetSnapshot)
+            f"vehicles-runtime:{state.version}", producer, DashboardFleetSnapshot)
         response.headers["X-Dashboard-Cache"] = status
         return result
 
@@ -61,6 +73,10 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/telemetry")
     async def telemetry(vehicle_id: str, body: TelemetryUpdate):
         return await state.telemetry(vehicle_id, body)
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/simulator-runtime")
+    async def simulator_runtime(vehicle_id: str, body: SimulatorRuntimeReport):
+        return await state.report_runtime(vehicle_id, body)
 
     @app.post("/api/v1/vehicles/{vehicle_id}/simulator-sessions", response_model=SimulatorSession)
     async def simulator_session(vehicle_id: str, body: SimulatorSessionRequest | SimulatorRestoreRequest | SimulatorIdleRestoreRequest):

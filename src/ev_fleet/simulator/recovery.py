@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 import logging
+import random
 import time
 from uuid import uuid4
 
@@ -21,6 +22,10 @@ from .traffic_motion import segment_speed
 
 class RecoveryRequired(Exception):
     """Keep the node alive without publishing invented physical state."""
+
+
+class RetryableConflict(Exception):
+    """A definitively rejected request can be rebuilt from fresh evidence."""
 
 
 def prepare_restore(checkpoint, configuration, fleet, dispatch=None, assessment=None):
@@ -79,6 +84,9 @@ def error_code(exc):
 
 
 class CheckpointRunner:
+    request_timeout = 2.0
+    retry_max_delay = 2.0
+
     def __init__(self, node):
         self.node = node
         self.configuration = SimulatorConfiguration(capacity_kwh=node.movement.capacity,
@@ -97,7 +105,9 @@ class CheckpointRunner:
         self.last_checkpoint = None
         self.last_motion = time.monotonic()
         self.next_poll = self.next_telemetry = self.next_traffic = 0.0
-        self.renew_margin = 5.0
+        self.request_latency = 0.0
+        self.renew_margin = 3 * self.request_timeout + self.retry_max_delay
+        self.failures = 0
         self.blocked = None
         self.restore_pending = False
         self.consumer_id = str(uuid4())
@@ -137,6 +147,7 @@ class CheckpointRunner:
         self.last_motion = time.monotonic()
 
     async def request(self, method, url, body=None):
+        started = time.monotonic()
         try:
             if hasattr(body, "model_dump"):
                 body = body.model_dump(mode="json")
@@ -145,22 +156,69 @@ class CheckpointRunner:
                     and (url.endswith("/acknowledgements") or url.endswith("/events"))):
                 headers = {"X-Simulator-Generation": str(self.lease.generation),
                            "X-Simulator-Session": str(self.lease.session_id)}
-            result = await self.node.request(method, url, body, headers=headers)
+            result = await asyncio.wait_for(
+                self.node.request(method, url, body, headers=headers),
+                timeout=self.request_timeout)
             if not isinstance(result, dict):
                 raise RecoveryRequired("DEPENDENCY_RESPONSE_INVALID")
             return result
+        except asyncio.TimeoutError as exc:
+            raise httpx.ReadTimeout("Simulator request deadline exceeded") from exc
         finally:
             # Network/commit/retry time is paused simulation time.
             self.last_motion = time.monotonic()
+            self.request_latency = max(
+                self.request_latency * .9, self.last_motion - started)
+            if self.node.runtime:
+                self.node.runtime.progress()
 
-    def require_live(self):
+    def require_live(self) -> SimulatorSession:
         if self.lease is None or self.lease.expires_at <= utcnow():
             raise RecoveryRequired("SIMULATOR_LEASE_EXPIRED_COORDINATION_REQUIRED")
+        return self.lease
+
+    async def ensure_lease(self) -> None:
+        """Leave time for a request, two renewal calls and a bounded retry."""
+        lease = self.require_live()
+        if self.pending_session is not None or self.pending_checkpoint is not None:
+            raise RecoveryRequired("SIMULATOR_PENDING_REQUEST_UNRECONCILED")
+        self.renew_margin = max(
+            3 * self.request_timeout + self.retry_max_delay,
+            4 * self.request_latency)
+        if (lease.expires_at - utcnow()).total_seconds() <= self.renew_margin:
+            await self.renew()
+        self.require_live()
+
+    def retry_delay(self) -> float:
+        self.failures += 1
+        maximum = 5.0 if self.blocked else self.retry_max_delay
+        ceiling = min(maximum, .25 * 2 ** min(self.failures - 1, 5))
+        delay = random.uniform(ceiling / 2, ceiling)
+        if self.lease and not self.blocked:
+            remaining = (self.lease.expires_at - utcnow()).total_seconds()
+            delay = min(delay, max(.01, (remaining - 2 * self.request_timeout) / 2))
+        return delay
 
     async def session_request(self):
         body = self.pending_session
-        receipt = SimulatorSession.model_validate(await self.request("POST",
-            f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-sessions", body))
+        if body is None:
+            raise RecoveryRequired("SIMULATOR_SESSION_REQUEST_MISSING")
+        url = (f"{self.node.fleet_url}/api/v1/vehicles/"
+               f"{self.node.vehicle_id}/simulator-sessions")
+        try:
+            receipt = SimulatorSession.model_validate(
+                await self.request("POST", url, body))
+        except httpx.HTTPStatusError as exc:
+            code = error_code(exc)
+            if exc.response.status_code == 409 and code in (
+                    "SIMULATOR_EVIDENCE_CHANGED", "SIMULATOR_CLAIM_MISMATCH"):
+                # Fleet checks exact retries before these preconditions. This
+                # identity was rejected; ambiguous HTTP failures retain it.
+                self.pending_session = None
+                if body["action"] == "ACQUIRE":
+                    self.node.session_request = str(uuid4())
+                raise RetryableConflict(code) from exc
+            raise
         if receipt.checkpoint_revision != self.revision or receipt.checkpoint != self.last_checkpoint:
             raise RecoveryRequired("SIMULATOR_SESSION_CHECKPOINT_CHANGED")
         if self.lease and (receipt.generation != self.lease.generation or receipt.session_id != self.lease.session_id):
@@ -171,8 +229,6 @@ class CheckpointRunner:
         self.node.session = str(receipt.session_id)
         self.node.initialized = True
         self.pending_session = None
-        remaining = (receipt.expires_at - utcnow()).total_seconds()
-        self.renew_margin = min(5.0, max(.1, remaining / 3))
         self.require_live()
 
     async def bootstrap(self):
@@ -210,16 +266,25 @@ class CheckpointRunner:
         await self.session_request()
 
     async def renew(self):
-        self.require_live()
+        lease = self.require_live()
         state = VehicleState.model_validate(await self.request("GET",
             f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}"))
+        self.require_live()
         if state.vehicle_id != self.node.vehicle_id:
             raise RecoveryRequired("SIMULATOR_VEHICLE_IDENTITY_CHANGED")
+        owner = state.simulator_recovery
+        if (owner is None or owner.status != "ACTIVE"
+                or owner.generation != lease.generation
+                or owner.owner_revision != lease.owner_revision
+                or owner.expires_at != lease.expires_at):
+            raise RecoveryRequired("SIMULATOR_SESSION_OWNER_CHANGED")
+        if owner.checkpoint_revision != self.revision:
+            raise RecoveryRequired("SIMULATOR_SESSION_CHECKPOINT_CHANGED")
         claim = state.active_claim
         self.pending_session = SimulatorSessionRequest(request_id=uuid4(), action="RENEW",
             expected_fleet_instance_id=self.fleet_instance_id, expected_control_version=state.control_version,
-            expected_generation=self.lease.generation, expected_owner_revision=self.lease.owner_revision,
-            expected_checkpoint_revision=self.revision, session_id=self.lease.session_id,
+            expected_generation=lease.generation, expected_owner_revision=lease.owner_revision,
+            expected_checkpoint_revision=self.revision, session_id=lease.session_id,
             dispatch_id=claim.dispatch_id if claim else None,
             command_id=claim.command_id if claim else None).model_dump(mode="json")
         await self.session_request()
@@ -241,7 +306,16 @@ class CheckpointRunner:
 
     async def checkpoint(self):
         if self.pending_checkpoint is None:
-            self.require_live()
+            await self.ensure_lease()
+            if (self.restore_pending and self.last_checkpoint is not None
+                    and self.last_checkpoint.physical.charging_state in ("CHARGING", "COMPLETE")):
+                # Restored movement has no trusted parking context. Verify it
+                # before publishing the unchanged-SOC baseline, never downtime.
+                await self.parking()
+                if (not self.node.parking_verified or self.node.movement.charging_state
+                        != self.last_checkpoint.physical.charging_state):
+                    raise RecoveryRequired("IDLE_RECOVERY_CHARGING_CONTEXT_CHANGED")
+                self.require_live()
             self.pending_checkpoint = self.checkpoint_request()
         for attempt in range(2):
             body = self.pending_checkpoint
@@ -250,9 +324,14 @@ class CheckpointRunner:
                     f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint", body))
             except httpx.HTTPStatusError as exc:
                 code = error_code(exc)
-                if attempt or code not in ("OBSERVATION_TIME_INVALID", "SIMULATOR_CHARGING_BASELINE_REQUIRED", "SIMULATOR_IDLE_CLAIM_CHANGED"):
+                if code not in (
+                        "OBSERVATION_TIME_INVALID",
+                        "SIMULATOR_CHARGING_BASELINE_REQUIRED",
+                        "SIMULATOR_IDLE_CLAIM_CHANGED"):
                     raise
-                self.require_live()
+                # These responses definitively reject this checkpoint identity.
+                self.pending_checkpoint = None
+                await self.ensure_lease()
                 if code in ("SIMULATOR_CHARGING_BASELINE_REQUIRED", "SIMULATOR_IDLE_CLAIM_CHANGED"):
                     if self.last_checkpoint is None:
                         raise RecoveryRequired(code) from exc
@@ -264,6 +343,8 @@ class CheckpointRunner:
                     await self.parking()
                 # Definitively rejected: reserve a new sequence, never edit the old payload.
                 self.pending_checkpoint = self.checkpoint_request()
+                if attempt:
+                    raise RetryableConflict(code) from exc
                 continue
             if (receipt.request_id != SimulatorCheckpointRequest.model_validate(body).request_id
                     or receipt.generation != self.lease.generation
@@ -271,35 +352,49 @@ class CheckpointRunner:
                 raise RecoveryRequired("CHECKPOINT_RECEIPT_CONFLICT")
             self.last_checkpoint = SimulatorCheckpoint.model_validate(body["checkpoint"])
             self.revision = receipt.checkpoint_revision
+            if self.node.runtime:
+                self.node.runtime.checkpoint_revision = self.revision
+                self.node.runtime.checkpoint_at = self.last_checkpoint.physical.observed_at.isoformat()
             self.pending_checkpoint = None
             self.next_telemetry = time.monotonic() + self.node.telemetry_delay()
+            self.require_live()
             self.node.ready.set()
             return
 
     async def parking(self):
+        await self.ensure_lease()
         if not self.node.facilities_url:
             self.node.parking_verified = True
             return False
         before = (deepcopy(self.node.movement.parking), self.node.parking_verified)
+        started = time.monotonic()
         try:
-            await self.node.refresh_parking()
+            await asyncio.wait_for(
+                self.node.refresh_parking(), timeout=self.request_timeout)
+            self.require_live()
+        except asyncio.TimeoutError as exc:
+            self.node._parking_authority_current()
+            raise httpx.ReadTimeout("Parking request deadline exceeded") from exc
         except RuntimeError as exc:
             raise RecoveryRequired("PARKING_EVIDENCE_INVALID") from exc
         finally:
             self.last_motion = time.monotonic()
+            self.request_latency = max(
+                self.request_latency * .9, self.last_motion - started)
         return before != (self.node.movement.parking, self.node.parking_verified)
 
     async def acknowledge(self):
-        self.require_live()
+        await self.ensure_lease()
         command = self.node.movement.command
         await self.request("POST", f"{self.node.dispatch_url}/api/v1/dispatches/{command['dispatch_id']}/acknowledgements",
                            self.acknowledgement)
+        self.require_live()
         self.acknowledged = True
         self.node.movement.start()
         await self.checkpoint()
 
     async def flush_event(self):
-        self.require_live()
+        await self.ensure_lease()
         command = self.node.movement.command
         payload = self.pending_event.model_dump(mode="json") if hasattr(self.pending_event, "model_dump") else self.pending_event
         try:
@@ -307,20 +402,24 @@ class CheckpointRunner:
         except httpx.HTTPStatusError as exc:
             if error_code(exc) != "EVENT_TIME_INVALID":
                 raise
+            await self.ensure_lease()
             evidence = RecoveryAssessment.model_validate(await self.request("GET",
                 f"{self.node.dispatch_url}/api/v1/dispatches/{command['dispatch_id']}/recovery"))
             event = DispatchEvent.model_validate(payload)
             if evidence.evidence.last_event_sequence >= event.sequence or event.observed_at >= utcnow():
                 raise RecoveryRequired("EVENT_REPLAY_EVIDENCE_CONFLICT") from exc
             # Unaccepted and expired: persist removal, then generate a fresh higher sequence later.
+        self.require_live()
         self.pending_event = None
         await self.checkpoint()
 
     async def poll(self):
+        await self.ensure_lease()
         node = self.node
         if node.movement.command is None:
             response = CommandList.model_validate(await self.request("GET",
                 f"{node.dispatch_url}/api/v1/vehicles/{node.vehicle_id}/commands"))
+            self.require_live()
             if not response.commands:
                 if await self.parking():
                     await self.checkpoint()  # verified baseline before charging
@@ -340,8 +439,10 @@ class CheckpointRunner:
         if not self.acknowledged:
             await self.acknowledge()
         command = node.movement.command
+        await self.ensure_lease()
         state = Dispatch.model_validate(await self.request("GET",
             f"{node.dispatch_url}/api/v1/dispatches/{command['dispatch_id']}"))
+        self.require_live()
         if state.command is None or state.command.model_dump(mode="json") != command:
             raise RecoveryRequired("DISPATCH_COMMAND_CHANGED")
         if state.claim_held is False and state.state in ("SUCCEEDED", "REJECTED"):
@@ -386,9 +487,7 @@ class CheckpointRunner:
             await self.checkpoint()
         if self.lease is None:
             await self.bootstrap()
-        self.require_live()
-        if (self.lease.expires_at - utcnow()).total_seconds() <= self.renew_margin:
-            await self.renew()
+        await self.ensure_lease()
         if self.last_checkpoint is None or self.restore_pending:
             await self.checkpoint()
             self.restore_pending = False
@@ -403,7 +502,9 @@ class CheckpointRunner:
             await self.poll()
             self.next_poll = time.monotonic() + self.node.poll_interval
         if self.node.traffic_enabled and time.monotonic() >= self.next_traffic:
+            await self.ensure_lease()
             latest = await self.request("GET", self.node.rebalancing_url + "/api/v1/traffic/simulation-events")
+            self.require_live()
             self.node.traffic_snapshot = latest if latest.get("source") == "SIMULATION" and latest.get("status") == "FRESH" else None
             self.next_traffic = time.monotonic() + 2
 
@@ -422,7 +523,8 @@ class CheckpointRunner:
             saved = SimulatorCheckpointSnapshot.model_validate(await self.request("GET",
                 f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint"))
             if (saved.checkpoint and saved.checkpoint.command is None
-                    and saved.checkpoint.physical.charging_state == "NOT_CHARGING"):
+                    and saved.checkpoint.physical.charging_state in (
+                        "NOT_CHARGING", "CHARGING", "COMPLETE")):
                 await self.restore_idle(fleet, vehicle, saved)
                 return
         dispatch_id = vehicle.active_claim.dispatch_id if vehicle.active_claim else (
@@ -468,7 +570,7 @@ class CheckpointRunner:
                 f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-sessions",
                 self.pending_idle_restore))
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code < 500:
+            if exc.response.status_code < 500 and exc.response.status_code not in (408, 429):
                 self.pending_idle_restore = None
             raise
         if session.expires_at <= utcnow():
@@ -482,33 +584,56 @@ class CheckpointRunner:
         logging.info("vehicle=%s idle_simulation_restored generation=%s", self.node.vehicle_id, session.generation)
 
     async def run(self):
-        async with httpx.AsyncClient(timeout=2) as owned:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as owned:
             self.node.client = self.node.client or owned
             while True:
+                if self.node.runtime:
+                    self.node.runtime.progress()
                 delay = self.node.tick_seconds
+                paused = False
                 if self.blocked:
+                    if self.node.runtime:
+                        self.node.runtime.state("RECOVERY_WAIT", self.blocked)
                     status = "REQUIRED" if "COORDINATION" in self.blocked or self.blocked == "SIMULATOR_LEASE_EXPIRED" else "BLOCKED"
                     logging.warning("vehicle=%s recovery=%s reason=%s", self.node.vehicle_id, status, self.blocked)
                     try:
                         await self.try_handoff()
-                    except (httpx.HTTPError, RecoveryRequired, ValueError) as exc:
+                    except (
+                            httpx.HTTPError, RecoveryRequired,
+                            RetryableConflict, ValueError) as exc:
                         reason = error_code(exc) if isinstance(exc, httpx.HTTPStatusError) else str(exc)
                         logging.warning("vehicle=%s handoff_wait=%s", self.node.vehicle_id, reason)
                     if self.blocked:
-                        await asyncio.sleep(5)
+                        self.node.ready.clear()
+                        await asyncio.sleep(self.retry_delay())
                     self.last_motion = time.monotonic()
                     continue
                 try:
                     await self.tick()
+                    self.failures = 0
+                    if self.node.runtime:
+                        self.node.runtime.state("RUNNING")
                 except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
+                    if (isinstance(exc, httpx.HTTPStatusError)
+                            and exc.response.status_code < 500
+                            and exc.response.status_code not in (408, 429)):
                         self.blocked = str(error_code(exc))
                     logging.warning("vehicle=%s checkpoint_paused=%s", self.node.vehicle_id, type(exc).__name__)
-                    delay = 5
+                    paused = True
+                except RetryableConflict as exc:
+                    logging.warning("vehicle=%s retryable_conflict=%s", self.node.vehicle_id, exc)
+                    paused = True
                 except (RecoveryRequired, ValueError) as exc:
                     self.blocked = str(exc) if isinstance(exc, RecoveryRequired) else "CHECKPOINT_MODEL_OR_CONFIGURATION_INVALID"
-                    delay = 5
+                    paused = True
+                if paused:
+                    if self.node.runtime:
+                        self.node.runtime.state(
+                            "RECOVERY_WAIT" if self.blocked else "RETRYING",
+                            self.blocked or "GUARDED_COMMUNICATION_RETRY")
+                    self.node.ready.clear()
+                    delay = self.retry_delay()
                 # All communication failures and waits suspend motion and charging.
                 await asyncio.sleep(delay)
-                if delay == 5:
+                if paused:
                     self.last_motion = time.monotonic()

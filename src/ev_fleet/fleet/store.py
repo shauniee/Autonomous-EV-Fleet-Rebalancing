@@ -8,6 +8,7 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings
 from ev_fleet.common.travel import distance_km, predicted_soc
 from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.contracts.vehicles import SimulatorRuntimeReport
 from .recovery import SimulatorRecovery
 
 
@@ -22,6 +23,7 @@ class FleetStore:
         self.version = 0
         self.repository = repository or SnapshotRepository.from_env("fleet")
         self.history_cache = {}  # bounded ephemeral-only cache; PostgreSQL is durable
+        self.runtime_reports = {}  # Diagnostic only; never part of a durable snapshot.
         self.persistence_uncertain = False
         self.simulator_recovery = SimulatorRecovery(self, recovery_settings)
 
@@ -47,7 +49,10 @@ class FleetStore:
             await self.persist()
 
     async def close(self):
-        await self.repository.close()
+        try:
+            await self.simulator_recovery.close()
+        finally:
+            await self.repository.close()
 
     @property
     def enabled(self):
@@ -57,18 +62,34 @@ class FleetStore:
     def ready(self):
         return self.repository.ready and not self.persistence_uncertain
 
+    @property
+    def faulted(self):
+        return self.persistence_uncertain or getattr(self.repository, "faulted", False)
+
     def ensure_consistent(self):
-        if self.persistence_uncertain:
-            raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN")
+        if self.faulted:
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
+
+    def mark_persistence_uncertain(self):
+        self.persistence_uncertain = True
+        if isinstance(self.repository, SnapshotRepository):
+            self.repository.mark_uncertain()
 
     async def persist(self, telemetry_sample=None):
         self.ensure_consistent()
         payload = {"instance_id": self.instance_id, "version": self.version,
                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks}
-        if telemetry_sample is None:
-            await self.repository.save(payload)
-        else:
-            await self.repository.save(payload, telemetry_sample=telemetry_sample)
+        try:
+            if telemetry_sample is None:
+                await self.repository.save(payload)
+            else:
+                await self.repository.save(payload, telemetry_sample=telemetry_sample)
+        except asyncio.CancelledError:
+            self.mark_persistence_uncertain()
+            raise
+        except Exception as exc:
+            self.mark_persistence_uncertain()
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN") from exc
 
     async def register(self, registration):
         async with self.lock:
@@ -187,7 +208,51 @@ class FleetStore:
                 "storage": "postgresql" if getattr(self.repository, "enabled", False) else "ephemeral",
                 "limit": limit}
 
-    def view(self, record):
+    async def report_runtime(self, vehicle_id: str, report: SimulatorRuntimeReport):
+        # No external waits, writer lock, persistence or physical metadata changes.
+        # This also remains responsive while a snapshot transaction is in flight.
+        record = self.record(vehicle_id)
+        if report.vehicle_id != vehicle_id:
+            raise HTTPException(409, "SIMULATOR_RUNTIME_IDENTITY_MISMATCH")
+        owner = record.get("simulator_owner")
+        if owner is not None:
+            matches = (str(report.session_id) == owner["session_id"]
+                       and report.generation == owner["generation"])
+            if (not matches and (report.session_id is not None
+                                 or owner["expires_at"] > self.clock.now())):
+                raise HTTPException(409, "SIMULATOR_RUNTIME_OWNER_MISMATCH")
+        previous = self.runtime_reports.get(vehicle_id)
+        if (previous and previous["report"].process_id == report.process_id
+                and report.sequence <= previous["report"].sequence):
+            raise HTTPException(409, "SIMULATOR_RUNTIME_SEQUENCE_CONFLICT")
+        self.runtime_reports[vehicle_id] = {
+            "report": report, "received_tick": self.clock.monotonic(),
+            "reported_at": self.clock.now()}
+        return {"accepted": True}
+
+    def runtime_view(self, record):
+        entry = self.runtime_reports.get(record["registration"].vehicle_id)
+        if entry is None:
+            return None
+        report = entry["report"]
+        age = max(0, self.clock.monotonic() - entry["received_tick"])
+        owner = record.get("simulator_owner")
+        obsolete = owner is not None and owner["expires_at"] > self.clock.now() and (
+            str(report.session_id) != owner["session_id"]
+            or report.generation != owner["generation"])
+        heartbeat_age = (None if report.heartbeat_age_seconds is None
+                         else report.heartbeat_age_seconds + age)
+        live = bool(report.live and report.initialized and heartbeat_age is not None
+                    and heartbeat_age < report.heartbeat_timeout_seconds)
+        status = "STALE" if age >= 15 or obsolete else "RESPONSIVE" if live else "UNRESPONSIVE"
+        return {**report.model_dump(mode="json"), "status": status,
+                "live": status == "RESPONSIVE",
+                "ready": status == "RESPONSIVE" and report.ready and report.mode in (
+                    "RUNNING", "RETRYING", "RECOVERY_WAIT"),
+                "reported_at": entry["reported_at"], "report_age_seconds": age,
+                "heartbeat_age_seconds": heartbeat_age}
+
+    def view(self, record, *, include_runtime=False):
         telemetry = record["telemetry"]
         age = None if telemetry is None else record["initial_age"] + max(
             0, self.clock.monotonic() - record["received_tick"])
@@ -197,6 +262,11 @@ class FleetStore:
         configured = (self.simulator_recovery.settings.enabled
                       and record["registration"].vehicle_id in self.simulator_recovery.settings.vehicle_ids)
         lease_active = not guarded or (configured and owner is not None and owner["expires_at"] > self.clock.now())
+        runtime = self.runtime_view(record)
+        # Absence is unknown, allowing older fenced publishers during a rolling
+        # upgrade. An observed unhealthy/recovering runtime still vetoes dispatch.
+        runtime_available = (runtime is None or (
+            runtime["live"] and runtime["ready"] and runtime["mode"] == "RUNNING"))
         stale = not current_session or age >= self.settings.stale_seconds or not lease_active or self.persistence_uncertain
         checkpoint = record.get("simulator_checkpoint")
         recovery = None if owner is None else {
@@ -210,6 +280,7 @@ class FleetStore:
                 "state_version": record["state_version"],
                 "control_version": record.get("control_version", record["state_version"]),
                 "simulator_recovery": recovery,
+                **({"simulator_runtime": runtime} if include_runtime else {}),
                 "telemetry": telemetry.model_dump(mode="json") if telemetry else None,
                 "received_at": record["received_at"].isoformat() if telemetry else None,
                 "telemetry_age_seconds": age, "stale": stale,
@@ -221,7 +292,7 @@ class FleetStore:
                     not telemetry or telemetry.relocation_state == "IDLE") else
                     telemetry.relocation_state.value if telemetry else "IDLE"),
                 "effective_availability": "AVAILABLE" if (
-                    not stale and not record["active_claim"] and record["active_rental"] is None
+                    not stale and runtime_available and not record["active_claim"] and record["active_rental"] is None
                     and record.get("active_charging_task") is None and telemetry
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
                     and telemetry.charging_state != "CHARGING"
@@ -235,11 +306,13 @@ class FleetStore:
 
     async def list_charging_tasks(self):
         async with self.lock:
+            self.ensure_consistent()
             return {"tasks": [self._public_task(key) for key in sorted(self.charging_tasks)]}
 
     async def create_charging_task(self, body):
         """The dispatcher queues a low-SOC EV; no real charger is operated."""
         async with self.lock:
+            self.ensure_consistent()
             for task in self.charging_tasks.values():
                 if task["create_request_id"] == str(body.request_id):
                     if task["vehicle_id"] != body.vehicle_id:
@@ -272,6 +345,7 @@ class FleetStore:
     async def update_charging_task(self, task_id, body):
         """Progress is approved manually; completion requires actual fresh SOC evidence."""
         async with self.lock:
+            self.ensure_consistent()
             task = self.charging_tasks.get(str(task_id))
             if task is None:
                 raise HTTPException(404, "CHARGING_TASK_NOT_FOUND")
@@ -504,8 +578,10 @@ class FleetStore:
         async with self.lock:
             return self.view(self.record(vehicle_id))
 
-    async def snapshot(self):
+    async def snapshot(self, *, include_runtime=False):
         async with self.lock:
+            self.ensure_consistent()
             return {"instance_id": self.instance_id, "snapshot_version": self.version,
                     "snapshot_at": self.clock.now().isoformat(),
-                    "vehicles": [self.view(record) for record in self.vehicles.values()]}
+                    "vehicles": [self.view(record, include_runtime=include_runtime)
+                                 for record in self.vehicles.values()]}

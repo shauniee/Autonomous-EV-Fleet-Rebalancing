@@ -51,29 +51,31 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          ports:
+            - name: health
+              containerPort: 8081
           startupProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
+            httpGet:
+              path: /health/startup
+              port: health
             periodSeconds: 2
-            timeoutSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 30
           livenessProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
+            httpGet:
+              path: /health/live
+              port: health
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 5
-          # A retained journey may wait for dashboard recovery without fresh
-          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
-          # Startup/liveness still require the simulator process to remain alive.
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Local coordination readiness is separate from physical freshness
+          # and dispatch eligibility, including supervised recovery waits.
           readinessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - "import json,os,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-01', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
+            httpGet:
+              path: /health/ready
+              port: health
             periodSeconds: 5
-            timeoutSeconds: 8
+            timeoutSeconds: 2
             failureThreshold: 3
           resources:
             requests:
@@ -136,29 +138,31 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          ports:
+            - name: health
+              containerPort: 8081
           startupProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
+            httpGet:
+              path: /health/startup
+              port: health
             periodSeconds: 2
-            timeoutSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 30
           livenessProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
+            httpGet:
+              path: /health/live
+              port: health
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 5
-          # A retained journey may wait for dashboard recovery without fresh
-          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
-          # Startup/liveness still require the simulator process to remain alive.
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Local coordination readiness is separate from physical freshness
+          # and dispatch eligibility, including supervised recovery waits.
           readinessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - "import json,os,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-02', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
+            httpGet:
+              path: /health/ready
+              port: health
             periodSeconds: 5
-            timeoutSeconds: 8
+            timeoutSeconds: 2
             failureThreshold: 3
           resources:
             requests:
@@ -234,29 +238,31 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          ports:
+            - name: health
+              containerPort: 8081
           startupProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
+            httpGet:
+              path: /health/startup
+              port: health
             periodSeconds: 2
-            timeoutSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 30
           livenessProbe:
-            exec:
-              command: ["sh", "-c", "kill -0 1"]
-            periodSeconds: 15
-            timeoutSeconds: 10
-            failureThreshold: 8
-          # A retained journey may wait for dashboard recovery without fresh
-          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
-          # Startup/liveness still require the simulator process to remain alive.
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Local coordination readiness is separate from physical freshness
+          # and dispatch eligibility, including supervised recovery waits.
           readinessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - "import json,os,urllib.request; vehicle_id=os.environ['HOSTNAME']; d=json.load(urllib.request.urlopen(f'http://fleet:8000/api/v1/vehicles/{vehicle_id}', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
+            httpGet:
+              path: /health/ready
+              port: health
             periodSeconds: 5
-            timeoutSeconds: 8
+            timeoutSeconds: 2
             failureThreshold: 3
           resources:
             requests:

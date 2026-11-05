@@ -34,7 +34,7 @@ function readPendingBatch(): BatchApproval | null {
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
-  const fleet = usePolling<Fleet>('/api/fleet/vehicles', 1000);
+  const fleet = usePolling<Fleet>('/api/fleet/dashboard/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);

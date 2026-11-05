@@ -50,6 +50,40 @@ def test_customer_trip_safety_and_invalid_movement():
         motion.advance(-1, 30)
 
 
+@pytest.mark.parametrize("traffic_cap", [None, 0, 12])
+@pytest.mark.parametrize("rented", [False, True])
+def test_shared_movement_keyword_preserves_idle_and_rental_motion(
+        traffic_cap, rented):
+    motion = RentalMovement(ZONES["punggol"], 85)
+    if rented:
+        motion.start_customer_trip("rental-1", ZONES["cbd"])
+    motion.advance(60, 30, traffic_speed_cap_kph=traffic_cap)
+    assert motion.state == "IDLE"
+    assert motion.telemetry()["active_dispatch_id"] is None
+    if rented:
+        assert motion.rental["distance"] == pytest.approx(0.5)
+        assert motion.soc_pct == pytest.approx(85 - 100 * 0.5 * .18 / 60)
+        assert motion.position != ZONES["punggol"]
+        assert motion.telemetry()["availability"] == "UNAVAILABLE"
+    else:
+        assert motion.position == ZONES["punggol"]
+        assert motion.soc_pct == 85
+
+
+@pytest.mark.parametrize("traffic_cap,distance", [
+    (None, 0.5), (12, 0.2), (60, 0.5), (0, 0),
+])
+def test_customer_ev_relocation_respects_road_speed_cap(traffic_cap, distance):
+    from tests.unit.test_movement import command
+
+    motion = RentalMovement(ZONES["punggol"], 85)
+    assert motion.accept(command(origin=ZONES["punggol"]))
+    motion.start()
+    motion.advance(60, 30, traffic_speed_cap_kph=traffic_cap)
+    assert motion.distance == pytest.approx(distance)
+    assert motion.soc_pct == pytest.approx(85 - 100 * distance * .18 / 60)
+
+
 def test_customer_rental_http_lifecycle_and_relocation_exclusion():
     """Exercise real Fleet rental endpoints with a sole-telemetry-owner EV."""
     import asyncio
@@ -81,8 +115,21 @@ def test_customer_rental_http_lifecycle_and_relocation_exclusion():
                                     "customer-ev-test", ZONES["punggol"], 85, client=client)
             with pytest.raises(RuntimeError, match="unresolved journey"):
                 await another.register()
-            node.movement.advance(100000, 30)
-            assert await asyncio.wait_for(task, timeout=5) == "returned"
+            # Complete the rental through the actual shared movement loop.
+            node.time_scale = 1_000_000
+            movement_task = asyncio.create_task(node.movement_loop())
+            try:
+                done, _ = await asyncio.wait(
+                    (task, movement_task), timeout=5,
+                    return_when=asyncio.FIRST_COMPLETED)
+                if movement_task in done:
+                    movement_task.result()  # Surface worker failures directly.
+                assert task in done, "Rental did not complete"
+                assert task.result() == "returned"
+            finally:
+                movement_task.cancel()
+                task.cancel()
+                await asyncio.gather(movement_task, task, return_exceptions=True)
             after = await store.get("customer-ev-test")
             assert after["active_rental"] is None
             assert after["effective_availability"] == "AVAILABLE"

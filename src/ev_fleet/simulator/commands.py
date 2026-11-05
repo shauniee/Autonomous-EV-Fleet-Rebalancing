@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
 import time
 import os
 from math import isfinite
+from typing import TYPE_CHECKING
 from .traffic_motion import segment_speed
 from contextlib import suppress
 from uuid import uuid4
@@ -13,12 +16,17 @@ from ev_fleet.contracts.dispatch import RelocationCommand
 from ev_fleet.contracts.facilities import VehicleParking
 from .movement import Movement
 
+if TYPE_CHECKING:
+    from .health import SimulatorHealth
+    from .recovery import CheckpointRunner
+
 
 class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
                  speed_kph=30, time_scale=10, client=None, facilities_url=None,
-                 road_match_initial=True, checkpointing=False, facilities_grace_seconds=10):
+                 road_match_initial=True, checkpointing=False, facilities_grace_seconds=10,
+                 runtime: SimulatorHealth | None = None):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
         if not isfinite(facilities_grace_seconds) or facilities_grace_seconds < 0:
@@ -46,6 +54,10 @@ class MovingNode:
         self.traffic_snapshot = None
         self.traffic_blocked = False
         self.checkpointing = checkpointing
+        self.runtime = runtime
+        self.checkpoint_runner: CheckpointRunner | None = None
+        if runtime:
+            runtime.node = self
 
     async def request(self, method, url, body=None, *, headers=None):
         options = {"headers": headers} if headers else {}
@@ -153,7 +165,10 @@ class MovingNode:
             raise
 
     async def command_step(self):
-        await self.ready.wait()
+        try:
+            await asyncio.wait_for(self.ready.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            return
         if self.movement.command is None:
             if self.facilities_url:
                 await self.refresh_parking()
@@ -221,6 +236,8 @@ class MovingNode:
     async def network_loop(self, operation, interval):
         failures = 0
         while True:
+            if self.runtime:
+                self.runtime.progress(operation.__name__)
             delay = interval
             if operation == self.send_telemetry:
                 # Clear BEFORE publishing, so transitions during the network
@@ -228,9 +245,13 @@ class MovingNode:
                 self.telemetry_changed.clear()
             try:
                 await operation()
+                if self.runtime and operation == self.send_telemetry:
+                    self.runtime.state("RUNNING")
                 failures = 0
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
                 failures += 1
+                if self.runtime and operation == self.send_telemetry:
+                    self.runtime.state("RETRYING", type(exc).__name__)
                 # Identity/session conflicts are not connectivity failures and must not steal ownership.
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 409:
                     code = exc.response.json().get("error", {}).get("code", "")
@@ -253,6 +274,8 @@ class MovingNode:
         while True:
             await asyncio.sleep(self.tick_seconds)
             now = time.monotonic()
+            if self.runtime:
+                self.runtime.progress("movement")
             if self.facilities_url:
                 self._parking_authority_current()
             previous = (self.movement.state, self.movement.charging_state)
@@ -276,7 +299,8 @@ class MovingNode:
     async def run(self):
         if self.checkpointing:
             from .recovery import CheckpointRunner
-            await CheckpointRunner(self).run()
+            self.checkpoint_runner = CheckpointRunner(self)
+            await self.checkpoint_runner.run()
             return
         async with httpx.AsyncClient(timeout=2) as owned:
             self.client = self.client or owned

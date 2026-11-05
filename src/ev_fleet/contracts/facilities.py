@@ -105,3 +105,13 @@ class VehicleParking(Model):
     vehicle_id: str
     parking: ParkedFacility | None = None
     pending: bool = False
+
+
+class ParkingObservation(Model):
+    """Fresh point-in-time allocation evidence, bound to a caller's nonce."""
+    request_id: UUID
+    instance_id: UUID
+    revision: int = Field(ge=0)
+    observed_at: AwareDatetime
+    allocation_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    parking: VehicleParking

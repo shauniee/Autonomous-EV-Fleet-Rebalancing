@@ -1,6 +1,7 @@
 """Single-replica Fleet ownership/checkpoints; takeover needs Dispatch coordination."""
 import asyncio
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import timedelta
 import hashlib
 import json
@@ -15,7 +16,7 @@ from ev_fleet.contracts.recovery import (
     RecoveryAssessment, SimulatorCheckpoint, SimulatorCheckpointReceipt, SimulatorSession,
     SimulatorCheckpointSnapshot, SimulatorConfiguration,
 )
-from ev_fleet.contracts.facilities import VehicleParking
+from ev_fleet.contracts.facilities import ParkingObservation
 from ev_fleet.contracts.dispatch import DispatchList
 
 
@@ -23,11 +24,57 @@ def fingerprint(model):
     return hashlib.sha256(json.dumps(model.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class ChargingEvidence:
+    observation: ParkingObservation
+    requested_tick: float
+
+
 class SimulatorRecovery:
+    evidence_timeout = 2.0
+    evidence_max_age = 2.0
+
     def __init__(self, store, settings=None):
         self.store = store
         self.settings = settings or SimulatorRecoverySettings.from_env()
         self.charging_epoch = str(uuid4())
+        self.charging_client: httpx.AsyncClient | None = None
+
+    async def close(self) -> None:
+        client, self.charging_client = self.charging_client, None
+        if client is not None:
+            await client.aclose()
+
+    @staticmethod
+    def needs_charging_evidence(checkpoint: SimulatorCheckpoint) -> bool:
+        return (checkpoint.command is None
+                and checkpoint.physical.charging_state != "NOT_CHARGING")
+
+    async def read_charging_evidence(self, vehicle_id: str) -> ChargingEvidence:
+        """One nonce-bound direct read; caller must not hold the Fleet lock."""
+        requested_tick = self.store.clock.monotonic()
+        request_id = uuid4()
+        if self.charging_client is None:
+            self.charging_client = httpx.AsyncClient(
+                timeout=self.evidence_timeout,
+                limits=httpx.Limits(max_connections=32,
+                                   max_keepalive_connections=16))
+        try:
+            response = await asyncio.wait_for(
+                self.charging_client.get(
+                    f"{self.store.settings.facilities_url}/api/v1/vehicles/"
+                    f"{vehicle_id}/parking-observation",
+                    params={"request_id": str(request_id)},
+                    headers={"Cache-Control": "no-cache, no-store"}),
+                timeout=self.evidence_timeout)
+            response.raise_for_status()
+            observation = ParkingObservation.model_validate(response.json())
+        except (asyncio.TimeoutError, httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(
+                503, "SIMULATOR_CHARGING_EVIDENCE_UNAVAILABLE") from exc
+        if observation.request_id != request_id:
+            raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_UNAVAILABLE")
+        return ChargingEvidence(observation, requested_tick)
 
     def guarded(self, vehicle_id, record):
         # Disabling configuration cannot restore the old unguarded write path.
@@ -54,6 +101,7 @@ class SimulatorRecovery:
     async def commit(self, vehicle_id, staged, sample=None):
         """Publish in memory only after the snapshot/history transaction succeeds."""
         store = self.store
+        store.ensure_consistent()
         payload = {"instance_id": store.instance_id, "version": store.version + 1,
                    "vehicles": {**store.vehicles, vehicle_id: staged}, "charging_tasks": store.charging_tasks}
         try:
@@ -62,12 +110,12 @@ class SimulatorRecovery:
             else:
                 await store.repository.save(payload, telemetry_sample=sample)
         except asyncio.CancelledError:
-            store.persistence_uncertain = True
+            store.mark_persistence_uncertain()
             raise
         except Exception as exc:
             # A lost commit response is ambiguous. Do not overwrite durable
             # ownership from old memory; restart/reload Fleet before any writes.
-            store.persistence_uncertain = True
+            store.mark_persistence_uncertain()
             raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN") from exc
         store.vehicles[vehicle_id] = staged
         store.version += 1
@@ -162,21 +210,61 @@ class SimulatorRecovery:
             return SimulatorSession.model_validate(previous["receipt"])
         return None
 
+    def idle_restore_record(self, vehicle_id, body):
+        """Caller holds Fleet lock; exact retries precede mutable checks."""
+        store = self.store
+        self.gate(vehicle_id)
+        record = store.record(vehicle_id)
+        retry = self.restore_retry(record, body)
+        if retry:
+            return record, None, retry
+        owner = record.get("simulator_owner")
+        previous = record.get("simulator_checkpoint")
+        if (str(body.expected_fleet_instance_id) != store.instance_id
+                or body.expected_control_version != record["control_version"]
+                or owner is None or body.expected_generation != owner["generation"]
+                or body.expected_owner_revision != owner["revision"]
+                or previous is None
+                or body.expected_checkpoint_revision != previous["revision"]):
+            raise HTTPException(409, "SIMULATOR_EVIDENCE_CHANGED")
+        if owner["expires_at"] > store.clock.now() or not store.view(record)["stale"]:
+            raise HTTPException(409, "SIMULATOR_OWNER_STILL_ACTIVE")
+        if record["active_claim"] or record["active_rental"] or record["active_charging_task"]:
+            raise HTTPException(409, "SIMULATOR_TASK_CONFLICT")
+        checkpoint = SimulatorCheckpoint.model_validate(previous["data"])
+        physical = checkpoint.physical
+        if (checkpoint.command is not None or physical.relocation_state != "IDLE"
+                or physical.active_dispatch_id is not None or physical.speed_kph != 0
+                or physical.session_id != record["session_id"]
+                or str(physical.session_id) != owner["session_id"]):
+            raise HTTPException(409, "IDLE_RECOVERY_CHECKPOINT_REQUIRED")
+        if checkpoint.simulation != body.simulation:
+            raise HTTPException(409, "SIMULATOR_CONFIGURATION_MISMATCH")
+        # Rotation may have committed before its response was lost.
+        telemetry = record["telemetry"]
+        identity_fields = {"session_id", "sequence"}
+        if (telemetry is None or physical.model_dump(exclude=identity_fields)
+                != telemetry.model_dump(exclude=identity_fields)):
+            raise HTTPException(409, "IDLE_RECOVERY_TELEMETRY_MISMATCH")
+        self.validate_checkpoint(vehicle_id, record, checkpoint)
+        return record, checkpoint, None
+
     async def restore_idle(self, vehicle_id, body):
-        """Fence an expired idle owner without inventing a completed command."""
+        """Fence an expired idle owner after unlocked dependency observations."""
         store = self.store
         async with store.lock:
-            self.gate(vehicle_id)
-            retry = self.restore_retry(store.record(vehicle_id), body)
+            record, checkpoint, retry = self.idle_restore_record(vehicle_id, body)
             if retry:
                 return retry
+            if checkpoint is None:
+                raise HTTPException(409, "IDLE_RECOVERY_CHECKPOINT_REQUIRED")
+            saved = deepcopy(record)
         # A released Fleet claim alone cannot establish that Dispatch finished.
-        # No Fleet lock is held during the read. Recheck control/owner revisions
-        # and local tasks below before committing the new generation.
         try:
             async with httpx.AsyncClient(timeout=2) as client:
-                response = await client.get(self.settings.dispatch_url + "/api/v1/dispatches",
-                                            params={"vehicle_id": vehicle_id})
+                response = await client.get(
+                    self.settings.dispatch_url + "/api/v1/dispatches",
+                    params={"vehicle_id": vehicle_id})
                 response.raise_for_status()
                 dispatches = DispatchList.model_validate(response.json())
         except (httpx.HTTPError, ValueError) as exc:
@@ -186,40 +274,17 @@ class SimulatorRecovery:
                or d.recovery and d.recovery.status in ("REQUESTED", "RESTORING")
                for d in dispatches.dispatches):
             raise HTTPException(409, "IDLE_RECOVERY_DISPATCH_UNRESOLVED")
+        evidence = (await self.read_charging_evidence(vehicle_id)
+                    if self.needs_charging_evidence(checkpoint) else None)
         async with store.lock:
-            self.gate(vehicle_id)
-            record = store.record(vehicle_id)
-            retry = self.restore_retry(record, body)
+            record, checkpoint, retry = self.idle_restore_record(vehicle_id, body)
             if retry:
                 return retry
-            owner, previous = record.get("simulator_owner"), record.get("simulator_checkpoint")
-            if (str(body.expected_fleet_instance_id) != store.instance_id
-                    or body.expected_control_version != record["control_version"]
-                    or owner is None or body.expected_generation != owner["generation"]
-                    or body.expected_owner_revision != owner["revision"]
-                    or previous is None or body.expected_checkpoint_revision != previous["revision"]):
-                raise HTTPException(409, "SIMULATOR_EVIDENCE_CHANGED")
-            if owner["expires_at"] > store.clock.now() or not store.view(record)["stale"]:
-                raise HTTPException(409, "SIMULATOR_OWNER_STILL_ACTIVE")
-            if record["active_claim"] or record["active_rental"] or record["active_charging_task"]:
-                raise HTTPException(409, "SIMULATOR_TASK_CONFLICT")
-            checkpoint = SimulatorCheckpoint.model_validate(previous["data"])
-            physical = checkpoint.physical
-            if (checkpoint.command is not None or physical.relocation_state != "IDLE"
-                    or physical.active_dispatch_id is not None or physical.speed_kph != 0
-                    or physical.charging_state != "NOT_CHARGING"
-                    or physical.session_id != record["session_id"]
-                    or str(physical.session_id) != owner["session_id"]):
+            if checkpoint is None:
                 raise HTTPException(409, "IDLE_RECOVERY_CHECKPOINT_REQUIRED")
-            if checkpoint.simulation != body.simulation:
-                raise HTTPException(409, "SIMULATOR_CONFIGURATION_MISMATCH")
-            # A prior handoff may have committed before its response was lost.
-            # Only session/sequence may then differ from last published telemetry.
-            telemetry = record["telemetry"]
-            if telemetry is None or physical.model_dump(exclude={"session_id", "sequence"}) != telemetry.model_dump(
-                    exclude={"session_id", "sequence"}):
-                raise HTTPException(409, "IDLE_RECOVERY_TELEMETRY_MISMATCH")
-            self.validate_checkpoint(vehicle_id, record, checkpoint)
+            if record != saved:
+                raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_CHANGED")
+            self.charging_context(vehicle_id, record, checkpoint, evidence)
             return await self.rotate_owner(vehicle_id, record, body, checkpoint)
 
     async def restore(self, vehicle_id, body):
@@ -424,21 +489,21 @@ class SimulatorRecovery:
         if physical.relocation_state == "ARRIVED" and abs(physical.distance_travelled_km - route.distance_km) > 1e-9:
             raise HTTPException(409, "SIMULATOR_ARRIVAL_PROGRESS_MISMATCH")
 
-    async def charging_context(self, vehicle_id, record, checkpoint):
-        """Only an allocated charger and a current-process baseline can credit energy."""
+    def charging_context(self, vehicle_id, record, checkpoint,
+                         evidence: ChargingEvidence | None):
+        """Validate fresh external evidence against current locked Fleet state."""
         physical = checkpoint.physical
-        if checkpoint.command is not None or physical.charging_state == "NOT_CHARGING":
+        if not self.needs_charging_evidence(checkpoint):
             return None
         if physical.parked_facility_id is None or physical.charging_power_kw is None:
             raise HTTPException(409, "SIMULATOR_CHARGING_CONTEXT_REQUIRED")
-        try:
-            async with httpx.AsyncClient(timeout=2) as client:
-                response = await client.get(
-                    f"{self.store.settings.facilities_url}/api/v1/vehicles/{vehicle_id}/parking")
-                response.raise_for_status()
-                parking = VehicleParking.model_validate(response.json())
-        except (httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_UNAVAILABLE") from exc
+        if evidence is None:
+            raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_UNAVAILABLE")
+        age = self.store.clock.monotonic() - evidence.requested_tick
+        if not 0 <= age < self.evidence_max_age:
+            raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_EXPIRED")
+        observation = evidence.observation
+        parking = observation.parking
         site = parking.parking
         if (parking.vehicle_id != vehicle_id or parking.pending or site is None or not site.charging_allocated
                 or site.facility_id != physical.parked_facility_id
@@ -460,6 +525,8 @@ class SimulatorRecovery:
                     or proof["session_id"] != record["simulator_owner"]["session_id"]
                     or proof["facility_id"] != site.facility_id or proof["power_kw"] != site.charging_power_kw
                     or proof["target_soc_pct"] != site.charging_target_soc_pct
+                    or proof.get("allocation_id") != observation.allocation_id
+                    or proof.get("facilities_instance_id") != str(observation.instance_id)
                     or baseline.charging_state != "CHARGING"):
                 raise HTTPException(409, "SIMULATOR_CHARGING_BASELINE_REQUIRED")
             elapsed = max(0, min((physical.observed_at - baseline.observed_at).total_seconds(),
@@ -476,40 +543,68 @@ class SimulatorRecovery:
                 "generation": record["simulator_owner"]["generation"],
                 "session_id": record["simulator_owner"]["session_id"],
                 "power_kw": site.charging_power_kw, "target_soc_pct": site.charging_target_soc_pct,
+                "allocation_id": observation.allocation_id,
+                "facilities_instance_id": str(observation.instance_id),
+                "facilities_revision": observation.revision,
+                "facilities_observed_at": observation.observed_at.isoformat(),
+                "observation_id": str(observation.request_id),
                 "verified_at": now}
+
+    def checkpoint_record(self, vehicle_id, body):
+        """Caller holds Fleet lock; admission is repeated after external I/O."""
+        store = self.store
+        self.gate(vehicle_id)
+        record = store.record(vehicle_id)
+        self.owner(record, body.session_id, body.generation, require_live=False)
+        if body.checkpoint.physical.session_id != body.session_id:
+            raise HTTPException(409, "SIMULATOR_OWNER_CONFLICT")
+        previous = record.get("simulator_checkpoint")
+        if previous and previous["request_id"] == str(body.request_id):
+            if previous["request_fingerprint"] != fingerprint(body):
+                raise HTTPException(409, "SIMULATOR_REQUEST_ID_CONFLICT")
+            return record, SimulatorCheckpointReceipt.model_validate(previous["receipt"])
+        self.owner(record, body.session_id, body.generation)
+        if body.expected_checkpoint_revision != (previous["revision"] if previous else 0):
+            raise HTTPException(409, "SIMULATOR_CHECKPOINT_REVISION_CONFLICT")
+        self.validate_checkpoint(vehicle_id, record, body.checkpoint)
+        return record, None
 
     async def checkpoint(self, vehicle_id, body):
         store = self.store
         async with store.lock:
-            self.gate(vehicle_id)
-            record = store.record(vehicle_id)
-            self.owner(record, body.session_id, body.generation, require_live=False)
-            if body.checkpoint.physical.session_id != body.session_id:
-                raise HTTPException(409, "SIMULATOR_OWNER_CONFLICT")
-            previous = record.get("simulator_checkpoint")
-            request_fingerprint = fingerprint(body)
-            if previous and previous["request_id"] == str(body.request_id):
-                if previous["request_fingerprint"] != request_fingerprint:
-                    raise HTTPException(409, "SIMULATOR_REQUEST_ID_CONFLICT")
-                return SimulatorCheckpointReceipt.model_validate(previous["receipt"])
-            self.owner(record, body.session_id, body.generation)
-            if body.expected_checkpoint_revision != (previous["revision"] if previous else 0):
-                raise HTTPException(409, "SIMULATOR_CHECKPOINT_REVISION_CONFLICT")
-            self.validate_checkpoint(vehicle_id, record, body.checkpoint)
-            charging = await self.charging_context(vehicle_id, record, body.checkpoint)
-            # Verification can await Facilities; ownership must still be live at commit.
-            self.owner(record, body.session_id, body.generation)
-            staged = deepcopy(record)
-            sample = store.stage_telemetry(vehicle_id, staged, body.checkpoint.physical) if body.publish_telemetry else None
-            if sample is None:
-                staged["state_version"] += 1
-            receipt = SimulatorCheckpointReceipt(request_id=body.request_id, generation=body.generation,
-                checkpoint_revision=body.expected_checkpoint_revision + 1,
-                command_fingerprint=fingerprint(body.checkpoint.command) if body.checkpoint.command else None,
-                durable=store.enabled)
-            staged["simulator_checkpoint"] = {"revision": receipt.checkpoint_revision,
-                "data": body.checkpoint.model_dump(mode="json"), "request_id": str(body.request_id),
-                "charging": charging,
-                "request_fingerprint": request_fingerprint, "receipt": receipt.model_dump(mode="json")}
-            await self.commit(vehicle_id, staged, sample)
-            return receipt
+            record, retry = self.checkpoint_record(vehicle_id, body)
+            if retry:
+                return retry
+            if not self.needs_charging_evidence(body.checkpoint):
+                return await self.commit_checkpoint(vehicle_id, record, body, None)
+            saved = deepcopy(record)
+        evidence = await self.read_charging_evidence(vehicle_id)
+        async with store.lock:
+            record, retry = self.checkpoint_record(vehicle_id, body)
+            if retry:
+                return retry
+            if record != saved:
+                raise HTTPException(503, "SIMULATOR_CHARGING_EVIDENCE_CHANGED")
+            charging = self.charging_context(vehicle_id, record, body.checkpoint, evidence)
+            return await self.commit_checkpoint(vehicle_id, record, body, charging)
+
+    async def commit_checkpoint(self, vehicle_id, record, body, charging):
+        """Caller holds Fleet lock; snapshot/history still use one writer."""
+        store = self.store
+        staged = deepcopy(record)
+        sample = (store.stage_telemetry(vehicle_id, staged, body.checkpoint.physical)
+                  if body.publish_telemetry else None)
+        if sample is None:
+            staged["state_version"] += 1
+        receipt = SimulatorCheckpointReceipt(
+            request_id=body.request_id, generation=body.generation,
+            checkpoint_revision=body.expected_checkpoint_revision + 1,
+            command_fingerprint=(fingerprint(body.checkpoint.command)
+                                 if body.checkpoint.command else None),
+            durable=store.enabled)
+        staged["simulator_checkpoint"] = {"revision": receipt.checkpoint_revision,
+            "data": body.checkpoint.model_dump(mode="json"), "request_id": str(body.request_id),
+            "charging": charging,
+            "request_fingerprint": fingerprint(body), "receipt": receipt.model_dump(mode="json")}
+        await self.commit(vehicle_id, staged, sample)
+        return receipt
