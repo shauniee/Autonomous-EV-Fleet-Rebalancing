@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, Field, model_validator
 
 from .common import Model, Position
-from .dispatch import CommandAcknowledgement, DispatchEvent, DispatchState, RelocationCommand
+from .dispatch import CommandAcknowledgement, DispatchEvent, DispatchState, RelocationCommand, RecoveryOperation
 from .vehicles import TelemetryUpdate
 
 
@@ -28,7 +28,7 @@ class RecoveryEvidence(Model):
     claim_status: Literal["ACTIVE", "RELEASED"] | None = None
     parking_status: Literal["RESERVED", "OCCUPIED", "RELEASED"] | None = None
     telemetry_age_seconds: float | None = None
-    checkpoint_source: Literal["LEGACY_TELEMETRY", "NONE"] = "NONE"
+    checkpoint_source: Literal["LEGACY_TELEMETRY", "SIMULATOR_CHECKPOINT", "NONE"] = "NONE"
     checkpoint_at: AwareDatetime | None = None
     recorded_position: Position | None = None
     recorded_soc_pct: float | None = Field(default=None, ge=0, le=100)
@@ -42,9 +42,9 @@ class RecoveryAssessment(Model):
     assessment_revision: str
     status: Literal["NOT_REQUIRED", "REQUIRED", "BLOCKED"]
     reason_code: str
-    # Diagnosis stays read-only until coordinated recovery is implemented.
-    can_resume: Literal[False] = False
-    supported_action: None = None
+    can_resume: bool = False
+    supported_action: Literal["RESUME_SIMULATION"] | None = None
+    operation: RecoveryOperation | None = None
     blockers: list[RecoveryBlocker] = Field(default_factory=list)
     evidence: RecoveryEvidence
 
@@ -163,3 +163,35 @@ class SimulatorCheckpointReceipt(Model):
     checkpoint_revision: int = Field(ge=1)
     command_fingerprint: str | None
     durable: bool
+
+
+class SimulatorCheckpointSnapshot(Model):
+    fleet_instance_id: UUID
+    control_version: int
+    configured: bool
+    generation: int = Field(ge=0)
+    checkpoint_revision: int = Field(ge=0)
+    checkpoint: SimulatorCheckpoint | None
+    configuration: SimulatorConfiguration
+
+
+class RecoveryRequest(Model):
+    request_id: UUID
+    action: Literal["RESUME_SIMULATION"] = "RESUME_SIMULATION"
+    expected_assessment_revision: str
+
+
+class SimulatorRestoreRequest(Model):
+    action: Literal["RESTORE"] = "RESTORE"
+    request_id: UUID
+    dispatch_id: UUID
+    expected_fleet_instance_id: UUID
+    expected_control_version: int
+    expected_generation: int = Field(ge=0)
+    expected_checkpoint_revision: int = Field(ge=0)
+    checkpoint: SimulatorCheckpoint
+
+
+class RecoveryHandoffRequest(Model):
+    consumer_id: UUID
+    simulation: SimulatorConfiguration

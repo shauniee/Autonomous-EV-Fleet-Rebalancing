@@ -47,8 +47,9 @@ class MovingNode:
         self.traffic_blocked = False
         self.checkpointing = checkpointing
 
-    async def request(self, method, url, body=None):
-        response = await self.client.request(method, url, json=body)
+    async def request(self, method, url, body=None, *, headers=None):
+        options = {"headers": headers} if headers else {}
+        response = await self.client.request(method, url, json=body, **options)
         response.raise_for_status()
         return response.json()
 

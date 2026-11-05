@@ -43,6 +43,7 @@ class SimulatorRecoverySettings(Model):
     vehicle_ids: list[str] = Field(default_factory=list, max_length=1000)
     lease_seconds: float = Field(default=30, gt=0, le=300)
     simulation_time_scale: float = Field(default=10, gt=0)
+    dispatch_url: str = "http://localhost:8004"
 
     @field_validator("vehicle_ids", mode="before")
     @classmethod
@@ -63,6 +64,7 @@ class SimulatorRecoverySettings(Model):
         values = {name: os.environ["SIMULATOR_RECOVERY_" + name.upper()]
                   for name in cls.model_fields if "SIMULATOR_RECOVERY_" + name.upper() in os.environ}
         values.setdefault("simulation_time_scale", os.getenv("SIMULATION_TIME_SCALE", "10"))
+        values.setdefault("dispatch_url", os.getenv("DISPATCH_URL", "http://localhost:8004"))
         return cls(**values)
 
 

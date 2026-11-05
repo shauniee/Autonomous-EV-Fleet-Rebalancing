@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from uuid import uuid4, uuid5
+from uuid import UUID, uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings, CrdsSettings
@@ -17,6 +17,7 @@ from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
+from .recovery import RecoveryCoordinator
 from .routing import RoutingSettings, driving_route
 from .traffic_routes import choose_traffic_route
 from ev_fleet.rebalancing.traffic import assess_traffic
@@ -43,6 +44,7 @@ class DispatchService:
         self.planning_instance_id = uuid4()
         self.planning_revision = 0
         self.route_estimates = {}
+        self.recovery = RecoveryCoordinator(self)
         self.traffic_enabled = (os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
             or os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true")
 
@@ -64,7 +66,7 @@ class DispatchService:
                 parking_request=item["parking_request"], claimed=item["claimed"],
                 ack=item["ack"], events=item["events"],
                 event_sequence=item["event_sequence"],
-                release_outcome=item["release_outcome"])
+                release_outcome=item["release_outcome"], recovery=item.get("recovery"))
             if record.data["delivery_attempts"]:
                 record.sent_tick = tick
             if record.claimed and record.data["state"] not in TERMINAL:
@@ -93,6 +95,7 @@ class DispatchService:
                 "events": record.events,
                 "event_sequence": record.event_sequence,
                 "release_outcome": record.release_outcome,
+                "recovery": record.recovery,
             } for key, record in self.store.records.items()}
             await self.repository.save({
                 "records": records,
@@ -565,10 +568,11 @@ class DispatchService:
             record.data["vehicle_id"] != body.vehicle_id):
             raise HTTPException(409, "COMMAND_ID_CONFLICT")
 
-    async def acknowledge(self, dispatch_id, body):
+    async def acknowledge(self, dispatch_id, body, *, simulator_generation=None, simulator_session_id=None):
         record = self.store.get(dispatch_id)
         async with record.lock:
             self.check_command(record, body)
+            await self.recovery.guard(record, simulator_generation, simulator_session_id)
             payload = body.model_dump(mode="json")
             if record.ack:
                 if record.ack != payload:
@@ -591,10 +595,11 @@ class DispatchService:
         await self.persist()
         return result
 
-    async def event(self, dispatch_id, body):
+    async def event(self, dispatch_id, body, *, simulator_generation=None, simulator_session_id=None):
         record = self.store.get(dispatch_id)
         async with record.lock:
             self.check_command(record, body)
+            await self.recovery.guard(record, simulator_generation, simulator_session_id)
             payload = body.model_dump(mode="json")
             previous = record.events.get(body.sequence)
             if previous == payload:
@@ -631,12 +636,23 @@ class DispatchService:
         return result
 
     def batch_view(self, data):
-        items = list(data["items"])
-        approved = sum(item["state"] not in ("REJECTED", "UNKNOWN") for item in items)
-        unknown = sum(item["state"] == "UNKNOWN" for item in items)
+        items = []
+        for stored in data["items"]:
+            item = dict(stored)
+            key = item.get("dispatch_id") or self.store.requests.get(
+                str(uuid5(UUID(data["request_id"]), item["recommendation_id"])))
+            child = self.store.records.get(key)
+            if child:
+                item.update(dispatch_id=key, state=child.data["state"], error=child.data["failure_reason"])
+                if item["state"] == "PENDING" and not child.claimed:
+                    item.update(state="UNKNOWN", error="APPROVAL_UNRESOLVED")
+            items.append(item)
+        unknown = sum(i["state"] == "UNKNOWN" or i["state"] == "PENDING" and not i.get("dispatch_id") for i in items)
+        approved = sum(i["state"] not in ("REJECTED", "UNKNOWN") and
+                       (i["state"] != "PENDING" or bool(i.get("dispatch_id"))) for i in items)
         status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
                   else "PARTIAL" if approved else "REJECTED")
-        return {**data, "status": status}
+        return {**data, "items": items, "status": status}
 
     async def approve_batch(self, body):
         key = str(body.request_id)
@@ -671,6 +687,11 @@ class DispatchService:
                     continue
                 # Stable child idempotency key across HTTP retries.
                 child_id = uuid5(body.request_id, item["recommendation_id"])
+                existing_id = item.get("dispatch_id") or self.store.requests.get(str(child_id))
+                child = self.store.records.get(existing_id)
+                if child and (child.claimed or child.data["state"] in TERMINAL):
+                    item["dispatch_id"] = existing_id
+                    continue
                 try:
                     result = await self.approve(DispatchApproval(
                         request_id=child_id, recommendation_id=item["recommendation_id"]))
@@ -693,12 +714,16 @@ class DispatchService:
     async def reconcile_loop(self):
         while True:
             for record in list(self.store.records.values()):
-                if record.lock.locked() or (record.data["state"] in TERMINAL
-                    and record.data["parking_status"] != "RESERVED"):
+                if record.lock.locked():
                     continue
                 try:
+                    if record.recovery:
+                        await self.recovery.advance(record)
+                    if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
+                        continue
                     async with record.lock:
-                        await self.refresh(record)
+                        if not record.recovery or record.recovery["status"] != "REQUESTED":
+                            await self.refresh(record)
                     await self.persist()
                 except Exception:
                     logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])

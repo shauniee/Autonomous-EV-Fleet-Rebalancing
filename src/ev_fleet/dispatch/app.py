@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from uuid import UUID
 import httpx
+from fastapi import Header
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
 from .routing import road_match_spawn
@@ -9,7 +10,8 @@ from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
 from .recovery import assess_recovery
-from ev_fleet.contracts.recovery import RecoveryAssessment
+from ev_fleet.contracts.recovery import RecoveryAssessment, RecoveryRequest, RecoveryHandoffRequest, SimulatorSession
+from ev_fleet.contracts.dispatch import RecoveryOperation
 
 
 def create_app(settings=None, client=None, clock=None, background=True):
@@ -75,6 +77,14 @@ def create_app(settings=None, client=None, clock=None, background=True):
     async def recovery_assessment(dispatch_id: UUID):
         return await assess_recovery(app.state.service, dispatch_id)
 
+    @app.post("/api/v1/dispatches/{dispatch_id}/recovery", status_code=202, response_model=RecoveryOperation)
+    async def recover(dispatch_id: UUID, body: RecoveryRequest):
+        return await app.state.service.recovery.request(dispatch_id, body)
+
+    @app.post("/api/v1/dispatches/{dispatch_id}/recovery/handoff", response_model=SimulatorSession)
+    async def recovery_handoff(dispatch_id: UUID, body: RecoveryHandoffRequest):
+        return await app.state.service.recovery.handoff(dispatch_id, body)
+
     @app.get("/api/v1/dispatches/{dispatch_id}", response_model=Dispatch)
     async def dispatch(dispatch_id: UUID):
         return await app.state.service.get(dispatch_id)
@@ -84,12 +94,18 @@ def create_app(settings=None, client=None, clock=None, background=True):
         return await app.state.service.commands(vehicle_id)
 
     @app.post("/api/v1/dispatches/{dispatch_id}/acknowledgements", response_model=Dispatch)
-    async def acknowledge(dispatch_id: UUID, body: CommandAcknowledgement):
-        return await app.state.service.acknowledge(dispatch_id, body)
+    async def acknowledge(dispatch_id: UUID, body: CommandAcknowledgement,
+                          simulator_generation: int | None = Header(default=None, alias="X-Simulator-Generation"),
+                          simulator_session_id: UUID | None = Header(default=None, alias="X-Simulator-Session")):
+        return await app.state.service.acknowledge(dispatch_id, body,
+            simulator_generation=simulator_generation, simulator_session_id=simulator_session_id)
 
     @app.post("/api/v1/dispatches/{dispatch_id}/events", response_model=Dispatch)
-    async def event(dispatch_id: UUID, body: DispatchEvent):
-        return await app.state.service.event(dispatch_id, body)
+    async def event(dispatch_id: UUID, body: DispatchEvent,
+                    simulator_generation: int | None = Header(default=None, alias="X-Simulator-Generation"),
+                    simulator_session_id: UUID | None = Header(default=None, alias="X-Simulator-Session")):
+        return await app.state.service.event(dispatch_id, body,
+            simulator_generation=simulator_generation, simulator_session_id=simulator_session_id)
 
     return app
 

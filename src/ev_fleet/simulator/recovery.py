@@ -8,10 +8,11 @@ from uuid import uuid4
 import httpx
 
 from ev_fleet.contracts.common import Position, utcnow
-from ev_fleet.contracts.dispatch import CommandList, Dispatch, DispatchEvent
+from ev_fleet.contracts.dispatch import CommandList, Dispatch, DispatchEvent, DispatchList
 from ev_fleet.contracts.recovery import (
     RecoveryAssessment, SimulatorCheckpoint, SimulatorCheckpointReceipt,
     SimulatorCheckpointRequest, SimulatorConfiguration, SimulatorSession, SimulatorSessionRequest,
+    SimulatorCheckpointSnapshot, RecoveryHandoffRequest,
 )
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from .movement import Movement
@@ -102,6 +103,7 @@ class CheckpointRunner:
         self.renew_margin = 5.0
         self.blocked = None
         self.restore_pending = False
+        self.consumer_id = str(uuid4())
 
     def stage_coordinated_restore(self, session, fleet, dispatch=None, assessment=None):
         """Prepare a Phase 4 handoff; never called by bootstrap or exposed by CLI.
@@ -145,7 +147,12 @@ class CheckpointRunner:
         try:
             if hasattr(body, "model_dump"):
                 body = body.model_dump(mode="json")
-            result = await self.node.request(method, url, body)
+            headers = None
+            if (self.lease and method == "POST" and url.startswith(self.node.dispatch_url + "/api/v1/dispatches/")
+                    and (url.endswith("/acknowledgements") or url.endswith("/events"))):
+                headers = {"X-Simulator-Generation": str(self.lease.generation),
+                           "X-Simulator-Session": str(self.lease.session_id)}
+            result = await self.node.request(method, url, body, headers=headers)
             if not isinstance(result, dict):
                 raise RecoveryRequired("DEPENDENCY_RESPONSE_INVALID")
             return result
@@ -407,6 +414,43 @@ class CheckpointRunner:
             self.node.traffic_snapshot = latest if latest.get("source") == "SIMULATION" and latest.get("status") == "FRESH" else None
             self.next_traffic = time.monotonic() + 2
 
+    async def try_handoff(self):
+        """Only consume an operator-approved request; never request a takeover."""
+        fleet = FleetSnapshot.model_validate(await self.request("GET", self.node.fleet_url + "/api/v1/vehicles"))
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == self.node.vehicle_id), None)
+        if vehicle is None:
+            return
+        dispatch_id = vehicle.active_claim.dispatch_id if vehicle.active_claim else (
+            vehicle.telemetry.active_dispatch_id if vehicle.telemetry else None)
+        if dispatch_id is None:
+            saved = SimulatorCheckpointSnapshot.model_validate(await self.request("GET",
+                f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint"))
+            if saved.checkpoint is None:
+                return
+            if saved.checkpoint.command:
+                dispatch_id = saved.checkpoint.command.dispatch_id
+            elif saved.checkpoint.completed_command_id:
+                records = DispatchList.model_validate(await self.request("GET",
+                    self.node.dispatch_url + f"/api/v1/dispatches?vehicle_id={self.node.vehicle_id}"))
+                dispatch_id = next((d.dispatch_id for d in records.dispatches if d.command
+                    and d.command.command_id == saved.checkpoint.completed_command_id), None)
+        if dispatch_id is None:
+            return
+        url = f"{self.node.dispatch_url}/api/v1/dispatches/{dispatch_id}"
+        assessment = RecoveryAssessment.model_validate(await self.request("GET", url + "/recovery"))
+        if assessment.operation is None or assessment.operation.status != "RESTORING":
+            return
+        session = SimulatorSession.model_validate(await self.request("POST", url + "/recovery/handoff",
+            RecoveryHandoffRequest(consumer_id=self.consumer_id, simulation=self.configuration)))
+        # Read authoritative evidence after claiming the single-consumer handoff.
+        fleet = FleetSnapshot.model_validate(await self.request("GET", self.node.fleet_url + "/api/v1/vehicles"))
+        dispatch = Dispatch.model_validate(await self.request("GET", url))
+        assessment = RecoveryAssessment.model_validate(await self.request("GET", url + "/recovery"))
+        prepared = CheckpointRunner(self.node)
+        prepared.consumer_id = self.consumer_id
+        prepared.stage_coordinated_restore(session, fleet, dispatch, assessment)
+        self.__dict__.update(prepared.__dict__)
+
     async def run(self):
         async with httpx.AsyncClient(timeout=2) as owned:
             self.node.client = self.node.client or owned
@@ -415,6 +459,10 @@ class CheckpointRunner:
                 if self.blocked:
                     status = "REQUIRED" if "COORDINATION" in self.blocked or self.blocked == "SIMULATOR_LEASE_EXPIRED" else "BLOCKED"
                     logging.warning("vehicle=%s recovery=%s reason=%s", self.node.vehicle_id, status, self.blocked)
+                    try:
+                        await self.try_handoff()
+                    except (httpx.HTTPError, RecoveryRequired, ValueError) as exc:
+                        logging.warning("vehicle=%s handoff_wait=%s", self.node.vehicle_id, type(exc).__name__)
                     await asyncio.sleep(5)
                     self.last_motion = time.monotonic()
                     continue

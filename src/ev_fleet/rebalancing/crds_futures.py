@@ -59,6 +59,12 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
                 raise ValueError("unresolved dispatch identity")
             vehicle = vehicles[dispatch.vehicle_id]
             command = dispatch.command
+            if (dispatch.recovery and dispatch.recovery.confirmed_paused and vehicle.stale
+                    and vehicle.simulator_recovery
+                    and dispatch.recovery.generation == vehicle.simulator_recovery.generation):
+                # Fenced, unavailable stock contributes neither an origin debit
+                # nor an arrival, including release/arrival cleanup windows.
+                continue
             if not vehicle.active_claim:
                 origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
                 if origin not in stock or min(stock[origin]) < 1:
