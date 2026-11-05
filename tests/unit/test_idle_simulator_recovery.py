@@ -23,7 +23,7 @@ class CheckpointRepository(MemoryRepository):
         await super().save(payload)
 
 
-async def idle_vehicle(clock, completed_charging=False):
+async def idle_vehicle(clock, charging_state="NOT_CHARGING"):
     config = SimulatorRecoverySettings(enabled=True, vehicle_ids=["ev-idle"], dispatch_url="http://dispatch")
     store = FleetStore(settings=DispatchSettings(), clock=clock, repository=CheckpointRepository(),
                        recovery_settings=config)
@@ -35,10 +35,12 @@ async def idle_vehicle(clock, completed_charging=False):
         expected_control_version=1, expected_generation=0, expected_owner_revision=0,
         expected_checkpoint_revision=0))
     physical = TelemetryUpdate(session_id=receipt.session_id, sequence=0, observed_at=clock.now(),
-        position={"latitude": 1.32, "longitude": 103.81}, soc_pct=85.4, odometer_km=15.2,
-        heading_deg=90, speed_kph=0, charging_state="COMPLETE" if completed_charging else "NOT_CHARGING",
-        parked_facility_id="charger-idle" if completed_charging else None,
-        charging_power_kw=3.7 if completed_charging else None)
+        position={"latitude": 1.32, "longitude": 103.81},
+        soc_pct=60 if charging_state == "CHARGING" else 85.4, odometer_km=15.2,
+        availability="UNAVAILABLE" if charging_state == "CHARGING" else "AVAILABLE",
+        heading_deg=90, speed_kph=0, charging_state=charging_state,
+        parked_facility_id="charger-idle" if charging_state != "NOT_CHARGING" else None,
+        charging_power_kw=3.7 if charging_state != "NOT_CHARGING" else None)
     checkpoint = SimulatorCheckpoint(vehicle_id="ev-idle", fleet_instance_id=store.instance_id,
         physical=physical, simulation=SimulatorConfiguration(capacity_kwh=60,
             consumption_kwh_per_km=.18, speed_kph=30, time_scale=10))
@@ -77,11 +79,13 @@ def completed_parking():
         "charging_power_kw": 3.7, "charging_target_soc_pct": 85.4}}
 
 
-@pytest.mark.parametrize("completed_charging", [False, True])
-def test_restore_survives_store_restart_preserves_state_and_fences_old_owner(clock, monkeypatch, completed_charging):
+@pytest.mark.parametrize("charging_state", ["NOT_CHARGING", "COMPLETE", "CHARGING"])
+def test_restore_survives_store_restart_preserves_state_and_fences_old_owner(
+        clock, monkeypatch, charging_state):
     async def scenario():
-        dispatch_response(monkeypatch, parking=completed_parking() if completed_charging else None)
-        initial, request, original = await idle_vehicle(clock, completed_charging)
+        parking = completed_parking() if charging_state != "NOT_CHARGING" else None
+        dispatch_response(monkeypatch, parking=parking)
+        initial, request, original = await idle_vehicle(clock, charging_state)
         store = FleetStore(settings=initial.settings, clock=clock, repository=initial.repository,
                            recovery_settings=initial.simulator_recovery.settings)
         await store.start()
@@ -105,14 +109,15 @@ def test_restore_survives_store_restart_preserves_state_and_fences_old_owner(clo
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("completed_charging", [False, True])
-def test_concurrent_idle_restores_admit_one_owner_after_succeeded_journey(clock, monkeypatch, completed_charging):
+@pytest.mark.parametrize("charging_state", ["NOT_CHARGING", "COMPLETE", "CHARGING"])
+def test_concurrent_idle_restores_admit_one_owner_after_succeeded_journey(
+        clock, monkeypatch, charging_state):
     async def scenario():
         from ev_fleet.contracts.dispatch import DispatchApproval
         from ev_fleet.dispatch.store import DispatchStore
-        parking = completed_parking() if completed_charging else None
+        parking = completed_parking() if charging_state != "NOT_CHARGING" else None
         dispatch_response(monkeypatch, parking=parking)
-        store, request, _ = await idle_vehicle(clock, completed_charging)
+        store, request, _ = await idle_vehicle(clock, charging_state)
         completed = await DispatchStore(clock).begin(DispatchApproval(
             request_id=uuid4(), recommendation_id=uuid4()))
         completed.data.update(vehicle_id="ev-idle", state="SUCCEEDED", claim_held=False)
@@ -127,20 +132,21 @@ def test_concurrent_idle_restores_admit_one_owner_after_succeeded_journey(clock,
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("conflict", ["live_owner", "claim", "rental", "charging_task", "charging",
+@pytest.mark.parametrize("conflict", ["live_owner", "claim", "rental", "charging_task", "moving",
                                      "configuration", "telemetry", "owner_revision", "session"])
-@pytest.mark.parametrize("completed_charging", [False, True])
-def test_idle_recovery_rejects_unsafe_state(clock, monkeypatch, conflict, completed_charging):
+@pytest.mark.parametrize("charging_state", ["NOT_CHARGING", "COMPLETE", "CHARGING"])
+def test_idle_recovery_rejects_unsafe_state(clock, monkeypatch, conflict, charging_state):
     async def scenario():
-        dispatch_response(monkeypatch, parking=completed_parking() if completed_charging else None)
-        store, request, _ = await idle_vehicle(clock, completed_charging)
+        parking = completed_parking() if charging_state != "NOT_CHARGING" else None
+        dispatch_response(monkeypatch, parking=parking)
+        store, request, _ = await idle_vehicle(clock, charging_state)
         record = store.record("ev-idle")
         if conflict == "live_owner":
             record["simulator_owner"]["expires_at"] = clock.now().replace(year=2027)
         elif conflict in ("claim", "rental", "charging_task"):
             record["active_" + conflict] = str(uuid4()) if conflict == "charging_task" else {"conflict": True}
-        elif conflict == "charging":
-            record["simulator_checkpoint"]["data"]["physical"]["charging_state"] = "CHARGING"
+        elif conflict == "moving":
+            record["simulator_checkpoint"]["data"]["physical"]["speed_kph"] = 1
         elif conflict == "configuration":
             request = request.model_copy(update={"simulation": request.simulation.model_copy(update={"time_scale": 20})})
         elif conflict == "telemetry":
@@ -157,12 +163,13 @@ def test_idle_recovery_rejects_unsafe_state(clock, monkeypatch, conflict, comple
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "malformed", "unresolved", "race"])
-@pytest.mark.parametrize("completed_charging", [False, True])
-def test_dispatch_checks_fail_closed_and_recheck_fleet_after_io(clock, monkeypatch, failure, completed_charging):
+@pytest.mark.parametrize("charging_state", ["NOT_CHARGING", "COMPLETE", "CHARGING"])
+def test_dispatch_checks_fail_closed_and_recheck_fleet_after_io(
+        clock, monkeypatch, failure, charging_state):
     async def scenario():
-        parking = completed_parking() if completed_charging else None
+        parking = completed_parking() if charging_state != "NOT_CHARGING" else None
         dispatch_response(monkeypatch, parking=parking)
-        store, request, _ = await idle_vehicle(clock, completed_charging)
+        store, request, _ = await idle_vehicle(clock, charging_state)
         if failure == "unavailable":
             dispatch_response(monkeypatch, status=503)
         elif failure == "malformed":
@@ -184,14 +191,17 @@ def test_dispatch_checks_fail_closed_and_recheck_fleet_after_io(clock, monkeypat
 
 
 @pytest.mark.parametrize("response_delay", [0, 31])
-@pytest.mark.parametrize("facilities_required,completed_charging", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("facilities_required,charging_state", [
+    (False, "NOT_CHARGING"), (True, "NOT_CHARGING"),
+    (True, "COMPLETE"), (True, "CHARGING"),
+])
 def test_runner_recovers_idle_after_restart_and_lost_response_then_lease_expiry(
-        clock, monkeypatch, response_delay, facilities_required, completed_charging):
+        clock, monkeypatch, response_delay, facilities_required, charging_state):
     async def scenario():
         client_factory = AsyncClient
-        parking = completed_parking() if completed_charging else None
+        parking = completed_parking() if charging_state != "NOT_CHARGING" else None
         dispatch_response(monkeypatch, parking=parking)
-        store, _, original = await idle_vehicle(clock, completed_charging)
+        store, _, original = await idle_vehicle(clock, charging_state)
         app = create_app(store)
         async with client_factory(transport=httpx.ASGITransport(app=app), base_url="http://fleet") as client:
             node = MovingNode("http://fleet", "http://dispatch", "ev-idle",
@@ -234,10 +244,10 @@ def test_runner_recovers_idle_after_restart_and_lost_response_then_lease_expiry(
             assert not node.ready.is_set() and (await store.get("ev-idle"))["stale"]
             await runner.checkpoint()
             assert node.ready.is_set() and not (await store.get("ev-idle"))["stale"]
-            if facilities_required and not completed_charging:
+            if facilities_required and charging_state == "NOT_CHARGING":
                 assert (await store.get("ev-idle"))["effective_availability"] == "UNAVAILABLE"
-            if completed_charging:
-                assert node.movement.charging_state == "COMPLETE" and node.parking_verified
+            if charging_state != "NOT_CHARGING":
+                assert node.movement.charging_state == charging_state and node.parking_verified
                 assert node.movement.parking["facility_id"] == original.checkpoint.physical.parked_facility_id
                 proof = store.record("ev-idle")["simulator_checkpoint"]["charging"]
                 assert proof["generation"] == generation
@@ -253,11 +263,13 @@ def test_runner_recovers_idle_after_restart_and_lost_response_then_lease_expiry(
 
 @pytest.mark.parametrize("failure", ["unavailable", "malformed", "pending", "missing", "allocation",
                                      "facility", "power", "position", "target", "vehicle"])
-def test_completed_idle_restore_requires_current_charger_evidence(clock, monkeypatch, failure):
+@pytest.mark.parametrize("charging_state", ["COMPLETE", "CHARGING"])
+def test_charging_idle_restore_requires_current_charger_evidence(
+        clock, monkeypatch, failure, charging_state):
     async def scenario():
         parking = completed_parking()
         dispatch_response(monkeypatch, parking=parking)
-        store, request, _ = await idle_vehicle(clock, completed_charging=True)
+        store, request, _ = await idle_vehicle(clock, charging_state)
         if failure == "unavailable":
             dispatch_response(monkeypatch, parking=parking, parking_status=503)
         elif failure == "malformed":
@@ -275,7 +287,8 @@ def test_completed_idle_restore_requires_current_charger_evidence(clock, monkeyp
         elif failure == "position":
             parking["parking"]["position"]["latitude"] = 1.4
         elif failure == "target":
-            parking["parking"]["charging_target_soc_pct"] = 90
+            parking["parking"]["charging_target_soc_pct"] = (
+                60 if charging_state == "CHARGING" else 90)
         else:
             parking["vehicle_id"] = "another-ev"
         before = deepcopy(store.record("ev-idle"))
@@ -285,12 +298,15 @@ def test_completed_idle_restore_requires_current_charger_evidence(clock, monkeyp
     asyncio.run(scenario())
 
 
-def test_completed_restore_does_not_publish_before_parking_reverification(clock, monkeypatch):
+@pytest.mark.parametrize("charging_state", ["COMPLETE", "CHARGING"])
+@pytest.mark.parametrize("changed", ["pending", "allocation", "target"])
+def test_charging_restore_does_not_publish_before_parking_reverification(
+        clock, monkeypatch, charging_state, changed):
     async def scenario():
         client_factory = AsyncClient
         parking = completed_parking()
         dispatch_response(monkeypatch, parking=parking)
-        store, _, original = await idle_vehicle(clock, completed_charging=True)
+        store, _, original = await idle_vehicle(clock, charging_state)
         async with client_factory(transport=httpx.ASGITransport(app=create_app(store)),
                                   base_url="http://fleet") as client:
             node = MovingNode("http://fleet", "http://dispatch", "ev-idle",
@@ -309,17 +325,129 @@ def test_completed_restore_does_not_publish_before_parking_reverification(clock,
             node.request = dependencies
             await runner.try_handoff()
             before = deepcopy(store.record("ev-idle"))
-            parking["pending"] = True
+            if changed == "pending":
+                parking["pending"] = True
+            elif changed == "allocation":
+                parking["parking"]["charging_allocated"] = False
+            else:
+                parking["parking"]["charging_target_soc_pct"] = (
+                    60 if charging_state == "CHARGING" else 90)
             with pytest.raises(RecoveryRequired, match="IDLE_RECOVERY_CHARGING_CONTEXT_CHANGED"):
                 await runner.checkpoint()
             assert store.record("ev-idle") == before
             assert runner.pending_checkpoint is None and not node.ready.is_set()
-            parking["pending"] = False
+            parking.update(completed_parking())
             await runner.checkpoint()
             telemetry = (await store.get("ev-idle"))["telemetry"]
             assert telemetry["soc_pct"] == original.checkpoint.physical.soc_pct
             assert telemetry["position"] == original.checkpoint.physical.position.model_dump()
             assert telemetry["odometer_km"] == original.checkpoint.physical.odometer_km
-            assert telemetry["charging_state"] == "COMPLETE"
+            assert telemetry["charging_state"] == charging_state
             assert node.ready.is_set()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost_baseline_response", [False, True])
+def test_restored_charging_credits_only_time_after_fresh_baseline(
+        clock, monkeypatch, lost_baseline_response):
+    from types import SimpleNamespace
+
+    async def scenario():
+        parking = completed_parking()
+        dispatch_response(monkeypatch, parking=parking)
+        initial, _, original = await idle_vehicle(clock, "CHARGING")
+        old_epoch = initial.simulator_recovery.charging_epoch
+        clock.advance(3600)
+        store = FleetStore(
+            settings=initial.settings, clock=clock,
+            repository=initial.repository,
+            recovery_settings=initial.simulator_recovery.settings)
+        await store.start()
+        monkeypatch.setattr("ev_fleet.simulator.recovery.utcnow", clock.now)
+        monkeypatch.setattr(
+            "ev_fleet.simulator.recovery.time",
+            SimpleNamespace(monotonic=clock.monotonic))
+        async with AsyncClient(
+                transport=httpx.ASGITransport(app=create_app(store)),
+                base_url="http://fleet") as client:
+            node = MovingNode(
+                "http://fleet", "http://dispatch", "ev-idle",
+                {"latitude": 1.4, "longitude": 103.9}, 10,
+                client=client, checkpointing=True,
+                facilities_url="http://facilities")
+            node.traffic_enabled = False
+            runner = CheckpointRunner(node)
+            runner.blocked = "SIMULATOR_LEASE_EXPIRED_COORDINATION_REQUIRED"
+            send = node.request
+            checkpoint_requests = []
+
+            async def dependencies(method, url, body=None, **kwargs):
+                if url == "http://facilities/api/v1/vehicles/ev-idle/parking":
+                    return deepcopy(parking)
+                if url == "http://dispatch/api/v1/vehicles/ev-idle/commands":
+                    return {"commands": []}
+                if method == "PUT":
+                    checkpoint_requests.append(deepcopy(body))
+                result = await send(method, url, body, **kwargs)
+                if (method == "PUT" and lost_baseline_response
+                        and len(checkpoint_requests) == 1):
+                    raise httpx.ReadTimeout("baseline response lost after commit")
+                return result
+
+            node.request = dependencies
+            await runner.try_handoff()
+            assert runner.lease is not None
+            assert store.record("ev-idle")["simulator_checkpoint"]["charging"] is None
+            assert store.simulator_recovery.charging_epoch != old_epoch
+
+            async def reject_energy_gain(amount, error):
+                before = deepcopy(store.record("ev-idle"))
+                request = SimulatorCheckpointRequest.model_validate(
+                    runner.checkpoint_request())
+                assert runner.last_checkpoint is not None
+                physical = runner.last_checkpoint.physical.model_copy(update={
+                    "sequence": request.checkpoint.physical.sequence,
+                    "observed_at": clock.now(),
+                    "soc_pct": node.movement.soc_pct + amount})
+                request = request.model_copy(update={
+                    "checkpoint": request.checkpoint.model_copy(update={
+                        "physical": physical})})
+                with pytest.raises(HTTPException, match=error):
+                    await store.simulator_recovery.checkpoint("ev-idle", request)
+                assert store.record("ev-idle") == before
+
+            await reject_energy_gain(.1, "SIMULATOR_CHARGING_BASELINE_REQUIRED")
+            # Neither outage nor waiting to publish can become chargeable time.
+            clock.advance(8)
+            if lost_baseline_response:
+                with pytest.raises(httpx.ReadTimeout):
+                    await runner.tick()
+                assert not node.ready.is_set()
+                clock.advance(3)
+            await runner.tick()
+            if lost_baseline_response:
+                assert checkpoint_requests[0] == checkpoint_requests[1]
+            assert not runner.restore_pending and node.ready.is_set()
+            assert node.movement.soc_pct == original.checkpoint.physical.soc_pct
+            baseline = store.record("ev-idle")["simulator_checkpoint"]
+            proof = baseline["charging"]
+            assert proof["epoch"] == store.simulator_recovery.charging_epoch
+            assert proof["generation"] == runner.lease.generation
+            assert proof["session_id"] == str(runner.lease.session_id)
+            assert proof["verified_at"] == clock.now()
+            assert (await store.get("ev-idle"))["effective_availability"] == "UNAVAILABLE"
+
+            clock.advance(2)
+            await reject_energy_gain(1, "SIMULATOR_CHARGING_ENERGY_MISMATCH")
+            await runner.tick()
+            expected_soc = original.checkpoint.physical.soc_pct + (
+                100 * 3.7 * 2 * node.time_scale / (3600 * node.movement.capacity))
+            current = await store.get("ev-idle")
+            assert current["telemetry"]["soc_pct"] == pytest.approx(expected_soc)
+            assert current["telemetry"]["charging_state"] == "CHARGING"
+            assert current["telemetry"]["position"] == (
+                original.checkpoint.physical.position.model_dump())
+            assert current["telemetry"]["odometer_km"] == (
+                original.checkpoint.physical.odometer_km)
+            assert current["effective_availability"] == "UNAVAILABLE"
     asyncio.run(scenario())
