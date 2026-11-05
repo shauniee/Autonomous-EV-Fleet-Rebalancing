@@ -41,6 +41,17 @@ export default function App() {
   const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 5000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
+  const [operationalTab, setOperationalTab] = useState('fleet');
+  const unresolvedRelocations = dispatches.data?.dispatches.filter(d => d.vehicle_id &&
+    (d.state === 'UNKNOWN' || d.recovery?.status === 'BLOCKED' || d.recovery?.status === 'REQUESTED' || d.recovery?.status === 'RESTORING')) ?? [];
+  function openRelocation(id: string) {
+    setOperationalTab('relocations');
+    requestAnimationFrame(() => {
+      const card = document.getElementById(`relocation-${id}`);
+      card?.focus({ preventScroll: true });
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
   const mapPanel = useRef<HTMLElement>(null);
   const inspector = useRef<HTMLElement>(null);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
@@ -114,8 +125,10 @@ export default function App() {
     && now - Date.parse(facilities.updatedAt) < 30000;
   const chargingAdviceFresh = !!chargingAdvice.data && !chargingAdvice.error && !!chargingAdvice.updatedAt
     && now - Date.parse(chargingAdvice.updatedAt) < 30000 && now - Date.parse(chargingAdvice.data.generated_at) < 30000;
-  const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0;
-  const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0;
+  const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0
+    || (!!recommendation?.crds && (recommendation.crds.decision !== 'MOVE' || !recommendation.crds.approval_allowed));
+  const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0
+    || (!!batch?.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed));
   async function recommend() {
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;
@@ -123,12 +136,12 @@ export default function App() {
     try {
       if (!facilityWorkflow) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
-          method: 'POST', body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
+          method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected }), signal: controller.signal,
         });
         if (!controller.signal.aborted) setRecommendation(result);
       } else {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
-          method: 'POST', body: JSON.stringify({ target_zone_id: selected, quantity,
+          method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected, quantity,
             ...(purpose === 'CHARGE' ? { purpose } : {}),
             ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
             ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
@@ -145,7 +158,7 @@ export default function App() {
     const approval = retry ?? { request_id: crypto.randomUUID(), recommendation_id: recommendation!.recommendation_id };
     setPending(approval);
     try {
-      const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', body: JSON.stringify(approval) });
+      const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
       if (result.state === 'UNKNOWN' ||
@@ -178,7 +191,7 @@ export default function App() {
     const approval = retry ?? { request_id: crypto.randomUUID(), batch_recommendation_id: batch!.batch_recommendation_id };
     setPendingBatch(approval);
     try {
-      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', body: JSON.stringify(approval) });
+      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       setBatchResult(result); setBatch(null);
       const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));
@@ -284,8 +297,14 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
-      {batchResult && <BatchResult result={batchResult}/>}
-      <OperationalTabs tabs={[
+      {(recommendation?.crds?.decision === 'DEFER' || batch?.crds?.decision === 'DEFER') &&
+        unresolvedRelocations.length > 0 &&
+        <section className="panel" aria-label="Relocations to review">
+          <p>Review unresolved relocations alongside this deferred assessment. The recovery assessment explains whether each simulation can resume.</p>
+          {unresolvedRelocations.map(d => <button key={d.dispatch_id} onClick={() => openRelocation(d.dispatch_id)}>Review {d.vehicle_id ?? d.dispatch_id} relocation / recovery</button>)}
+        </section>}
+      {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation}/>}
+      <OperationalTabs activeTab={operationalTab} onTabChange={setOperationalTab} tabs={[
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPanel vehicles={vehicles}/>
           {twinVehicle && <details className="twin-history"><summary>EV digital twin diagnostics</summary>

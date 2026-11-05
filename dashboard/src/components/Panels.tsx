@@ -3,6 +3,8 @@ import type { Candidate, Claim, Dispatch, Recommendation, Vehicle, Zone } from '
 import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { RouteDetails } from './RouteDetails';
+import { RecoveryControl } from './RecoveryControl';
+import { CrdsSummary } from './CrdsSummary';
 
 export function ServiceStatus({ name, resource }: { name: string; resource: Resource<unknown> }) {
   return <span className={`service ${resource.error ? 'broken' : resource.data ? '' : 'loading'}`}>
@@ -28,7 +30,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Estimated energy</dt><dd>{number(candidate.energy_required_kwh, ' kWh')}</dd></div>
     <div><dt>SOC at recommendation</dt><dd>{number(candidate.current_soc_pct, '%')}</dd></div>
     <div><dt>Predicted arrival SOC</dt><dd>{number(candidate.predicted_arrival_soc_pct, '%')}</dd></div>
-    <div><dt>Backend score</dt><dd>{number(candidate.score)}</dd></div>
+    <div><dt>{candidate.crds_gain ? 'Minimum shortage reduction' : 'Backend score'}</dt><dd>{candidate.crds_gain ? number(candidate.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(candidate.score)}</dd></div>
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
@@ -37,12 +39,13 @@ export function RecommendationPanel({ recommendation, remaining, onReview, disab
 }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
-    <div className="eyebrow">Backend recommendation</div><h3>{recommendation.selected_vehicle_id ?? 'No eligible EV'}</h3>
+    <div className="eyebrow">Backend recommendation</div><h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
+    {recommendation.crds && <CrdsSummary result={recommendation.crds}/>}
     <p>{recommendation.explanation}</p>{candidate && <CandidateDetails candidate={candidate}/>}
     <p className={remaining > 0 ? 'muted' : 'warning'}>{remaining > 0 ? `Expires in ${remaining}s` : 'Recommendation expired. Request a new recommendation.'}</p>
-    <button className="primary" disabled={disabled || !candidate || remaining <= 0} onClick={onReview}>Review dispatch</button>
+    <button className="primary" disabled={disabled || !candidate || remaining <= 0 || (!!recommendation.crds && (!recommendation.crds.approval_allowed || recommendation.crds.decision !== 'MOVE'))} onClick={onReview}>Review dispatch</button>
     <details><summary>Ranking, exclusions & assumptions</summary>
-      <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · score {number(c.score)}</li>)}</ol>
+      <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol>
       {recommendation.excluded_candidates.map(c => <p key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</p>)}
       {recommendation.excluded_candidates.length === 0 && <p>No excluded vehicles.</p>}
       {recommendation.assumptions.map((text, i) => <p key={i}>{text}</p>)}
@@ -78,7 +81,7 @@ export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {
 function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
-  return <article className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
+  return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
     {claim.error && <small className="warning">Origin receipt unavailable{claim.data ? ' · last known origin shown' : ''}</small>}
@@ -93,12 +96,15 @@ function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehic
       <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
     {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
+    {(dispatch.recovery || dispatch.state === 'UNKNOWN' || dispatch.claim_held !== false &&
+      (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE')) &&
+      <RecoveryControl dispatchId={dispatch.dispatch_id}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
 export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void }) {
   return <section className="panel"><div className="section-title"><h2>Relocations</h2><span className="muted">Live status & recent outcomes</span></div>
     {dispatches.length === 0 && <p className="empty">No dispatches yet. Choose a zone and request a recommendation to begin.</p>}
-    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
+    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
   </section>;
 }

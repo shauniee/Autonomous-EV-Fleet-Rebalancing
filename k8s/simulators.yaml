@@ -41,6 +41,7 @@ spec:
             - bishan
             - --soc
             - "90"
+            - --checkpointing
             - --time-scale
             - $(SIMULATION_TIME_SCALE)
           envFrom:
@@ -62,12 +63,15 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+          # A retained journey may wait for dashboard recovery without fresh
+          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
+          # Startup/liveness still require the simulator process to remain alive.
           readinessProbe:
             exec:
               command:
                 - python
                 - -c
-                - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-01', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
+                - "import json,os,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-01', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
             periodSeconds: 5
             timeoutSeconds: 8
             failureThreshold: 3
@@ -122,6 +126,7 @@ spec:
             - tampines
             - --soc
             - "60"
+            - --checkpointing
             - --time-scale
             - $(SIMULATION_TIME_SCALE)
           envFrom:
@@ -143,12 +148,15 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+          # A retained journey may wait for dashboard recovery without fresh
+          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
+          # Startup/liveness still require the simulator process to remain alive.
           readinessProbe:
             exec:
               command:
                 - python
                 - -c
-                - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-02', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
+                - "import json,os,urllib.request; d=json.load(urllib.request.urlopen('http://fleet:8000/api/v1/vehicles/ev-moving-02', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
             periodSeconds: 5
             timeoutSeconds: 8
             failureThreshold: 3
@@ -220,6 +228,7 @@ spec:
                 --vehicle-id "$HOSTNAME" \
                 --zone "$zone" \
                 --soc "$soc" \
+                --checkpointing \
                 --time-scale "$SIMULATION_TIME_SCALE"
           securityContext:
             allowPrivilegeEscalation: false
@@ -237,12 +246,15 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 10
             failureThreshold: 8
+          # A retained journey may wait for dashboard recovery without fresh
+          # telemetry. Pod readiness permits coordination/rollout, not EV availability.
+          # Startup/liveness still require the simulator process to remain alive.
           readinessProbe:
             exec:
               command:
                 - python
                 - -c
-                - "import json,os,urllib.request; vehicle_id=os.environ['HOSTNAME']; d=json.load(urllib.request.urlopen(f'http://fleet:8000/api/v1/vehicles/{vehicle_id}', timeout=2)); assert d['telemetry'] and d['connectivity']=='ONLINE' and not d['stale']"
+                - "import json,os,urllib.request; vehicle_id=os.environ['HOSTNAME']; d=json.load(urllib.request.urlopen(f'http://fleet:8000/api/v1/vehicles/{vehicle_id}', timeout=2)); assert d['telemetry'] and ((d['connectivity']=='ONLINE' and not d['stale']) or (os.environ.get('SIMULATOR_CHECKPOINTING_ENABLED')=='true' and d.get('active_claim')))"
             periodSeconds: 5
             timeoutSeconds: 8
             failureThreshold: 3

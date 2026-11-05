@@ -3,6 +3,10 @@ kind: ConfigMap
 metadata:
   name: ev-fleet-config
 data:
+  CRDS_MODE: "ACTIVE"
+  CRDS_EXECUTION_MODE: "LOCAL"
+  CRDS_EXPAND_AGE: "true"
+  CRDS_WORKER_URLS: "http://crds-worker:8000,http://crds-worker:8000"
   FLEET_URL: http://fleet:8000
   DEMAND_URL: http://demand:8000
   REBALANCING_URL: http://rebalancing:8000
@@ -30,6 +34,15 @@ data:
   RECONCILE_INTERVAL_SECONDS: "1"
   ARRIVAL_TOLERANCE_KM: "0.05"
   SIMULATION_TIME_SCALE: "10"
+  # Only these moving-simulator identities may acquire guarded execution.
+  # Keep this explicit list aligned with ev-moving-extra's replica count.
+  SIMULATOR_RECOVERY_ENABLED: "true"
+  SIMULATOR_CHECKPOINTING_ENABLED: "true"
+  SIMULATOR_RECOVERY_VEHICLE_IDS: >-
+    ev-moving-01,ev-moving-02,ev-moving-extra-0,ev-moving-extra-1,ev-moving-extra-2,
+    ev-moving-extra-3,ev-moving-extra-4,ev-moving-extra-5,ev-moving-extra-6,ev-moving-extra-7,
+    ev-moving-extra-8,ev-moving-extra-9,ev-moving-extra-10,ev-moving-extra-11,ev-moving-extra-12,
+    ev-moving-extra-13,ev-moving-extra-14,ev-moving-extra-15,ev-moving-extra-16,ev-moving-extra-17
   DEMAND_SIMULATION_ENABLED: "false"
   DEMAND_RANDOM_SEED: "42"
   DEMAND_UPDATE_INTERVAL_SECONDS: "30"
@@ -78,13 +91,13 @@ data:
         location /api/rebalancing/ {
             proxy_pass http://rebalancing:8000/api/v1/;
             proxy_connect_timeout 2s;
-            proxy_read_timeout 8s;
+            proxy_read_timeout 135s;
         }
 
         location /api/dispatch/ {
             proxy_pass http://dispatch:8000/api/v1/;
             proxy_connect_timeout 2s;
-            proxy_read_timeout 8s;
+            proxy_read_timeout 135s;
         }
 
         location /api/facilities/ {

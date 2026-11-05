@@ -18,7 +18,7 @@ class MovingNode:
     def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                  telemetry_interval=5, poll_interval=1, tick_seconds=.2,
                  speed_kph=30, time_scale=10, client=None, facilities_url=None,
-                 road_match_initial=True, facilities_grace_seconds=10):
+                 road_match_initial=True, checkpointing=False, facilities_grace_seconds=10):
         if min(telemetry_interval, poll_interval, tick_seconds, speed_kph, time_scale) <= 0:
             raise ValueError("simulation intervals and speeds must be positive")
         if not isfinite(facilities_grace_seconds) or facilities_grace_seconds < 0:
@@ -45,9 +45,11 @@ class MovingNode:
         self.rebalancing_url = os.getenv("REBALANCING_URL", "http://rebalancing:8000").rstrip("/")
         self.traffic_snapshot = None
         self.traffic_blocked = False
+        self.checkpointing = checkpointing
 
-    async def request(self, method, url, body=None):
-        response = await self.client.request(method, url, json=body)
+    async def request(self, method, url, body=None, *, headers=None):
+        options = {"headers": headers} if headers else {}
+        response = await self.client.request(method, url, json=body, **options)
         response.raise_for_status()
         return response.json()
 
@@ -272,6 +274,10 @@ class MovingNode:
             last = now
 
     async def run(self):
+        if self.checkpointing:
+            from .recovery import CheckpointRunner
+            await CheckpointRunner(self).run()
+            return
         async with httpx.AsyncClient(timeout=2) as owned:
             self.client = self.client or owned
             tasks = [asyncio.create_task(self.network_loop(self.send_telemetry, self.telemetry_interval)),

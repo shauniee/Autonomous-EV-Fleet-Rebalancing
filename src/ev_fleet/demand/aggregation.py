@@ -38,23 +38,31 @@ def assigned_zone(vehicle, zones, radius):
     return min(candidates)[1] if candidates else None
 
 
+def telemetry_is_fresh(vehicle, fleet, settings, now):
+    """Use Fleet freshness and recheck observation age after snapshot transport."""
+    telemetry = vehicle.telemetry
+    if telemetry is None:
+        return False
+    snapshot_age = max(0, (now - fleet.snapshot_at).total_seconds())
+    age = (now - telemetry.observed_at).total_seconds()
+    receive_age = (now - vehicle.received_at).total_seconds() if vehicle.received_at else None
+    return (not vehicle.stale and vehicle.connectivity == "ONLINE"
+            and -5 <= age < settings.telemetry_max_age_seconds
+            and receive_age is not None and receive_age >= -5
+            and vehicle.telemetry_age_seconds is not None
+            and vehicle.telemetry_age_seconds + snapshot_age < settings.telemetry_max_age_seconds)
+
+
 def capacity(fleet, zones, settings, now):
     counts = {key: dict.fromkeys(COUNT_FIELDS, 0) for key in zones}
     diagnostics = {"unassigned_evs": 0, "excluded_stale_evs": 0, "excluded_low_soc_evs": 0}
     issues = set()
-    snapshot_age = max(0, (now - fleet.snapshot_at).total_seconds())
     for vehicle in fleet.vehicles:
         zone_id = assigned_zone(vehicle, zones, settings.zone_radius_km)
         telemetry = vehicle.telemetry
         if zone_id is None:
             diagnostics["unassigned_evs"] += 1
-        age = (now - telemetry.observed_at).total_seconds() if telemetry else None
-        receive_age = (now - vehicle.received_at).total_seconds() if vehicle.received_at else None
-        fresh = (telemetry is not None and not vehicle.stale and vehicle.connectivity == "ONLINE"
-                 and -5 <= age < settings.telemetry_max_age_seconds
-                 and receive_age is not None and receive_age >= -5
-                 and vehicle.telemetry_age_seconds is not None
-                 and vehicle.telemetry_age_seconds + snapshot_age < settings.telemetry_max_age_seconds)
+        fresh = telemetry_is_fresh(vehicle, fleet, settings, now)
         if not fresh:
             diagnostics["excluded_stale_evs"] += 1
             if zone_id:

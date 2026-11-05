@@ -2,10 +2,11 @@ import httpx
 from fastapi import HTTPException
 
 
-async def request_json(client, method, url, body=None, model=None):
+async def request_json(client, method, url, body=None, model=None, *, timeout_seconds=None):
     """Single attempt. Coordinator owns retries and the stable mutation identities."""
     try:
-        response = await client.request(method, url, json=body)
+        options = {"timeout": timeout_seconds} if timeout_seconds is not None else {}
+        response = await client.request(method, url, json=body, **options)
         if response.status_code >= 400:
             try:
                 code = response.json()["error"]["code"]
