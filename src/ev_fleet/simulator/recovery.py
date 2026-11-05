@@ -169,6 +169,8 @@ class CheckpointRunner:
             self.last_motion = time.monotonic()
             self.request_latency = max(
                 self.request_latency * .9, self.last_motion - started)
+            if self.node.runtime:
+                self.node.runtime.progress()
 
     def require_live(self) -> SimulatorSession:
         if self.lease is None or self.lease.expires_at <= utcnow():
@@ -350,6 +352,9 @@ class CheckpointRunner:
                 raise RecoveryRequired("CHECKPOINT_RECEIPT_CONFLICT")
             self.last_checkpoint = SimulatorCheckpoint.model_validate(body["checkpoint"])
             self.revision = receipt.checkpoint_revision
+            if self.node.runtime:
+                self.node.runtime.checkpoint_revision = self.revision
+                self.node.runtime.checkpoint_at = self.last_checkpoint.physical.observed_at.isoformat()
             self.pending_checkpoint = None
             self.next_telemetry = time.monotonic() + self.node.telemetry_delay()
             self.require_live()
@@ -582,9 +587,13 @@ class CheckpointRunner:
         async with httpx.AsyncClient(timeout=self.request_timeout) as owned:
             self.node.client = self.node.client or owned
             while True:
+                if self.node.runtime:
+                    self.node.runtime.progress()
                 delay = self.node.tick_seconds
                 paused = False
                 if self.blocked:
+                    if self.node.runtime:
+                        self.node.runtime.state("RECOVERY_WAIT", self.blocked)
                     status = "REQUIRED" if "COORDINATION" in self.blocked or self.blocked == "SIMULATOR_LEASE_EXPIRED" else "BLOCKED"
                     logging.warning("vehicle=%s recovery=%s reason=%s", self.node.vehicle_id, status, self.blocked)
                     try:
@@ -602,6 +611,8 @@ class CheckpointRunner:
                 try:
                     await self.tick()
                     self.failures = 0
+                    if self.node.runtime:
+                        self.node.runtime.state("RUNNING")
                 except (httpx.TransportError, httpx.HTTPStatusError) as exc:
                     if (isinstance(exc, httpx.HTTPStatusError)
                             and exc.response.status_code < 500
@@ -616,6 +627,10 @@ class CheckpointRunner:
                     self.blocked = str(exc) if isinstance(exc, RecoveryRequired) else "CHECKPOINT_MODEL_OR_CONFIGURATION_INVALID"
                     paused = True
                 if paused:
+                    if self.node.runtime:
+                        self.node.runtime.state(
+                            "RECOVERY_WAIT" if self.blocked else "RETRYING",
+                            self.blocked or "GUARDED_COMMUNICATION_RETRY")
                     self.node.ready.clear()
                     delay = self.retry_delay()
                 # All communication failures and waits suspend motion and charging.

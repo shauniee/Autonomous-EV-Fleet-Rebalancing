@@ -72,6 +72,13 @@ export interface ChargingTask {
 }
 export interface Rental { rental_id: string; status: 'RENTED' | 'RETURNED'; expected_end_at: string; expected_return_zone_id?: string | null; started_at: string; return_position: Position | null; return_soc_pct: number | null; }
 export interface Vehicle {
+  simulator_runtime?: {
+    status: 'RESPONSIVE' | 'UNRESPONSIVE' | 'STALE';
+    mode: 'STARTING' | 'RUNNING' | 'RETRYING' | 'RECOVERY_WAIT' | 'STOPPED';
+    live: boolean; ready: boolean; blocking_reason: string | null;
+    heartbeat_age_seconds: number | null; report_age_seconds: number;
+    checkpoint_revision: number; checkpoint_at: string | null; reported_at: string;
+  } | null;
   active_rental?: Rental | null;
   active_charging_task?: ChargingTask | null;
   active_claim?: unknown | null;
