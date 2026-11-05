@@ -1,5 +1,7 @@
 """Single-replica facilities observations with durable simulated allocations."""
 import asyncio
+import hashlib
+import json
 import re
 from uuid import uuid4
 from copy import deepcopy
@@ -7,7 +9,9 @@ from fastapi import HTTPException
 from ev_fleet.contracts.facilities import Facility
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.common.clock import Clock
-from ev_fleet.contracts.facilities import FacilitiesSnapshot, FacilityFeed
+from ev_fleet.contracts.facilities import (
+    FacilitiesSnapshot, FacilityFeed, ParkingObservation, VehicleParking,
+)
 from .catalog import CATALOGUE
 from .datamall import FacilitiesSettings
 from ev_fleet.common.parking import CHARGING_TARGET_SOC_PCT, DEFAULT_CHARGING_POWER_KW, MAX_FACILITY_ROAD_ACCESS_KM
@@ -255,3 +259,22 @@ class FacilitiesStore:
                     "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
         return {"vehicle_id": vehicle_id, "parking": parking,
                 "pending": any(entry["status"] == "RESERVED" for entry in entries)}
+
+    async def parking_observation(self, vehicle_id, request_id):
+        # Reads stay responsive during persistence, but uncommitted allocation
+        # changes cannot authorize charging. This method has no yielding I/O.
+        if self.lock.locked() or not self.repository.ready:
+            raise HTTPException(503, "PARKING_OBSERVATION_UNAVAILABLE")
+        parking = VehicleParking.model_validate(
+            await self.vehicle_parking(vehicle_id))
+        holds = sorted((key, entry["status"]) for key, entry in self.holds.items()
+                       if entry["receipt"]["vehicle_id"] == vehicle_id
+                       and entry["status"] in ("RESERVED", "OCCUPIED"))
+        material = {"instance_id": self.instance_id, "holds": holds,
+                    "parking": parking.model_dump(mode="json")}
+        allocation_id = hashlib.sha256(json.dumps(
+            material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return ParkingObservation(
+            request_id=request_id, instance_id=self.instance_id,
+            revision=self.version, observed_at=self.clock.now(),
+            allocation_id=allocation_id, parking=parking)

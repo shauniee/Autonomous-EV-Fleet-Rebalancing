@@ -47,7 +47,10 @@ class FleetStore:
             await self.persist()
 
     async def close(self):
-        await self.repository.close()
+        try:
+            await self.simulator_recovery.close()
+        finally:
+            await self.repository.close()
 
     @property
     def enabled(self):

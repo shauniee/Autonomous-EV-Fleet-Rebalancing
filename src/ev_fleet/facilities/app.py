@@ -1,11 +1,13 @@
 import asyncio
 from contextlib import asynccontextmanager
+from uuid import UUID
 import httpx
 from fastapi import HTTPException, Response
 from ev_fleet.common.dashboard_cache import DashboardCache
 
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.facilities import FacilitiesSnapshot, Facility, ParkingHoldRequest, ParkingHold, VehicleParking
+from ev_fleet.contracts.facilities import ParkingObservation
 from ev_fleet.demand.store import SINGAPORE_ZONES
 from .store import FacilitiesStore
 from .datamall import DataMallClient, poll_feed
@@ -77,6 +79,13 @@ def create_app(store=None, cache=None):
     @app.get("/api/v1/vehicles/{vehicle_id}/parking", response_model=VehicleParking)
     async def vehicle_parking(vehicle_id: str):
         return await state.vehicle_parking(vehicle_id)
+
+    @app.get("/api/v1/vehicles/{vehicle_id}/parking-observation",
+             response_model=ParkingObservation)
+    async def parking_observation(vehicle_id: str, request_id: UUID,
+                                  response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return await state.parking_observation(vehicle_id, request_id)
 
     @app.post("/api/v1/holds/{dispatch_id}/complete", response_model=ParkingHold)
     async def complete(dispatch_id: str):

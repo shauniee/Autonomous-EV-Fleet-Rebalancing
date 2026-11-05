@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from ev_fleet.common.settings import DispatchSettings, SimulatorRecoverySettings
+from ev_fleet.contracts.common import utcnow
 from ev_fleet.contracts.recovery import (SimulatorCheckpoint, SimulatorCheckpointRequest,
     SimulatorConfiguration, SimulatorIdleRestoreRequest, SimulatorSessionRequest)
 from ev_fleet.contracts.vehicles import TelemetryUpdate, VehicleRegistration
@@ -60,8 +61,16 @@ def dispatch_response(monkeypatch, payload=None, status=200, before_response=Non
     original_client = AsyncClient
 
     def respond(request):
-        if parking is not None and request.url.path == "/api/v1/vehicles/ev-idle/parking":
-            return httpx.Response(parking_status, json=parking)
+        if parking is not None and request.url.path in (
+                "/api/v1/vehicles/ev-idle/parking",
+                "/api/v1/vehicles/ev-idle/parking-observation"):
+            parking_payload = parking
+            if request.url.path.endswith("/parking-observation"):
+                parking_payload = {"request_id": request.url.params["request_id"],
+                           "instance_id": "00000000-0000-0000-0000-000000000001",
+                           "revision": 0, "observed_at": utcnow().isoformat(),
+                           "allocation_id": "a" * 64, "parking": parking}
+            return httpx.Response(parking_status, json=parking_payload)
         assert request.url.path == "/api/v1/dispatches"
         assert request.url.params["vehicle_id"] == "ev-idle"
         if before_response:
@@ -271,6 +280,7 @@ def test_charging_idle_restore_requires_current_charger_evidence(
         dispatch_response(monkeypatch, parking=parking)
         store, request, _ = await idle_vehicle(clock, charging_state)
         if failure == "unavailable":
+            await store.simulator_recovery.close()
             dispatch_response(monkeypatch, parking=parking, parking_status=503)
         elif failure == "malformed":
             parking["parking"]["charging_power_kw"] = "invalid"
