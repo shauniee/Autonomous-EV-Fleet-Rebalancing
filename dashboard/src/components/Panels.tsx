@@ -3,6 +3,7 @@ import type { Candidate, Claim, Dispatch, Recommendation, Vehicle, Zone } from '
 import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { RouteDetails } from './RouteDetails';
+import { RecoveryControl } from './RecoveryControl';
 import { CrdsSummary } from './CrdsSummary';
 
 export function ServiceStatus({ name, resource }: { name: string; resource: Resource<unknown> }) {
@@ -80,7 +81,7 @@ export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {
 function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
-  return <article className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
+  return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
     {claim.error && <small className="warning">Origin receipt unavailable{claim.data ? ' · last known origin shown' : ''}</small>}
@@ -95,12 +96,15 @@ function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehic
       <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
     {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
+    {(dispatch.recovery || dispatch.state === 'UNKNOWN' || dispatch.claim_held !== false &&
+      (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE')) &&
+      <RecoveryControl dispatchId={dispatch.dispatch_id}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
 export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void }) {
   return <section className="panel"><div className="section-title"><h2>Relocations</h2><span className="muted">Live status & recent outcomes</span></div>
     {dispatches.length === 0 && <p className="empty">No dispatches yet. Choose a zone and request a recommendation to begin.</p>}
-    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
+    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
   </section>;
 }

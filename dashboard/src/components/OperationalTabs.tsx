@@ -1,7 +1,9 @@
 import { useId, useState, type ReactNode } from 'react';
 
-export function OperationalTabs({ tabs }: { tabs: { id: string; label: string; summary?: string; content: ReactNode }[] }) {
-  const [active, setActive] = useState('fleet');
+export function OperationalTabs({ tabs, activeTab, onTabChange }: { activeTab?: string; onTabChange?: (id: string) => void; tabs: { id: string; label: string; summary?: string; content: ReactNode }[] }) {
+  const [localActive, setLocalActive] = useState('fleet');
+  const active = activeTab ?? localActive;
+  const setActive = (id: string) => { setLocalActive(id); onTabChange?.(id); };
   const prefix = useId();
   return <div className="operational-tabs">
     <div className="operational-tablist" role="tablist" aria-label="Operational views">

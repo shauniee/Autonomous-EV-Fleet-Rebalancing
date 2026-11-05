@@ -41,6 +41,17 @@ export default function App() {
   const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 5000);
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
+  const [operationalTab, setOperationalTab] = useState('fleet');
+  const unresolvedRelocations = dispatches.data?.dispatches.filter(d => d.vehicle_id &&
+    (d.state === 'UNKNOWN' || d.recovery?.status === 'BLOCKED' || d.recovery?.status === 'REQUESTED' || d.recovery?.status === 'RESTORING')) ?? [];
+  function openRelocation(id: string) {
+    setOperationalTab('relocations');
+    requestAnimationFrame(() => {
+      const card = document.getElementById(`relocation-${id}`);
+      card?.focus({ preventScroll: true });
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
   const mapPanel = useRef<HTMLElement>(null);
   const inspector = useRef<HTMLElement>(null);
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
@@ -286,8 +297,14 @@ export default function App() {
         {recommendation && <RecommendationPanel recommendation={recommendation} remaining={remaining} disabled={!!approvalBlocked} onReview={() => setConfirming(true)}/>}
         {batch && <BatchPanel batch={batch} remaining={batchRemaining} disabled={batchBlocked} onReview={() => setBatchConfirming(true)}/>}
       </aside></div>
-      {batchResult && <BatchResult result={batchResult}/>}
-      <OperationalTabs tabs={[
+      {(recommendation?.crds?.decision === 'DEFER' || batch?.crds?.decision === 'DEFER') &&
+        unresolvedRelocations.length > 0 &&
+        <section className="panel" aria-label="Relocations to review">
+          <p>Review unresolved relocations alongside this deferred assessment. The recovery assessment explains whether each simulation can resume.</p>
+          {unresolvedRelocations.map(d => <button key={d.dispatch_id} onClick={() => openRelocation(d.dispatch_id)}>Review {d.vehicle_id ?? d.dispatch_id} relocation / recovery</button>)}
+        </section>}
+      {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation}/>}
+      <OperationalTabs activeTab={operationalTab} onTabChange={setOperationalTab} tabs={[
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPanel vehicles={vehicles}/>
           {twinVehicle && <details className="twin-history"><summary>EV digital twin diagnostics</summary>

@@ -57,13 +57,13 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
   </dialog>;
 }
 
-export function BatchResult({ result }: { result: BatchDispatch }) {
+export function BatchResult({ result, onRelocation }: { result: BatchDispatch; onRelocation?: (id: string) => void }) {
   return <section className="panel" aria-label="Batch approval outcomes">
     <div className="section-title"><h2>Batch approval outcome</h2><strong>{result.status}</strong></div>
     <p>{result.items.length} attempted assignments out of {result.requested_count} requested. See Relocations for confirmed execution and arrivals.</p>
     <div className="table-scroll"><table><thead><tr><th>EV</th><th>Facility</th><th>Approval state</th><th>Details</th></tr></thead>
       <tbody>{result.items.map(item => <tr key={item.recommendation_id}>
-        <td>{item.vehicle_id}</td><td>{item.facility_id}</td><td>{item.state}</td><td>{item.error || '—'}</td>
+        <td>{item.vehicle_id}</td><td>{item.facility_id}</td><td>{item.state}</td><td>{item.error || '—'}{item.dispatch_id && onRelocation && <> <button onClick={() => onRelocation(item.dispatch_id!)}>View relocation / recovery</button></>}</td>
       </tr>)}</tbody>
     </table></div>
   </section>;

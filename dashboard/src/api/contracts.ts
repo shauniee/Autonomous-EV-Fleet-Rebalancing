@@ -111,12 +111,27 @@ export interface Recommendation {
   ranked_candidates: Candidate[]; excluded_candidates: Candidate[]; explanation: string; assumptions: string[];
   crds?: CrdsMetadata | null;
 }
+export interface RecoveryOperation {
+  request_id: string; status: 'REQUESTED' | 'RESTORING' | 'RECOVERED' | 'BLOCKED';
+  reason_code: string | null;
+}
+export interface RecoveryRequest {
+  request_id: string; action: 'RESUME_SIMULATION'; expected_assessment_revision: string;
+}
+export interface RecoveryAssessment {
+  dispatch_id: string; vehicle_id: string | null; assessed_at: string; assessment_revision: string;
+  status: 'NOT_REQUIRED' | 'REQUIRED' | 'BLOCKED'; reason_code: string; can_resume: boolean;
+  supported_action: 'RESUME_SIMULATION' | null; operation: RecoveryOperation | null;
+  blockers: { code: string; detail: string }[];
+  evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null };
+}
 export interface Dispatch {
   dispatch_id: string; request_id: string; vehicle_id: string | null; state: string;
   command: { target_zone_id: string; target_position: Position; route?: RoadRoute | null } | null;
   created_at: string; acknowledged_at: string | null; last_contact_at: string | null;
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
   parking_facility_id?: string | null; parking_status?: string | null;
+  recovery?: RecoveryOperation | null;
   claim_held: boolean | null; revalidated_metrics: { distance_km?: number } | null;
 }
 export interface DispatchList { dispatches: Dispatch[] }
