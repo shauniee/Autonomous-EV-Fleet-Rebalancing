@@ -101,6 +101,7 @@ class SimulatorRecovery:
     async def commit(self, vehicle_id, staged, sample=None):
         """Publish in memory only after the snapshot/history transaction succeeds."""
         store = self.store
+        store.ensure_consistent()
         payload = {"instance_id": store.instance_id, "version": store.version + 1,
                    "vehicles": {**store.vehicles, vehicle_id: staged}, "charging_tasks": store.charging_tasks}
         try:
@@ -109,12 +110,12 @@ class SimulatorRecovery:
             else:
                 await store.repository.save(payload, telemetry_sample=sample)
         except asyncio.CancelledError:
-            store.persistence_uncertain = True
+            store.mark_persistence_uncertain()
             raise
         except Exception as exc:
             # A lost commit response is ambiguous. Do not overwrite durable
             # ownership from old memory; restart/reload Fleet before any writes.
-            store.persistence_uncertain = True
+            store.mark_persistence_uncertain()
             raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN") from exc
         store.vehicles[vehicle_id] = staged
         store.version += 1

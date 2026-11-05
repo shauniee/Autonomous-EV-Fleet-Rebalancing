@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from ev_fleet.common.logging import base_app
+from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.common.dashboard_cache import DashboardCache
 from fastapi import Response, Query
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, SessionRequest, VehicleState, FleetSnapshot
@@ -22,12 +23,19 @@ def create_app(store=None, cache=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        await state.start()
+        repository = state.repository
+        if isinstance(repository, SnapshotRepository):
+            repository.enable_recovery_exit()
         try:
+            await state.start()
             yield
         finally:
-            await display_cache.aclose()
-            await state.close()
+            try:
+                await display_cache.aclose()
+            finally:
+                await state.close()
+                if isinstance(repository, SnapshotRepository):
+                    repository.disable_recovery_exit()
 
     app.router.lifespan_context = lifespan
 

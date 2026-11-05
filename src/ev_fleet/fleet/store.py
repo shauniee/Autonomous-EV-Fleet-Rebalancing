@@ -60,18 +60,34 @@ class FleetStore:
     def ready(self):
         return self.repository.ready and not self.persistence_uncertain
 
+    @property
+    def faulted(self):
+        return self.persistence_uncertain or getattr(self.repository, "faulted", False)
+
     def ensure_consistent(self):
-        if self.persistence_uncertain:
-            raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN")
+        if self.faulted:
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
+
+    def mark_persistence_uncertain(self):
+        self.persistence_uncertain = True
+        if isinstance(self.repository, SnapshotRepository):
+            self.repository.mark_uncertain()
 
     async def persist(self, telemetry_sample=None):
         self.ensure_consistent()
         payload = {"instance_id": self.instance_id, "version": self.version,
                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks}
-        if telemetry_sample is None:
-            await self.repository.save(payload)
-        else:
-            await self.repository.save(payload, telemetry_sample=telemetry_sample)
+        try:
+            if telemetry_sample is None:
+                await self.repository.save(payload)
+            else:
+                await self.repository.save(payload, telemetry_sample=telemetry_sample)
+        except asyncio.CancelledError:
+            self.mark_persistence_uncertain()
+            raise
+        except Exception as exc:
+            self.mark_persistence_uncertain()
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN") from exc
 
     async def register(self, registration):
         async with self.lock:
@@ -238,11 +254,13 @@ class FleetStore:
 
     async def list_charging_tasks(self):
         async with self.lock:
+            self.ensure_consistent()
             return {"tasks": [self._public_task(key) for key in sorted(self.charging_tasks)]}
 
     async def create_charging_task(self, body):
         """The dispatcher queues a low-SOC EV; no real charger is operated."""
         async with self.lock:
+            self.ensure_consistent()
             for task in self.charging_tasks.values():
                 if task["create_request_id"] == str(body.request_id):
                     if task["vehicle_id"] != body.vehicle_id:
@@ -275,6 +293,7 @@ class FleetStore:
     async def update_charging_task(self, task_id, body):
         """Progress is approved manually; completion requires actual fresh SOC evidence."""
         async with self.lock:
+            self.ensure_consistent()
             task = self.charging_tasks.get(str(task_id))
             if task is None:
                 raise HTTPException(404, "CHARGING_TASK_NOT_FOUND")
@@ -509,6 +528,7 @@ class FleetStore:
 
     async def snapshot(self):
         async with self.lock:
+            self.ensure_consistent()
             return {"instance_id": self.instance_id, "snapshot_version": self.version,
                     "snapshot_at": self.clock.now().isoformat(),
                     "vehicles": [self.view(record) for record in self.vehicles.values()]}
