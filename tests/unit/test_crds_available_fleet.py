@@ -140,7 +140,7 @@ def test_stale_claim_and_rental_forecasts_are_excluded(observations, clock):
     ("fleet", "FLEET_SNAPSHOT_STALE"), ("demand", "DEMAND_UNKNOWN_OR_STALE"),
     ("planning", "DISPATCH_SNAPSHOT_STALE"), ("unresolved", "PENDING_DISPATCH_UNRESOLVED"),
     ("unassigned", "UNASSIGNED_VEHICLES")])
-def test_live_data_issues_still_defer(observations, clock, failure, reason):
+def test_live_data_issues_and_outside_zone_stock(observations, clock, failure, reason):
     old = (clock.now() - timedelta(seconds=301)).isoformat()
     if failure == "fleet":
         observations["/api/v1/vehicles"]["snapshot_at"] = old
@@ -155,6 +155,12 @@ def test_live_data_issues_still_defer(observations, clock, failure, reason):
         observations["/api/v1/vehicles"]["vehicles"][0]["telemetry"]["position"] = {
             "latitude": 1.16, "longitude": 103.61}
     result = asyncio.run(plan(observations, clock))
+    if failure == "unassigned":
+        assert result.metadata.decision == "MOVE"
+        assert result.evaluation.selected_vehicle_id == "healthy"
+        assert next(m for m in result.moves if m.vehicle_id == "healthy").origin_zone_id is None
+        assert result.metadata.source_references["unassigned_vehicle_ids"] == ["healthy"]
+        return
     assert result.metadata.decision == "DEFER"
     assert reason in result.metadata.reason_code
 

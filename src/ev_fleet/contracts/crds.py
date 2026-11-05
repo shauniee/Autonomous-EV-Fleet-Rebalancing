@@ -57,7 +57,8 @@ class CrdsMove(Model):
 
     vehicle_id: str = Field(min_length=1)
     facility_id: str = Field(min_length=1)
-    origin_zone_id: str = Field(min_length=1)
+    # None means a known physical position outside every modeled demand zone.
+    origin_zone_id: str | None = Field(min_length=1)
     target_zone_id: str = Field(min_length=1)
     outcomes: dict[str, CrdsMoveOutcome] = Field(default_factory=dict)
 

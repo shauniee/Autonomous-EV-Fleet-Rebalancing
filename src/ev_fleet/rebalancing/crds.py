@@ -1,7 +1,8 @@
 """Pure shortage and minimum marginal-gain calculation; no service access.
 
 Callers supply eligible moves and complete baseline futures. A candidate's EV
-must be included at its origin throughout those baseline trajectories. Future
+must be included at its modeled origin throughout those baseline trajectories.
+EVs outside all demand zones have no origin-zone stock to debit. Future
 generation and integration with Fleet eligibility are separate responsibilities.
 """
 from math import ceil, fsum
@@ -21,11 +22,13 @@ def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -
         if len(trajectory.desired_stock) != parameters.slot_count:
             raise ValueError("future trajectories must match the configured horizon")
     arrival_slot = parameters.slot_count
-    if move.origin_zone_id not in future.zones or move.target_zone_id not in future.zones:
+    if (move.target_zone_id not in future.zones
+            or move.origin_zone_id is not None and move.origin_zone_id not in future.zones):
         raise ValueError("move origin and target must exist in the future")
     if future.future_id not in move.outcomes:
         raise ValueError("move requires an outcome for the future")
-    if any(stock < 1 for stock in future.zones[move.origin_zone_id].usable_stock):
+    if move.origin_zone_id is not None and any(
+            stock < 1 for stock in future.zones[move.origin_zone_id].usable_stock):
         raise ValueError("baseline origin stock must include the candidate EV in every slot")
     outcome = move.outcomes[future.future_id]
     ready_minutes = outcome.arrival_minutes + outcome.availability_delay_minutes
@@ -79,9 +82,10 @@ def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
     for move in moves:
         if set(move.outcomes) != future_ids:
             return CrdsEvaluation(decision="DEFER", reason_code="MOVE_FUTURES_MISMATCH")
-        if move.origin_zone_id not in zones or move.target_zone_id not in zones:
+        if (move.target_zone_id not in zones
+                or move.origin_zone_id is not None and move.origin_zone_id not in zones):
             return CrdsEvaluation(decision="DEFER", reason_code="UNKNOWN_MOVE_ZONE")
-        if any(stock < 1 for future in futures
+        if move.origin_zone_id is not None and any(stock < 1 for future in futures
                for stock in future.zones[move.origin_zone_id].usable_stock):
             return CrdsEvaluation(decision="DEFER", reason_code="INCONSISTENT_ORIGIN_STOCK")
 

@@ -55,6 +55,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         source_references={"fleet_instance_id": str(inputs.fleet.instance_id),
             "fleet_version": inputs.fleet.snapshot_version, "demand_instance_id": str(inputs.demand.instance_id),
             "excluded_vehicle_ids": inputs.excluded_vehicle_ids,
+            "unassigned_vehicle_ids": [v.vehicle_id for v in inputs.fleet.vehicles
+                                       if v.vehicle_id not in inputs.vehicle_zones],
             "demand_versions": {z.zone_id: z.demand_version for z in inputs.demand.zones},
             "planning_instance_id": str(inputs.planning.instance_id), "planning_revision": inputs.planning.revision,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
@@ -145,8 +147,6 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             minutes = travel_minutes(modeled_route, traffic, inputs.evaluated_at,
                                      time_scale=settings.simulation_time_scale)
             origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
-            if origin is None:
-                raise ValueError("UNKNOWN_MOVE_ORIGIN")
             outcomes = {}
             for future in futures:
                 extra = settings.journey_delay_minutes if future.future_id in ("combined", "delayed_inbound") else 0
@@ -214,7 +214,8 @@ async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=1
         eligible = [m for m in remaining if parking[m.facility_id] > 0 and
                     (plan.assessments[m.vehicle_id]["predicted_arrival_soc_pct"] >= CHARGE_ON_ARRIVAL_BELOW_PCT
                      or chargers[m.facility_id] > 0) and
-                    all(min(f.zones[m.origin_zone_id].usable_stock) >= 1 for f in futures)]
+                    (m.origin_zone_id is None or
+                     all(min(f.zones[m.origin_zone_id].usable_stock) >= 1 for f in futures))]
         result, execution = await evaluate_candidates(client, settings, plan.metadata.epoch_id,
             futures, eligible, params, timeout_seconds=plan.deadline - clock.monotonic())
         executions.append(execution)
@@ -305,6 +306,7 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
         "decision_latency_ms": max(0, (clock.monotonic() - started_at) * 1000) if started_at is not None else 0,
         "explanation": explanation, "crds": plan.metadata.model_dump(mode="json"),
         "assumptions": ["Finite synthetic futures, not a probability guarantee", "One nearest eligible facility per EV",
+            "EVs outside demand zones contribute no donor-zone stock",
             "Arrival stock requires usable SOC and modeled charging delay", "No idle-energy consumption modeled",
             "Wall-clock minutes; planned EVs must use the configured shared simulation time scale",
             "Advisory until explicit operator approval and fresh revalidation"]}

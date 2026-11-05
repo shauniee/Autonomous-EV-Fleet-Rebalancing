@@ -6,7 +6,7 @@ from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajecto
 from .crds_routes import travel_minutes
 
 
-MODEL_VERSION = "crds-futures-v2"
+MODEL_VERSION = "crds-futures-v3"
 
 
 def parameters_for(settings):
@@ -67,9 +67,11 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
                 continue
             if not vehicle.active_claim:
                 origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
-                if origin not in stock or min(stock[origin]) < 1:
-                    raise ValueError("pending intent stock is inconsistent")
-                stock[origin] = [n - 1 for n in stock[origin]]
+                # An outside-zone EV was never counted in any zone's stock.
+                if origin is not None:
+                    if origin not in stock or min(stock[origin]) < 1:
+                        raise ValueError("pending intent stock is inconsistent")
+                    stock[origin] = [n - 1 for n in stock[origin]]
             if dispatch.state == "UNKNOWN" and omit_uncertain:
                 continue
             route = command.route

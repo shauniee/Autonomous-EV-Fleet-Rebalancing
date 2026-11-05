@@ -35,7 +35,7 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
         d for d in planning.dispatches
         if str(d.dispatch_id) != exclude_dispatch_id and d.vehicle_id not in excluded]})
     zones = {z.zone_id: z for z in demand.zones}
-    counts, diagnostics, issues = capacity(fleet, zones, policy, now)
+    counts, _, issues = capacity(fleet, zones, policy, now)
     if not -5 <= (now - fleet.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
         issues.add("FLEET_SNAPSHOT_STALE")
     if not -5 <= (now - planning.observed_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
@@ -43,8 +43,6 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     for zone in zones.values():
         if zone.demand is None or not -5 <= (now - zone.demand.observed_at).total_seconds() < policy.demand_max_age_seconds:
             issues.add("DEMAND_UNKNOWN_OR_STALE")
-    if diagnostics["unassigned_evs"]:
-        issues.add("UNASSIGNED_VEHICLES")
     if facilities.data_source == "LTA_DATAMALL" and not any(
             f.name == "parking" and f.status == "FRESH" for f in facilities.feeds):
         issues.add("PARKING_FEED_UNAVAILABLE")
