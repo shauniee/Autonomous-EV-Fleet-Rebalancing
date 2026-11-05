@@ -207,7 +207,7 @@ class SimulatorRecovery:
             physical = checkpoint.physical
             if (checkpoint.command is not None or physical.relocation_state != "IDLE"
                     or physical.active_dispatch_id is not None or physical.speed_kph != 0
-                    or physical.charging_state != "NOT_CHARGING"
+                    or physical.charging_state not in ("NOT_CHARGING", "COMPLETE")
                     or physical.session_id != record["session_id"]
                     or str(physical.session_id) != owner["session_id"]):
                 raise HTTPException(409, "IDLE_RECOVERY_CHECKPOINT_REQUIRED")
@@ -220,6 +220,10 @@ class SimulatorRecovery:
                     exclude={"session_id", "sequence"}):
                 raise HTTPException(409, "IDLE_RECOVERY_TELEMETRY_MISMATCH")
             self.validate_checkpoint(vehicle_id, record, checkpoint)
+            if physical.charging_state == "COMPLETE":
+                # Verify the retained allocation/target without crediting energy.
+                # rotate_owner preserves physical state and clears charging proof.
+                await self.charging_context(vehicle_id, record, checkpoint)
             return await self.rotate_owner(vehicle_id, record, body, checkpoint)
 
     async def restore(self, vehicle_id, body):

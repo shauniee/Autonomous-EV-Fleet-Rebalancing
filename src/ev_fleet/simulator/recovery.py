@@ -242,6 +242,14 @@ class CheckpointRunner:
     async def checkpoint(self):
         if self.pending_checkpoint is None:
             self.require_live()
+            if (self.restore_pending and self.last_checkpoint is not None
+                    and self.last_checkpoint.physical.charging_state == "COMPLETE"):
+                # Restored movement has no trusted parking context. Verify it
+                # before publishing the unchanged-SOC baseline, never downtime.
+                await self.parking()
+                if not self.node.parking_verified or self.node.movement.charging_state != "COMPLETE":
+                    raise RecoveryRequired("IDLE_RECOVERY_CHARGING_CONTEXT_CHANGED")
+                self.require_live()
             self.pending_checkpoint = self.checkpoint_request()
         for attempt in range(2):
             body = self.pending_checkpoint
@@ -422,7 +430,7 @@ class CheckpointRunner:
             saved = SimulatorCheckpointSnapshot.model_validate(await self.request("GET",
                 f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint"))
             if (saved.checkpoint and saved.checkpoint.command is None
-                    and saved.checkpoint.physical.charging_state == "NOT_CHARGING"):
+                    and saved.checkpoint.physical.charging_state in ("NOT_CHARGING", "COMPLETE")):
                 await self.restore_idle(fleet, vehicle, saved)
                 return
         dispatch_id = vehicle.active_claim.dispatch_id if vehicle.active_claim else (
