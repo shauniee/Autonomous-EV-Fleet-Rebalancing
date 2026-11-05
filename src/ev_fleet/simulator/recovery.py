@@ -1,4 +1,4 @@
-"""Serialized checkpoint publisher. Existing-owner takeover awaits Phase 4."""
+"""Serialized checkpoint publisher with guarded idle and coordinated trip restore."""
 import asyncio
 from copy import deepcopy
 import logging
@@ -12,7 +12,7 @@ from ev_fleet.contracts.dispatch import CommandList, Dispatch, DispatchEvent, Di
 from ev_fleet.contracts.recovery import (
     RecoveryAssessment, SimulatorCheckpoint, SimulatorCheckpointReceipt,
     SimulatorCheckpointRequest, SimulatorConfiguration, SimulatorSession, SimulatorSessionRequest,
-    SimulatorCheckpointSnapshot, RecoveryHandoffRequest,
+    SimulatorCheckpointSnapshot, RecoveryHandoffRequest, SimulatorIdleRestoreRequest,
 )
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from .movement import Movement
@@ -24,11 +24,7 @@ class RecoveryRequired(Exception):
 
 
 def prepare_restore(checkpoint, configuration, fleet, dispatch=None, assessment=None):
-    """Pure restore validation, not authority to acquire/rotate a Fleet session.
-
-    Phase 4 must obtain coordinated ownership before installing this result.
-    No active run path invokes this to take over an existing owner.
-    """
+    """Validate recorded movement; the caller must also verify session authority."""
     saved = SimulatorCheckpoint.model_validate(checkpoint)
     fleet = FleetSnapshot.model_validate(fleet)
     vehicle = next((v for v in fleet.vehicles if v.vehicle_id == saved.vehicle_id), None)
@@ -97,6 +93,7 @@ class CheckpointRunner:
         self.pending_event = None
         self.pending_checkpoint = None
         self.pending_session = None
+        self.pending_idle_restore = None
         self.last_checkpoint = None
         self.last_motion = time.monotonic()
         self.next_poll = self.next_telemetry = self.next_traffic = 0.0
@@ -106,11 +103,7 @@ class CheckpointRunner:
         self.consumer_id = str(uuid4())
 
     def stage_coordinated_restore(self, session, fleet, dispatch=None, assessment=None):
-        """Prepare a Phase 4 handoff; never called by bootstrap or exposed by CLI.
-
-        The future Dispatch coordinator must supply authoritative session/Fleet
-        evidence. This method does not acquire, renew or rotate ownership.
-        """
+        """Install an authorized session and recorded state without advancing downtime."""
         if self.lease is not None or self.pending_checkpoint is not None or self.pending_session is not None:
             raise RecoveryRequired("RESTORE_REQUIRES_A_FRESH_RUNNER")
         receipt = SimulatorSession.model_validate(session)
@@ -257,10 +250,10 @@ class CheckpointRunner:
                     f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint", body))
             except httpx.HTTPStatusError as exc:
                 code = error_code(exc)
-                if attempt or code not in ("OBSERVATION_TIME_INVALID", "SIMULATOR_CHARGING_BASELINE_REQUIRED"):
+                if attempt or code not in ("OBSERVATION_TIME_INVALID", "SIMULATOR_CHARGING_BASELINE_REQUIRED", "SIMULATOR_IDLE_CLAIM_CHANGED"):
                     raise
                 self.require_live()
-                if code == "SIMULATOR_CHARGING_BASELINE_REQUIRED":
+                if code in ("SIMULATOR_CHARGING_BASELINE_REQUIRED", "SIMULATOR_IDLE_CLAIM_CHANGED"):
                     if self.last_checkpoint is None:
                         raise RecoveryRequired(code) from exc
                     self.node.movement = Movement.from_checkpoint(self.last_checkpoint, self.configuration)
@@ -326,11 +319,11 @@ class CheckpointRunner:
     async def poll(self):
         node = self.node
         if node.movement.command is None:
-            if await self.parking():
-                await self.checkpoint()  # verified charging baseline before any energy gain
             response = CommandList.model_validate(await self.request("GET",
                 f"{node.dispatch_url}/api/v1/vehicles/{node.vehicle_id}/commands"))
             if not response.commands:
+                if await self.parking():
+                    await self.checkpoint()  # verified baseline before charging
                 return
             command = response.commands[0].model_dump(mode="json")
             self.require_live()
@@ -415,11 +408,23 @@ class CheckpointRunner:
             self.next_traffic = time.monotonic() + 2
 
     async def try_handoff(self):
-        """Only consume an operator-approved request; never request a takeover."""
+        """Resume safe idle stock or consume an operator-approved trip handoff."""
         fleet = FleetSnapshot.model_validate(await self.request("GET", self.node.fleet_url + "/api/v1/vehicles"))
         vehicle = next((v for v in fleet.vehicles if v.vehicle_id == self.node.vehicle_id), None)
         if vehicle is None:
             return
+        if self.pending_idle_restore is not None:
+            await self.restore_idle(fleet, vehicle, None)
+            return
+        owner = vehicle.simulator_recovery
+        if (owner and owner.expires_at <= utcnow() and vehicle.stale
+                and not vehicle.active_claim and not vehicle.active_rental and not vehicle.active_charging_task):
+            saved = SimulatorCheckpointSnapshot.model_validate(await self.request("GET",
+                f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-checkpoint"))
+            if (saved.checkpoint and saved.checkpoint.command is None
+                    and saved.checkpoint.physical.charging_state == "NOT_CHARGING"):
+                await self.restore_idle(fleet, vehicle, saved)
+                return
         dispatch_id = vehicle.active_claim.dispatch_id if vehicle.active_claim else (
             vehicle.telemetry.active_dispatch_id if vehicle.telemetry else None)
         if dispatch_id is None:
@@ -451,6 +456,31 @@ class CheckpointRunner:
         prepared.stage_coordinated_restore(session, fleet, dispatch, assessment)
         self.__dict__.update(prepared.__dict__)
 
+    async def restore_idle(self, fleet, vehicle, saved):
+        if self.pending_idle_restore is None:
+            self.pending_idle_restore = SimulatorIdleRestoreRequest(request_id=uuid4(),
+                expected_fleet_instance_id=fleet.instance_id,
+                expected_control_version=saved.control_version, expected_generation=saved.generation,
+                expected_owner_revision=vehicle.simulator_recovery.owner_revision,
+                expected_checkpoint_revision=saved.checkpoint_revision, simulation=self.configuration)
+        try:
+            session = SimulatorSession.model_validate(await self.request("POST",
+                f"{self.node.fleet_url}/api/v1/vehicles/{self.node.vehicle_id}/simulator-sessions",
+                self.pending_idle_restore))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                self.pending_idle_restore = None
+            raise
+        if session.expires_at <= utcnow():
+            self.pending_idle_restore = None
+            raise RecoveryRequired("IDLE_RECOVERY_SESSION_EXPIRED")
+        # Refresh after the write, including on an exact retry of a lost response.
+        current = FleetSnapshot.model_validate(await self.request("GET", self.node.fleet_url + "/api/v1/vehicles"))
+        prepared = CheckpointRunner(self.node)
+        prepared.stage_coordinated_restore(session, current)
+        self.__dict__.update(prepared.__dict__)
+        logging.info("vehicle=%s idle_simulation_restored generation=%s", self.node.vehicle_id, session.generation)
+
     async def run(self):
         async with httpx.AsyncClient(timeout=2) as owned:
             self.node.client = self.node.client or owned
@@ -462,8 +492,10 @@ class CheckpointRunner:
                     try:
                         await self.try_handoff()
                     except (httpx.HTTPError, RecoveryRequired, ValueError) as exc:
-                        logging.warning("vehicle=%s handoff_wait=%s", self.node.vehicle_id, type(exc).__name__)
-                    await asyncio.sleep(5)
+                        reason = error_code(exc) if isinstance(exc, httpx.HTTPStatusError) else str(exc)
+                        logging.warning("vehicle=%s handoff_wait=%s", self.node.vehicle_id, reason)
+                    if self.blocked:
+                        await asyncio.sleep(5)
                     self.last_motion = time.monotonic()
                     continue
                 try:

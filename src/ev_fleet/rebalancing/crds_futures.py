@@ -6,7 +6,7 @@ from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajecto
 from .crds_routes import travel_minutes
 
 
-MODEL_VERSION = "crds-futures-v1"
+MODEL_VERSION = "crds-futures-v2"
 
 
 def parameters_for(settings):

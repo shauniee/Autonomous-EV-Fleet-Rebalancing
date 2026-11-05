@@ -4,7 +4,7 @@ import asyncio
 from ev_fleet.contracts.crds import CrdsDemandSnapshot, CrdsInputs, CrdsPlanningSnapshot
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from ev_fleet.contracts.vehicles import FleetSnapshot
-from ev_fleet.demand.aggregation import assigned_zone, capacity
+from ev_fleet.demand.aggregation import assigned_zone, capacity, telemetry_is_fresh
 from ev_fleet.demand.settings import DemandSettings
 from .clients import get_json
 
@@ -21,10 +21,19 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     demand = CrdsDemandSnapshot.model_validate(raw[1])
     facilities = FacilitiesSnapshot.model_validate(raw[2])
     planning = CrdsPlanningSnapshot.model_validate(raw[3])
-    planning = planning.model_copy(update={"dispatches": [
-        d for d in planning.dispatches if str(d.dispatch_id) != exclude_dispatch_id]})
     now = clock.now()
-    policy = DemandSettings.from_env().model_copy(update={"min_reserve_pct": settings.min_reserve_pct})
+    policy = DemandSettings.from_env()
+    policy = policy.model_copy(update={"min_reserve_pct": settings.min_reserve_pct,
+        "telemetry_max_age_seconds": min(policy.telemetry_max_age_seconds, settings.stale_seconds)})
+    excluded = {v.vehicle_id for v in fleet.vehicles
+                if not telemetry_is_fresh(v, fleet, policy, now)}
+    # Unreachable EVs contribute neither usable stock nor predicted arrivals or
+    # returns. Their retained claims remain untouched in the owning services.
+    fleet = fleet.model_copy(update={"vehicles": [
+        v for v in fleet.vehicles if v.vehicle_id not in excluded]})
+    planning = planning.model_copy(update={"dispatches": [
+        d for d in planning.dispatches
+        if str(d.dispatch_id) != exclude_dispatch_id and d.vehicle_id not in excluded]})
     zones = {z.zone_id: z for z in demand.zones}
     counts, diagnostics, issues = capacity(fleet, zones, policy, now)
     if not -5 <= (now - fleet.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
@@ -57,4 +66,4 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     return CrdsInputs(
         evaluated_at=now, fleet=fleet, demand=demand, facilities=facilities, planning=planning,
         traffic=traffic, available_by_zone={z: row["available_evs"] for z, row in counts.items()},
-        vehicle_zones=vehicle_zones, issues=sorted(issues))
+        vehicle_zones=vehicle_zones, excluded_vehicle_ids=sorted(excluded), issues=sorted(issues))

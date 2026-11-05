@@ -148,6 +148,18 @@ class SimulatorSession(Model):
     durable: bool
 
 
+class SimulatorIdleRestoreRequest(Model):
+    """Resume only Fleet's saved idle state; no client-supplied physical data."""
+    action: Literal["RESTORE_IDLE"] = "RESTORE_IDLE"
+    request_id: UUID
+    expected_fleet_instance_id: UUID
+    expected_control_version: int = Field(ge=1)
+    expected_generation: int = Field(ge=1)
+    expected_owner_revision: int = Field(ge=1)
+    expected_checkpoint_revision: int = Field(ge=1)
+    simulation: SimulatorConfiguration
+
+
 class SimulatorCheckpointRequest(Model):
     request_id: UUID
     session_id: UUID

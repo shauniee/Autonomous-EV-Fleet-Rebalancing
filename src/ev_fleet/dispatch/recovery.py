@@ -11,7 +11,7 @@ from ev_fleet.contracts.dispatch import Dispatch, VehicleClaim
 from ev_fleet.contracts.facilities import Facility, ParkingHold
 from ev_fleet.contracts.recovery import (RecoveryAssessment, RecoveryBlocker, RecoveryEvidence,
     SimulatorCheckpoint, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorSession)
-from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
+from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState, TelemetryUpdate
 from ev_fleet.simulator.movement import Movement
 from ev_fleet.rebalancing.traffic import assess_traffic
 from .clients import request_json
@@ -110,9 +110,46 @@ def same_local(left, right):
     return left == right
 
 
+def unstarted_checkpoint(local, vehicle, checkpoint):
+    """An idle checkpoint can precede a claim that was never delivered."""
+    dispatch, claim = Dispatch.model_validate(local["dispatch"]), vehicle.active_claim
+    physical = checkpoint.physical
+    return bool(claim and claim.status == "ACTIVE" and local["claimed"] and dispatch.claim_held is True
+        and claim.dispatch_id == dispatch.dispatch_id
+        and claim.command_id == dispatch.command.command_id
+        and checkpoint.vehicle_id == vehicle.vehicle_id
+        and checkpoint.fleet_instance_id == claim.fleet_instance_id
+        and checkpoint.command is None and not checkpoint.acknowledged
+        and checkpoint.acknowledgement is None and checkpoint.pending_event is None
+        and checkpoint.completed_command_id != dispatch.command.command_id
+        and dispatch.state not in ("FAILED", "SUCCEEDED", "REJECTED")
+        and dispatch.delivery_attempts == 0 and dispatch.acknowledged_at is None
+        and dispatch.distance_travelled_km == 0 and local["ack"] is None
+        and local["event_sequence"] == -1 and local["release_outcome"] is None
+        and physical.relocation_state == "IDLE" and physical.active_dispatch_id is None
+        and physical.charging_state == "NOT_CHARGING" and physical.speed_kph == 0
+        and physical.position == claim.origin and physical == vehicle.telemetry)
+
+
 def candidate_checkpoint(local, fleet, vehicle, saved):
     dispatch = Dispatch.model_validate(local["dispatch"])
     checkpoint = saved.checkpoint
+    unstarted = checkpoint is not None and unstarted_checkpoint(local, vehicle, checkpoint)
+    if unstarted:
+        # Prepare the never-delivered original command without advancing motion
+        # or fabricating an ACK. The consumer sends this durable ACK intent.
+        movement = Movement.from_checkpoint(checkpoint, checkpoint.simulation)
+        if not movement.accept(dispatch.command.model_dump(mode="json")):
+            raise ValueError("UNSTARTED_COMMAND_NOT_ACCEPTABLE")
+        state = movement.snapshot()
+        physical = TelemetryUpdate.model_validate({
+            **checkpoint.physical.model_dump(mode="json"), **state.pop("physical")})
+        physical = physical.model_copy(update={"sequence": physical.sequence + 1})
+        checkpoint = SimulatorCheckpoint(vehicle_id=vehicle.vehicle_id,
+            fleet_instance_id=fleet.instance_id, physical=physical, **state,
+            acknowledgement={"command_id": dispatch.command.command_id,
+                "vehicle_id": vehicle.vehicle_id, "accepted": True, "reason": None},
+            next_event_sequence=0, simulation=checkpoint.simulation)
     if checkpoint is None:
         physical = vehicle.telemetry
         if (physical is None or physical.active_dispatch_id != dispatch.dispatch_id
@@ -126,7 +163,8 @@ def candidate_checkpoint(local, fleet, vehicle, saved):
             acknowledged=local["ack"] is not None, next_event_sequence=local["event_sequence"] + 1,
             simulation=saved.configuration)
     if checkpoint.command is not None:
-        if (dispatch.delivery_attempts < 1 or checkpoint.command != dispatch.command or checkpoint.vehicle_id != vehicle.vehicle_id
+        if ((dispatch.delivery_attempts < 1 and not unstarted)
+                or checkpoint.command != dispatch.command or checkpoint.vehicle_id != vehicle.vehicle_id
                 or checkpoint.fleet_instance_id != fleet.instance_id
                 or checkpoint.physical.distance_travelled_km < dispatch.distance_travelled_km
                 or checkpoint.next_event_sequence <= local["event_sequence"]
@@ -194,7 +232,8 @@ async def assess_recovery(service, dispatch_id, *, details=False):
     vehicle = next((v for v in fleet.vehicles if v.vehicle_id == dispatch.vehicle_id), None) if fleet else None
     selected = saved.checkpoint if saved and saved.checkpoint and (saved.checkpoint.command == command
         or saved.checkpoint.command is None and command
-        and saved.checkpoint.completed_command_id == command.command_id) else None
+        and saved.checkpoint.completed_command_id == command.command_id
+        or vehicle and command and unstarted_checkpoint(local, vehicle, saved.checkpoint)) else None
     if command and dispatch.vehicle_id:
         blockers.extend(evidence_blockers(dispatch, fleet, vehicle, claim, observations.get("hold"),
             observations.get("facility"), now, service.settings.stale_seconds, selected))
@@ -377,6 +416,11 @@ class RecoveryCoordinator:
                 raise HTTPException(409, "RECOVERY_HANDOFF_ALREADY_CLAIMED")
             if operation["consumer_id"] is None:
                 operation.update(consumer_id=consumer, confirmed_paused=False, reason_code="RESTORING_SIMULATOR")
+                if record.data["delivery_attempts"] == 0:
+                    # Delivering the prepared original command is part of this
+                    # handoff, not an invented ACK or a second approval.
+                    record.data["delivery_attempts"] = 1
+                    record.sent_tick = service.clock.monotonic()
                 service.planning_revision += 1
                 # Planning must stop assuming paused before the node can resume.
                 await service.persist()

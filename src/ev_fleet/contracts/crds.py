@@ -108,6 +108,7 @@ class CrdsInputs(Model):
     traffic: dict
     available_by_zone: dict[str, int]
     vehicle_zones: dict[str, str]
+    excluded_vehicle_ids: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
 
 

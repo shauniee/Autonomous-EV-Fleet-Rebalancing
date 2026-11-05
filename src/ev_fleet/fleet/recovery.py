@@ -16,6 +16,7 @@ from ev_fleet.contracts.recovery import (
     SimulatorCheckpointSnapshot, SimulatorConfiguration,
 )
 from ev_fleet.contracts.facilities import VehicleParking
+from ev_fleet.contracts.dispatch import DispatchList
 
 
 def fingerprint(model):
@@ -74,6 +75,8 @@ class SimulatorRecovery:
             store.cache_telemetry(sample)
 
     async def session(self, vehicle_id, body):
+        if body.action == "RESTORE_IDLE":
+            return await self.restore_idle(vehicle_id, body)
         if body.action == "RESTORE":
             return await self.restore(vehicle_id, body)
         store = self.store
@@ -159,6 +162,66 @@ class SimulatorRecovery:
             return SimulatorSession.model_validate(previous["receipt"])
         return None
 
+    async def restore_idle(self, vehicle_id, body):
+        """Fence an expired idle owner without inventing a completed command."""
+        store = self.store
+        async with store.lock:
+            self.gate(vehicle_id)
+            retry = self.restore_retry(store.record(vehicle_id), body)
+            if retry:
+                return retry
+        # A released Fleet claim alone cannot establish that Dispatch finished.
+        # No Fleet lock is held during the read. Recheck control/owner revisions
+        # and local tasks below before committing the new generation.
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                response = await client.get(self.settings.dispatch_url + "/api/v1/dispatches",
+                                            params={"vehicle_id": vehicle_id})
+                response.raise_for_status()
+                dispatches = DispatchList.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(503, "IDLE_RECOVERY_DISPATCH_UNAVAILABLE") from exc
+        if any(d.vehicle_id != vehicle_id or d.state not in ("SUCCEEDED", "REJECTED")
+               or d.claim_held is not False
+               or d.recovery and d.recovery.status in ("REQUESTED", "RESTORING")
+               for d in dispatches.dispatches):
+            raise HTTPException(409, "IDLE_RECOVERY_DISPATCH_UNRESOLVED")
+        async with store.lock:
+            self.gate(vehicle_id)
+            record = store.record(vehicle_id)
+            retry = self.restore_retry(record, body)
+            if retry:
+                return retry
+            owner, previous = record.get("simulator_owner"), record.get("simulator_checkpoint")
+            if (str(body.expected_fleet_instance_id) != store.instance_id
+                    or body.expected_control_version != record["control_version"]
+                    or owner is None or body.expected_generation != owner["generation"]
+                    or body.expected_owner_revision != owner["revision"]
+                    or previous is None or body.expected_checkpoint_revision != previous["revision"]):
+                raise HTTPException(409, "SIMULATOR_EVIDENCE_CHANGED")
+            if owner["expires_at"] > store.clock.now() or not store.view(record)["stale"]:
+                raise HTTPException(409, "SIMULATOR_OWNER_STILL_ACTIVE")
+            if record["active_claim"] or record["active_rental"] or record["active_charging_task"]:
+                raise HTTPException(409, "SIMULATOR_TASK_CONFLICT")
+            checkpoint = SimulatorCheckpoint.model_validate(previous["data"])
+            physical = checkpoint.physical
+            if (checkpoint.command is not None or physical.relocation_state != "IDLE"
+                    or physical.active_dispatch_id is not None or physical.speed_kph != 0
+                    or physical.charging_state != "NOT_CHARGING"
+                    or physical.session_id != record["session_id"]
+                    or str(physical.session_id) != owner["session_id"]):
+                raise HTTPException(409, "IDLE_RECOVERY_CHECKPOINT_REQUIRED")
+            if checkpoint.simulation != body.simulation:
+                raise HTTPException(409, "SIMULATOR_CONFIGURATION_MISMATCH")
+            # A prior handoff may have committed before its response was lost.
+            # Only session/sequence may then differ from last published telemetry.
+            telemetry = record["telemetry"]
+            if telemetry is None or physical.model_dump(exclude={"session_id", "sequence"}) != telemetry.model_dump(
+                    exclude={"session_id", "sequence"}):
+                raise HTTPException(409, "IDLE_RECOVERY_TELEMETRY_MISMATCH")
+            self.validate_checkpoint(vehicle_id, record, checkpoint)
+            return await self.rotate_owner(vehicle_id, record, body, checkpoint)
+
     async def restore(self, vehicle_id, body):
         store = self.store
         async with store.lock:
@@ -196,33 +259,38 @@ class SimulatorRecovery:
             if body.checkpoint.command and body.checkpoint.command.dispatch_id != body.dispatch_id:
                 raise HTTPException(409, "RECOVERY_DISPATCH_MISMATCH")
             self.validate_checkpoint(vehicle_id, record, body.checkpoint)
-            staged = deepcopy(record)
-            session_id, generation = uuid4(), body.expected_generation + 1
-            physical = body.checkpoint.physical.model_copy(update={"session_id": session_id, "sequence": 0})
-            checkpoint = body.checkpoint.model_copy(update={"physical": physical})
-            if staged["session_request_id"]:
-                staged["retired_requests"].add(staged["session_request_id"])
-            staged.update(session_id=session_id, session_request_id=body.request_id)
-            receipt = SimulatorSession(session_id=session_id, generation=generation, owner_revision=1,
-                expires_at=store.clock.now() + timedelta(seconds=self.settings.lease_seconds),
-                checkpoint_revision=body.expected_checkpoint_revision + 1, checkpoint=checkpoint, durable=store.enabled)
-            staged["simulator_owner"] = {"generation": generation, "revision": 1,
-                "session_id": str(session_id), "expires_at": receipt.expires_at,
-                "request_id": str(body.request_id), "request_fingerprint": fingerprint(body),
-                "receipt": receipt.model_dump(mode="json")}
-            saved_receipt = SimulatorCheckpointReceipt(request_id=body.request_id, generation=generation,
-                checkpoint_revision=receipt.checkpoint_revision,
-                command_fingerprint=fingerprint(checkpoint.command) if checkpoint.command else None, durable=store.enabled)
-            staged["simulator_checkpoint"] = {"revision": receipt.checkpoint_revision,
-                "data": checkpoint.model_dump(mode="json"), "request_id": str(body.request_id),
-                "request_fingerprint": fingerprint(body), "receipt": saved_receipt.model_dump(mode="json"), "charging": None}
-            staged["simulator_restore"] = {"request_id": str(body.request_id), "fingerprint": fingerprint(body),
-                "receipt": receipt.model_dump(mode="json")}
-            staged["state_version"] += 1
-            staged["control_version"] += 1
-            # Leave telemetry/receive times untouched: only the restored node can report fresh state.
-            await self.commit(vehicle_id, staged)
-            return receipt
+            return await self.rotate_owner(vehicle_id, record, body, body.checkpoint)
+
+    async def rotate_owner(self, vehicle_id, record, body, checkpoint):
+        """Caller holds Fleet lock and has validated the restoration evidence."""
+        store = self.store
+        staged = deepcopy(record)
+        session_id, generation = uuid4(), body.expected_generation + 1
+        physical = checkpoint.physical.model_copy(update={"session_id": session_id, "sequence": 0})
+        checkpoint = checkpoint.model_copy(update={"physical": physical})
+        if staged["session_request_id"]:
+            staged["retired_requests"].add(staged["session_request_id"])
+        staged.update(session_id=session_id, session_request_id=body.request_id)
+        receipt = SimulatorSession(session_id=session_id, generation=generation, owner_revision=1,
+            expires_at=store.clock.now() + timedelta(seconds=self.settings.lease_seconds),
+            checkpoint_revision=body.expected_checkpoint_revision + 1, checkpoint=checkpoint, durable=store.enabled)
+        staged["simulator_owner"] = {"generation": generation, "revision": 1,
+            "session_id": str(session_id), "expires_at": receipt.expires_at,
+            "request_id": str(body.request_id), "request_fingerprint": fingerprint(body),
+            "receipt": receipt.model_dump(mode="json")}
+        saved_receipt = SimulatorCheckpointReceipt(request_id=body.request_id, generation=generation,
+            checkpoint_revision=receipt.checkpoint_revision,
+            command_fingerprint=fingerprint(checkpoint.command) if checkpoint.command else None, durable=store.enabled)
+        staged["simulator_checkpoint"] = {"revision": receipt.checkpoint_revision,
+            "data": checkpoint.model_dump(mode="json"), "request_id": str(body.request_id),
+            "request_fingerprint": fingerprint(body), "receipt": saved_receipt.model_dump(mode="json"), "charging": None}
+        staged["simulator_restore"] = {"request_id": str(body.request_id), "fingerprint": fingerprint(body),
+            "receipt": receipt.model_dump(mode="json")}
+        staged["state_version"] += 1
+        staged["control_version"] += 1
+        # Leave telemetry/receive times untouched: only the restored node can report fresh state.
+        await self.commit(vehicle_id, staged)
+        return receipt
 
     def validate_checkpoint(self, vehicle_id, record, checkpoint):
         store, physical, command = self.store, checkpoint.physical, checkpoint.command
@@ -241,7 +309,17 @@ class SimulatorRecovery:
         claim = record["active_claim"]
         if command is None:
             if claim is not None:
-                raise HTTPException(409, "SIMULATOR_CLAIM_MISMATCH")
+                saved = record.get("simulator_checkpoint")
+                idle = SimulatorCheckpoint.model_validate(saved["data"]) if saved else None
+                baseline = idle.physical if idle else None
+                # A claim may arrive between idle publication and command poll.
+                # Keep the owner online, but permit no motion/energy advancement.
+                if (idle is None or idle.command is not None
+                        or physical.position != baseline.position
+                        or physical.soc_pct != baseline.soc_pct
+                        or physical.odometer_km != baseline.odometer_km
+                        or physical.speed_kph != 0 or physical.charging_state != "NOT_CHARGING"):
+                    raise HTTPException(409, "SIMULATOR_IDLE_CLAIM_CHANGED")
         else:
             entry = record["claims"].get(str(command.dispatch_id))
             receipt = entry["receipt"] if entry else None
