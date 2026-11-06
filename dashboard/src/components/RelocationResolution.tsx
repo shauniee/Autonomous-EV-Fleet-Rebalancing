@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, message } from '../api/client';
+import { api, ApiError } from '../api/client';
 import type { Dispatch, RelocationEndRequest, RelocationResolution } from '../api/contracts';
 import { usePolling } from '../hooks/usePolling';
 import type { Notify } from './Notifications';
 
 const statusLabels = {
-  REQUESTED: 'Waiting for Fleet to confirm the stop',
-  CLEANUP_PENDING: 'Vehicle claim released. Destination hold cleanup is pending.',
-  ENDED: 'Relocation ended. Cleanup complete',
-  BLOCKED: 'Fleet could not confirm the stop',
+  REQUESTED: 'Waiting to confirm the stop',
+  CLEANUP_PENDING: 'The vehicle stopped. Its destination space is still reserved',
+  ENDED: 'Relocation ended',
+  BLOCKED: 'Could not confirm the stop',
 };
 
 export function RelocationResolutionControl({ dispatchId, notify, refreshRecovery }: {
@@ -55,9 +55,9 @@ export function RelocationResolutionControl({ dispatchId, notify, refreshRecover
       if (error instanceof ApiError && [400, 404, 409, 422].includes(error.status)) {
         setPending(null);
         try { sessionStorage.removeItem(key); } catch { /* The assessment still reports backend status. */ }
-        notify('warning', 'The stop was not accepted. Review the current relocation evidence and try again.');
+        notify('warning', 'The stop was declined. Check the relocation status before trying again.');
       } else {
-        notify('warning', 'Stop confirmation is unavailable. Check status or retry the same request.');
+        notify('warning', 'Stop request unconfirmed. Check status or retry the request.');
       }
     } finally {
       running.current = false;
@@ -74,10 +74,10 @@ export function RelocationResolutionControl({ dispatchId, notify, refreshRecover
     try {
       const result = await api<Dispatch>(`${base}/reconcile`, { method: 'POST' });
       notify('info', result.claim_held === false
-        ? 'Dispatch reports no active claim for this relocation. Review the destination hold below.'
-        : 'Dispatch has not confirmed claim release. Review the relocation evidence.');
-    } catch (error) {
-      notify('warning', `Relocation status could not be reconciled. ${message(error)}`);
+        ? 'The vehicle is no longer assigned to this relocation.'
+        : 'The vehicle may still be assigned to this relocation.');
+    } catch {
+      notify('warning', 'Could not check the relocation status. Try again.');
     } finally {
       running.current = false;
       setBusy(false);
@@ -86,26 +86,32 @@ export function RelocationResolutionControl({ dispatchId, notify, refreshRecover
     }
   }
 
-  return <div aria-label="Relocation resolution">
-    {operation && <p role="status"><strong>{statusLabels[operation.status]}.</strong> {operation.reason}
-      {operation.detail && <small className="identifier">{operation.detail}</small>}</p>}
-    {assessment.error ? <p className="warning">Current stop eligibility is unavailable.</p>
-      : assessment.data?.blocker && <p className="muted">{assessment.data.blocker}</p>}
+  const blocker = assessment.data?.blocker;
+  const stopIssue = assessment.error ? 'Could not check whether the relocation can end.'
+    : blocker && !operation ? ({
+      'A simulator resume is already in progress.': 'Wait for the resume request to finish.',
+      'Arrival is already recorded. Reconcile to confirm release.': 'Arrival was recorded. Check the relocation status.',
+      'The simulator still owns a live lease and may be moving.': 'The vehicle may still be moving.',
+    }[blocker] ?? 'The relocation cannot end safely right now.') : null;
+
+  return <div className="relocation-controls" aria-label="End relocation controls">
+    {operation && <p role="status"><strong>{statusLabels[operation.status]}.</strong></p>}
+    {stopIssue && <p className="warning">{stopIssue}</p>}
     {pending && <p role="status">Waiting for confirmation of the stop request.</p>}
     <div className="actions">
-      <button disabled={busy} onClick={() => void reconcile()}>Reconcile</button>
+      <button disabled={busy} onClick={() => void reconcile()}>Check relocation status</button>
       <button disabled={!canEnd} onClick={() => { setReason(''); setReviewRevision(currentRevision ?? null); }}>End relocation</button>
-      {pending && <button disabled={busy} onClick={() => void end(pending)}>Retry same stop request</button>}
+      {pending && <button disabled={busy} onClick={() => void end(pending)}>Retry stop request</button>}
     </div>
     {reviewRevision && <dialog ref={dialog} onCancel={() => setReviewRevision(null)} aria-labelledby={`stop-title-${dispatchId}`}>
       <h2 id={`stop-title-${dispatchId}`}>End relocation</h2>
-      <p>Fleet will preserve the last recorded position and battery level. It will fence the old simulator session before releasing the claim. A stranded EV stays unavailable until it meets normal parking and telemetry checks.</p>
+      <p>Ending the relocation saves the vehicle’s last known position and battery level. The vehicle may stay unavailable until it can be parked safely.</p>
       {reviewRevision === currentRevision && assessment.data?.stop_position && <p>
         Recorded stop position {assessment.data.stop_position.latitude.toFixed(5)}, {assessment.data.stop_position.longitude.toFixed(5)}
         {assessment.data.stop_soc_pct != null && <> · Battery {assessment.data.stop_soc_pct.toFixed(1)}%</>}
       </p>}
       <label>Reason for ending the relocation <input value={reason} onChange={event => setReason(event.target.value)} maxLength={200} required /></label>
-      {(!canEnd || reviewRevision !== currentRevision) && <p role="status">The stop evidence changed. Leave the relocation open and review it again.</p>}
+      {(!canEnd || reviewRevision !== currentRevision) && <p role="status">The relocation status changed or is unavailable. Close and review again.</p>}
       <div className="actions">
         <button autoFocus onClick={() => setReviewRevision(null)}>Leave open</button>
         <button className="primary" disabled={!canEnd || reviewRevision !== currentRevision || !reason.trim()}

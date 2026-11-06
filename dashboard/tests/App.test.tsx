@@ -174,8 +174,11 @@ describe('dispatcher dashboard', () => {
     server({ '/api/dispatch/dispatches': { dispatches: [dispatch] } }); render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
     const card = await screen.findByTestId('dispatch-dispatch-1');
-    expect(card).toHaveTextContent('PROGRESS_TIMEOUT'); expect(card).toHaveTextContent('2 km');
-    expect(card).toHaveTextContent('Acknowledged / execution confirmed'); expect(card).toHaveTextContent('retains ownership');
+    expect(card).toHaveTextContent('Vehicle updates stopped. Check the relocation status.');
+    expect(card).not.toHaveTextContent('PROGRESS_TIMEOUT');
+    expect(card).toHaveTextContent('2 km');
+    expect(card).toHaveTextContent('Move confirmed');
+    expect(card).toHaveTextContent(/Claim held\s*Yes/);
   });
   it('blocks expired recommendation approval', async () => {
     const rec = makeRecommendation(); rec.expires_at = new Date(0).toISOString();

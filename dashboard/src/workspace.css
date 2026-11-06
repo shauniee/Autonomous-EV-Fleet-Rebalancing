@@ -269,7 +269,22 @@
 .vehicle-diagnostics { grid-column: 1 / -1; }
 .relocation-group-title { grid-column: 1 / -1; margin: 10px 0 0; }
 .relocation-group-title small { font-size: 12px; }
-.relocation-groups .dispatch-card { background: var(--surface-soft); }
+.dispatch-grid.relocation-groups {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  align-items: start;
+}
+.relocation-groups .dispatch-card {
+  min-width: 0;
+  background: var(--surface-soft);
+  overflow-wrap: anywhere;
+}
+.dispatch-card .section-title { margin-bottom: 8px; }
+.dispatch-card .warning { margin: 8px 0; padding: 8px 10px; }
+.dispatch-card .actions { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.dispatch-card button { min-width: 0; max-width: 100%; white-space: normal; }
+.dispatch-card > .identifier { margin-top: 12px; }
+.relocation-controls { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; }
+.relocation-controls > p { margin: 0 0 8px; }
 .facility-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
 .facility-filters select { min-height: 40px; padding: 7px 10px; width: auto; appearance: auto; }
 .facility-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); margin-top: 12px; }

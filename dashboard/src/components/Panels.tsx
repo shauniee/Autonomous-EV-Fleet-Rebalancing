@@ -122,6 +122,27 @@ function needsRelocationResolution(dispatch: Dispatch, vehicle?: Vehicle) {
     || dispatch.state === 'REJECTED' && (dispatch.claim_held !== false || dispatch.parking_status === 'RESERVED')
     || dispatch.claim_held !== false && (vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
 }
+function relocationIssue({ state, failure_reason }: Dispatch) {
+  switch (failure_reason) {
+    case 'OPERATOR_ENDED_RELOCATION': return 'Ended by an operator.';
+    case 'OPERATOR_CLOSED_UNSTARTED_APPROVAL': return 'Approval closed before the relocation started.';
+    case 'PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST': return 'Approval paused before a vehicle was assigned.';
+    case 'VEHICLE_OFFLINE_OR_STALE': return 'Vehicle updates are unavailable. Check the relocation status.';
+    case 'ACK_TIMEOUT': return 'The vehicle has not confirmed the move. Check the relocation status.';
+    case 'PROGRESS_TIMEOUT': return 'Vehicle updates stopped. Check the relocation status.';
+  }
+  if (state === 'UNKNOWN') return 'The relocation status is unclear. Check for an update.';
+  if (state === 'FAILED') return 'The relocation could not be completed.';
+  if (state === 'REJECTED') return 'The relocation was not approved.';
+  if (failure_reason && state === 'ARRIVAL_PENDING') return 'Arrival has not been confirmed yet.';
+  return null;
+}
+
+function RelocationIssue({ dispatch }: { dispatch: Dispatch }) {
+  const issue = relocationIssue(dispatch);
+  return issue && <p className={dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION' ? 'muted' : 'warning'} role="status">{issue}</p>;
+}
+
 function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void; notify: Notify }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
@@ -129,21 +150,20 @@ function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatc
   const showResolution = needsRelocationResolution(dispatch, vehicle) || ended;
   return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
+    <RelocationIssue dispatch={dispatch}/>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
-    {claim.error && <small className="warning">Origin receipt unavailable{claim.data ? ' · last known origin shown' : ''}</small>}
+    {claim.error && <p className="muted">{claim.data ? 'Showing the last known starting point.' : 'Starting point unavailable.'}</p>}
     <dl className="candidate-metrics"><div><dt>Distance travelled</dt><dd>{number(dispatch.distance_travelled_km, ' km')}</dd></div>
       <div><dt>Initial estimate</dt><dd>{number(dispatch.revalidated_metrics?.distance_km, ' km')}</dd></div>
-      <div><dt>Current SOC {vehicle?.stale ? '(stale)' : ''}</dt><dd>{number(vehicle?.telemetry?.soc_pct, '%')}</dd></div>
-      <div><dt>Acknowledged / execution confirmed</dt><dd>{time(dispatch.acknowledged_at)}</dd></div>
-      <div><dt>Last dispatch contact</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
+      <div><dt>{vehicle?.stale ? 'Last known battery' : 'Battery'}</dt><dd>{number(vehicle?.telemetry?.soc_pct, '%')}</dd></div>
+      <div><dt>Move confirmed</dt><dd>{time(dispatch.acknowledged_at)}</dd></div>
+      <div><dt>Last update</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
       {dispatch.parking_facility_id && <div><dt>Destination hold</dt><dd>{dispatch.parking_status ?? 'Unconfirmed'}</dd></div>}
       {vehicle && <div><dt>Fleet availability</dt><dd>{vehicle.effective_availability}</dd></div>}
       <div><dt>Claim held</dt><dd>{dispatch.claim_held == null ? 'Unknown' : dispatch.claim_held ? 'Yes' : 'No'}</dd></div>
     </dl>
     {route && <><button className="map-reset" onClick={() => onTrack(dispatch.dispatch_id)}>View route on map</button>
       <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
-    {dispatch.failure_reason && <p className="warning" role="status">{ended ? 'Ended by an operator' : dispatch.failure_reason}</p>}
-    {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
     {(showResolution || dispatch.recovery) &&
       <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify} showResolution={showResolution}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
@@ -175,12 +195,12 @@ export function RelocationPanel({ dispatches, vehicles, onTrack, notify, approva
         <h3 key={group.title} className="relocation-group-title">{group.title} <small className="muted">{group.dispatches.length}</small></h3>,
         ...group.dispatches.map(d => d.vehicle_id
           ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack} notify={notify}/>
-          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason === 'PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST'
-              ? 'Approval preparation stopped before a vehicle was assigned.' : d.failure_reason}</p>
-              {d.state === 'UNKNOWN' && d.claim_held === false && !d.command && <>
+          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><div className="section-title"><h3>Unassigned EV</h3><Badge value={d.state}/></div>
+              <RelocationIssue dispatch={d}/>
+              {d.state === 'UNKNOWN' && d.claim_held === false && !d.command && <div className="actions">
                 {d.recommendation_id && <button disabled={approvalBusy} onClick={() => onRetryApproval?.(d)}>Retry same approval</button>}
                 <button disabled={approvalBusy} onClick={() => onCloseApproval?.(d.request_id)}>Close unstarted approval</button>
-              </>}
+              </div>}
               <small className="identifier">{d.dispatch_id}</small></article>),
       ])}
     </div>
