@@ -1,17 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ChargerAdvice, ChargingAdvice, ChargingTask, Fleet, Vehicle } from '../api/contracts';
 import { api, message } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
+import type { Notify } from './Notifications';
 
-export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, adviceFresh, canPrepare, onPrepare }: {
+export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, adviceFresh, canPrepare, onPrepare, notify }: {
   vehicles: Vehicle[]; onUpdated: () => void;
   advice?: ChargingAdvice; adviceError?: string; adviceFresh: boolean;
-  canPrepare: boolean; onPrepare: (item: ChargerAdvice) => void;
+  notify: Notify; canPrepare: boolean; onPrepare: (item: ChargerAdvice) => void;
 }) {
   const tasks = usePolling<{ tasks: ChargingTask[] }>('/api/fleet/charging-tasks');
   const [staff, setStaff] = useState('Ground Team A');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
+  const tasksError = tasks.error;
+  useEffect(() => {
+    if (tasksError) notify('warning', `Charging tasks unavailable: ${tasksError}.`);
+  }, [tasksError, notify]);
   const taskDataValid = Array.isArray(tasks.data?.tasks);
   const active = taskDataValid ? tasks.data!.tasks.filter(t => !['COMPLETED', 'CANCELLED'].includes(t.status)) : [];
   const low = vehicles.filter(v => v.telemetry && v.telemetry.soc_pct <= 30 && !v.stale && v.connectivity === 'ONLINE')
@@ -24,20 +28,20 @@ export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, a
     return current;
   }
   async function create(vehicle: Vehicle) {
-    setBusy(true); setNotice('');
+    setBusy(true);
     try {
       const latest = await latestVehicle(vehicle.vehicle_id);
       await api('/api/fleet/charging-tasks', {
         method: 'POST',
         body: JSON.stringify({ vehicle_id: vehicle.vehicle_id, expected_version: latest.state_version, request_id: crypto.randomUUID() }),
       });
-      setNotice(`Charging task queued for ${vehicle.vehicle_id}.`);
+      notify('info', `Charging task queued for ${vehicle.vehicle_id}.`);
       tasks.refresh(); onUpdated();
-    } catch (error) { setNotice(`Unable to queue task: ${message(error)}. Refresh and retry.`); }
+    } catch (error) { notify('error', `Unable to queue task: ${message(error)}. Refresh and retry.`); }
     finally { setBusy(false); }
   }
   async function transition(task: ChargingTask, action: 'ASSIGN' | 'START_WORK' | 'COMPLETE' | 'CANCEL') {
-    setBusy(true); setNotice('');
+    setBusy(true);
     try {
       const current = await latestVehicle(task.vehicle_id);
       await api(`/api/fleet/charging-tasks/${task.task_id}/transition`, {
@@ -47,9 +51,9 @@ export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, a
           action, ...(action === 'ASSIGN' ? { staff_name: staff.trim() } : {}),
         }),
       });
-      setNotice(`Task ${task.task_id.slice(0, 8)} updated.`);
+      notify('info', `Task ${task.task_id.slice(0, 8)} updated.`);
       tasks.refresh(); onUpdated();
-    } catch (error) { setNotice(`Task not updated: ${message(error)}. Refresh and retry.`); }
+    } catch (error) { notify('error', `Task not updated: ${message(error)}. Refresh and retry.`); }
     finally { setBusy(false); }
   }
   return <section className="panel" aria-label="Charging operations">
@@ -57,7 +61,6 @@ export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, a
       <span className="muted">{low.length} low-SOC EVs · {active.length} open tasks</span></div>
     <p className="muted">Simulated threshold: 30% low, below 20% critical. Creating a task reserves the EV from new rentals and relocations; it does not start a real charger.</p>
     {tasks.error && <p className="warning" role="status">Charging task service unavailable. Do not assume an empty queue.</p>}
-    {notice && <p role="status">{notice}</p>}
     <h3>Charger advice · 25% SOC or lower</h3>
     <p className="muted">Reachable chargers ranked by the backend using battery, estimated travel energy, a default 20% arrival reserve, and simulated capacity.</p>
     {(!adviceFresh || adviceError) && <p className="warning" role="status">Charging advice unavailable or stale. Do not assume there are no low-battery vehicles.</p>}

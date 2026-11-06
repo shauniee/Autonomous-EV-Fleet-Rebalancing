@@ -4,6 +4,7 @@ import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { RouteDetails } from './RouteDetails';
 import { RecoveryControl } from './RecoveryControl';
+import type { Notify } from './Notifications';
 import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 import { OperationalTabs } from './OperationalTabs';
 import { TwinHistoryPanel } from './TwinHistoryPanel';
@@ -116,7 +117,7 @@ export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; 
     {vehicle && diagnostics && <div className="vehicle-diagnostics"><TwinHistoryPanel key={vehicle.vehicle_id} vehicle={vehicle}/></div>}
   </div>;
 }
-function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void }) {
+function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void; notify: Notify }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
   return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
@@ -136,11 +137,11 @@ function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehic
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
     {(dispatch.recovery || dispatch.state === 'UNKNOWN' || dispatch.claim_held !== false &&
       (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE')) &&
-      <RecoveryControl dispatchId={dispatch.dispatch_id}/>}
+      <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
-export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void }) {
+export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void; notify: Notify }) {
   const groups: { title: string; dispatches: Dispatch[] }[] = [
     { title: 'Needs attention', dispatches: [] },
     { title: 'Active', dispatches: [] },
@@ -161,7 +162,7 @@ export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches:
       {groups.filter(group => group.dispatches.length > 0).flatMap(group => [
         <h3 key={group.title} className="relocation-group-title">{group.title} <small className="muted">{group.dispatches.length}</small></h3>,
         ...group.dispatches.map(d => d.vehicle_id
-          ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/>
+          ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack} notify={notify}/>
           : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>),
       ])}
     </div>

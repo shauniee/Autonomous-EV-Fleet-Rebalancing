@@ -36,6 +36,10 @@ async function selectAndRecommend() {
   fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
   await screen.findByTestId('recommendation');
 }
+function openNotifications() {
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
+  return within(screen.getByRole('region', { name: 'Notifications' }));
+}
 describe('dispatcher dashboard', () => {
   it('renders all zones using backend severity, independently of high raw demand', async () => {
     server(); render(<App/>);
@@ -45,6 +49,25 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByText('Current shortage')).toBeInTheDocument();
     expect(screen.getByText('Projected shortage')).toBeInTheDocument();
   });
+  it('collects hotspot severity changes in Notifications without emitting a toast', async () => {
+    const heat = makeHeat();
+    server({ '/api/demand/heat-map': heat });
+    render(<App/>);
+    await screen.findByRole('button', { name: /Bishan NORMAL/ });
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+
+    heat.zones[1].hotspot_severity = 'CRITICAL';
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
+    await screen.findByRole('button', { name: 'Notifications, 1 to review' });
+
+    expect(screen.queryByRole('status', { name: 'Hotspot updates' })).not.toBeInTheDocument();
+    const notifications = openNotifications();
+    expect(notifications.getByText('Bishan hotspot severity changed from NORMAL to CRITICAL.')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(openNotifications().getByText(/Bishan hotspot severity changed/)).toBeVisible();
+  });
+
   it('separates recommendation from approval and shows backend explanation', async () => {
     const fetch = server(); render(<App/>); await selectAndRecommend();
     expect(screen.getByText('Backend selected the highest scoring eligible EV.')).toBeInTheDocument();
@@ -54,7 +77,7 @@ describe('dispatcher dashboard', () => {
     expect(within(dialog).getByText('bishan')).toBeInTheDocument();
     expect(within(dialog).getByText('85%')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Dispatch dispatch-1:/);
+    await openNotifications().findByText(/Dispatch dispatch-1:/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
   it('does not report HTTP 202 with a rejected dispatch as approved', async () => {
@@ -71,7 +94,9 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('ONEMAP_ROUTE_REQUIRED');
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/ONEMAP_ROUTE_REQUIRED/)).toBeVisible();
+    expect(notifications.getByText('Error')).toBeVisible();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
@@ -89,8 +114,12 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Unresolved approval/)).toBeInTheDocument();
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeVisible();
+    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Clear activity' }));
+    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    expect(notifications.queryByText(/approval not yet confirmed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
@@ -99,7 +128,7 @@ describe('dispatcher dashboard', () => {
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';
     server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': new Error('Fleet down') }); render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD UNKNOWN/ }));
-    expect(screen.getByText(/FLEET_UNAVAILABLE/)).toBeInTheDocument();
+    expect(await openNotifications().findByText(/FLEET_UNAVAILABLE/)).toBeVisible();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled();
   });
@@ -167,9 +196,9 @@ describe('dispatcher dashboard', () => {
     const view = render(<App/>); await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Approval outcome uncertain/);
+    await openNotifications().findByText(/Approval outcome uncertain/);
     view.unmount(); render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry same approval' }));
+    fireEvent.click(openNotifications().getByRole('button', { name: 'Retry same approval' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual(bodies[1]);
   });
@@ -407,6 +436,7 @@ describe('dispatcher dashboard', () => {
     expect(await within(panel).findByText(/Traffic feed unavailable: Rebalancing down/)).toBeInTheDocument();
     expect(within(panel).getByText('UNAVAILABLE')).toBeInTheDocument();
     expect(within(panel).queryByText(/Live LTA traffic ranking is disabled/)).not.toBeInTheDocument();
+    expect(openNotifications().getByText(/Traffic: Rebalancing down/)).toBeVisible();
   });
 
   it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {

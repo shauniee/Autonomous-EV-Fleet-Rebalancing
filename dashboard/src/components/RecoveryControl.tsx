@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, message } from '../api/client';
 import type { RecoveryAssessment, RecoveryOperation, RecoveryRequest } from '../api/contracts';
 import { usePolling } from '../hooks/usePolling';
+import type { Notify } from './Notifications';
 
 const checkpointTime = (value: string | null) => value
   ? `${new Date(value).toLocaleString('en-SG', { timeZone: 'Asia/Singapore', hour12: false })} SGT`
   : 'Unavailable';
 
-export function RecoveryControl({ dispatchId }: { dispatchId: string }) {
+export function RecoveryControl({ dispatchId, notify }: { dispatchId: string; notify: Notify }) {
   const path = `/api/dispatch/dispatches/${encodeURIComponent(dispatchId)}/recovery`;
   const key = `fleet.pending-recovery.${dispatchId}`;
   const assessment = usePolling<RecoveryAssessment>(path, 5000);
@@ -20,13 +21,25 @@ export function RecoveryControl({ dispatchId }: { dispatchId: string }) {
   });
   const [review, setReview] = useState<RecoveryAssessment | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const submitting = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const data = assessment.data;
   const operation = data?.operation;
   const fresh = !!assessment.updatedAt && !assessment.error && Date.now() - Date.parse(assessment.updatedAt) < 15000;
   const active = operation?.status === 'REQUESTED' || operation?.status === 'RESTORING';
+  const assessmentError = assessment.error;
+  const recoveryOutcome = operation?.status === 'RECOVERED' ? 'Simulation recovered'
+    : operation?.status === 'BLOCKED' ? 'Recovery blocked' : undefined;
+  const recoveryReason = recoveryOutcome ? operation?.reason_code : undefined;
+  const recoveryRequestId = recoveryOutcome ? operation?.request_id : undefined;
+  useEffect(() => {
+    if (assessmentError) notify('warning', `Recovery assessment unavailable for ${dispatchId}: ${assessmentError}.`);
+  }, [assessmentError, dispatchId, notify]);
+  useEffect(() => {
+    if (recoveryOutcome) notify(recoveryOutcome === 'Recovery blocked' ? 'warning' : 'info',
+      `${recoveryOutcome} for ${dispatchId}${recoveryReason ? ` · ${recoveryReason}` : ''}.`);
+  }, [recoveryOutcome, recoveryReason, recoveryRequestId, dispatchId, notify]);
+
   function remember(request: RecoveryRequest | null) {
     setPending(request);
     try {
@@ -45,7 +58,7 @@ export function RecoveryControl({ dispatchId }: { dispatchId: string }) {
   async function submit(request: RecoveryRequest) {
     if (submitting.current) return;
     submitting.current = true;
-    setBusy(true); setError(''); setReview(null);
+    setBusy(true); setReview(null);
     remember(request);
     try {
       await api<RecoveryOperation>(path, { method: 'POST', body: JSON.stringify(request) });
@@ -53,7 +66,7 @@ export function RecoveryControl({ dispatchId }: { dispatchId: string }) {
     } catch (failure) {
       const definitive = failure instanceof ApiError && [400, 404, 409, 422].includes(failure.status);
       if (definitive) remember(null);
-      setError(`${message(failure)}. ${definitive ? 'Refresh and review the current assessment.' : 'Outcome uncertain. Reconcile status or retry the same request.'}`);
+      notify(definitive ? 'error' : 'warning', `Recovery for ${dispatchId}: ${message(failure)}. ${definitive ? 'Refresh and review the current assessment.' : 'Outcome uncertain. Reconcile status or retry the same request.'}`);
     } finally {
       submitting.current = false;
       setBusy(false); assessment.refresh();
@@ -71,10 +84,9 @@ export function RecoveryControl({ dispatchId }: { dispatchId: string }) {
       {!data.blockers.length && !active && !data.can_resume && <p className="muted">{data.reason_code}</p>}
     </>}
     {assessment.error && <p className="warning">Recovery assessment unavailable: {assessment.error}. Retained status is last known.</p>}
-    {error && <p className="warning" role="alert">{error}</p>}
     {pending && <p className="warning">Awaiting backend confirmation. Request {pending.request_id}.</p>}
     <div className="actions">
-      <button disabled={!canReview} onClick={() => { setError(''); setReview(data!); }}>Recover interrupted simulation</button>
+      <button disabled={!canReview} onClick={() => setReview(data!)}>Recover interrupted simulation</button>
       {pending && <button disabled={busy} onClick={() => void submit(pending)}>Retry same recovery request</button>}
       <button onClick={assessment.refresh}>Reconcile recovery status</button>
     </div>
