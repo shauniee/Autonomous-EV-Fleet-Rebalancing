@@ -120,6 +120,13 @@ class Dispatch(Model):
     recovery: RecoveryOperation | None = None
 
 
+ApprovalStatus = Literal["APPROVED", "REJECTED", "UNKNOWN"]
+
+
+class DispatchApprovalResult(Dispatch):
+    approval_status: ApprovalStatus
+
+
 class DispatchList(Model):
     dispatches: list[Dispatch]
 
@@ -139,6 +146,7 @@ class BatchDispatchItem(Model):
     dispatch_id: UUID | None = None
     state: str
     error: str | None = None
+    approval_status: ApprovalStatus | None = None
 
 
 class BatchDispatch(Model):

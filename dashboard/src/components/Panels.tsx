@@ -141,7 +141,10 @@ function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatc
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
-export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void; notify: Notify }) {
+export function RelocationPanel({ dispatches, vehicles, onTrack, notify, approvalBusy, onCloseApproval, onRetryApproval }: {
+  dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void; notify: Notify;
+  approvalBusy?: boolean; onCloseApproval?: (id: string) => void; onRetryApproval?: (dispatch: Dispatch) => void;
+}) {
   const groups: { title: string; dispatches: Dispatch[] }[] = [
     { title: 'Needs attention', dispatches: [] },
     { title: 'Active', dispatches: [] },
@@ -163,7 +166,13 @@ export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dis
         <h3 key={group.title} className="relocation-group-title">{group.title} <small className="muted">{group.dispatches.length}</small></h3>,
         ...group.dispatches.map(d => d.vehicle_id
           ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack} notify={notify}/>
-          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>),
+          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason === 'PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST'
+              ? 'Approval preparation stopped before a vehicle was assigned.' : d.failure_reason}</p>
+              {d.state === 'UNKNOWN' && d.claim_held === false && !d.command && <>
+                {d.recommendation_id && <button disabled={approvalBusy} onClick={() => onRetryApproval?.(d)}>Retry same approval</button>}
+                <button disabled={approvalBusy} onClick={() => onCloseApproval?.(d.request_id)}>Close unstarted approval</button>
+              </>}
+              <small className="identifier">{d.dispatch_id}</small></article>),
       ])}
     </div>
   </section>;

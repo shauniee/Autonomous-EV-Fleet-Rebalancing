@@ -85,3 +85,31 @@ def test_explicit_rejection_releases_only_with_matching_idle_telemetry(clock):
             result = await cluster.dispatch.get(key)
             assert result["state"] == "REJECTED" and not result["claim_held"]
     asyncio.run(scenario())
+
+
+def test_unconfirmed_admission_blocks_overlap_but_allows_another_vehicle(clock, monkeypatch):
+    monkeypatch.setenv("CRDS_MODE", "DISABLED")
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle("ev-1")
+            first = await cluster.recommend()
+            overlap = await cluster.recommend()
+            cluster.failures.append({"method": "PUT", "path": "/claims/", "action": "offline"})
+            uncertain, body = await cluster.approve(first)
+            assert uncertain["state"] == "UNKNOWN"
+            status_url = f"http://dispatch.test/api/v1/approvals/{body.request_id}"
+            status = await cluster.client.get(status_url)
+            assert status.json()["approval_status"] == "UNKNOWN"
+            assert (await cluster.client.post(status_url + "/close")).status_code == 409
+
+            with pytest.raises(HTTPException, match="APPROVAL_RESOURCE_UNRESOLVED"):
+                await cluster.approve(overlap)
+
+            await cluster.telemetry("ev-1", availability="UNAVAILABLE")
+            await cluster.vehicle("ev-2")
+            admitted, _ = await cluster.approve()
+            assert admitted["vehicle_id"] == "ev-2" and admitted["claim_held"]
+            assert (await cluster.client.get(status_url)).json()["approval_status"] == "UNKNOWN"
+
+    asyncio.run(scenario())

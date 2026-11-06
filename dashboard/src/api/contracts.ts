@@ -133,7 +133,7 @@ export interface RecoveryAssessment {
   evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null };
 }
 export interface Dispatch {
-  dispatch_id: string; request_id: string; vehicle_id: string | null; state: string;
+  dispatch_id: string; request_id: string; recommendation_id?: string; vehicle_id: string | null; state: string;
   command: { target_zone_id: string; target_position: Position; route?: RoadRoute | null } | null;
   created_at: string; acknowledged_at: string | null; last_contact_at: string | null;
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
@@ -182,7 +182,10 @@ export interface BatchRecommendation {
   assignments: ParkingAssignment[]; assumptions: string[];
 }
 export interface BatchApproval { request_id: string; batch_recommendation_id: string }
+export type ApprovalStatus = "APPROVED" | "REJECTED" | "UNKNOWN";
+export type DispatchApprovalResult = Dispatch & { approval_status?: ApprovalStatus };
 export interface BatchDispatchItem {
+  approval_status?: ApprovalStatus;
   recommendation_id: string; vehicle_id: string; facility_id: string;
   dispatch_id: string | null; state: string; error: string | null;
 }

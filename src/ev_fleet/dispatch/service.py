@@ -176,6 +176,13 @@ class DispatchService:
             raise HTTPException(409, "CRDS_ADVISORY_ONLY")
         if not recommendation.selected_vehicle_id:
             raise HTTPException(409, "NO_RECOMMENDED_VEHICLE")
+        for other in self.store.records.values():
+            if (other is not record and other.claim_request and not other.claimed
+                    and other.data["state"] not in TERMINAL
+                    and (other.data["vehicle_id"] == recommendation.selected_vehicle_id
+                         or recommendation.parking_facility_id is not None
+                         and other.data["parking_facility_id"] == recommendation.parking_facility_id)):
+                raise HTTPException(409, "APPROVAL_RESOURCE_UNRESOLVED")
         target, fleet = await asyncio.gather(
             request_json(self.client, "GET", f"{self.settings.demand_url}/api/v1/zones/{recommendation.target.zone_id}", model=ZoneState),
             request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
@@ -302,7 +309,7 @@ class DispatchService:
         # Applies to initial admission AND exact-request reconciliation retries.
         # Persistence failure prevents any subsequent remote resource mutation.
         await self.persist()
-        if record.parking_request:
+        if record.parking_request and record.data["parking_status"] != "RESERVED":
             hold = await request_json(self.client, "POST",
                 f"{self.settings.facilities_url}/api/v1/facilities/{record.data['parking_facility_id']}/holds",
                 record.parking_request, model=ParkingHold)
@@ -429,33 +436,25 @@ class DispatchService:
                         # never retry expired tokens/rate limits in reconciliation.
                         self.transition(record, "REJECTED", str(exc.detail))
                         return record.view()
-                    # Only definite claim failures may free a parking reservation.
-                    # Lost responses keep the reservation until reconciliation.
-                    if (exc.status_code in (404, 409, 422) and not record.claimed
-                            and record.data["parking_status"] == "RESERVED"):
-                        try:
-                            released = await request_json(self.client, "POST",
-                                f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
-                                model=ParkingHold)
-                            if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
-                                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
-                            record.data["parking_status"] = "RELEASED"
-                        except HTTPException:
-                            self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
-                            return record.view()
-                    self.handle_approval_error(record, exc)
-                    if exc.status_code in (404, 409, 422):
+                    await self.handle_approval_error(record, exc)
+                    if record.data["state"] == "REJECTED" and exc.status_code in (404, 409, 422):
                         raise HTTPException(409, exc.detail) from exc
                 return record.view()
         finally:
             await self.persist()
 
-    def handle_approval_error(self, record, exc):
+    async def handle_approval_error(self, record, exc):
         # A Fleet epoch change after an attempted claim cannot prove the old claim did not execute.
-        uncertain = exc.status_code >= 500 or (record.claim_request and exc.detail == "FLEET_INSTANCE_CHANGED")
-        self.transition(record, "UNKNOWN" if uncertain else "REJECTED", str(exc.detail))
-        if uncertain and record.claim_request:
-            record.data["claim_held"] = None  # Unknown, not proof that the EV is free.
+        uncertain = exc.status_code >= 500 or (record.claim_request and exc.detail in (
+            "FLEET_INSTANCE_CHANGED", "CLAIM_ID_CONFLICT", "PARKING_HOLD_ID_CONFLICT"))
+        state, reason = ("UNKNOWN" if uncertain else "REJECTED"), str(exc.detail)
+        claim_held = None if uncertain and record.claim_request else False
+        if (record.data["state"], record.data["failure_reason"], record.data["claim_held"]) != (
+                state, reason, claim_held):
+            record.data["claim_held"] = claim_held
+            self.transition(record, state, reason)
+        if not uncertain:
+            await self.sync_parking(record)
 
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
@@ -467,11 +466,13 @@ class DispatchService:
                 if not record.claim_request:
                     # No durable resource intent exists yet. Only explicit
                     # approval retries may prepare it through admission order.
-                    self.transition(record, "UNKNOWN", "PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST")
+                    reason = "PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST"
+                    if record.data["state"] != "UNKNOWN" or record.data["failure_reason"] != reason:
+                        self.transition(record, "UNKNOWN", reason)
                     return
                 await self.acquire(record)
             except HTTPException as exc:
-                self.handle_approval_error(record, exc)
+                await self.handle_approval_error(record, exc)
             return
         try:
             receipt = await request_json(self.client, "GET", self.claim_url(record), model=VehicleClaim)
@@ -635,6 +636,40 @@ class DispatchService:
         await self.persist()
         return result
 
+    @staticmethod
+    def approval_status(record):
+        if record.claimed:
+            return "APPROVED"
+        return "REJECTED" if record.data["state"] == "REJECTED" else "UNKNOWN"
+
+    def approval_view(self, request_id):
+        key = self.store.requests.get(str(request_id))
+        if key is None:
+            raise HTTPException(404, "APPROVAL_NOT_FOUND")
+        record = self.store.get(key)
+        return {**record.view(), "approval_status": self.approval_status(record)}
+
+    async def close_unstarted(self, request_id: UUID, recommendation_id: UUID | None = None):
+        async with self.admission_lock:
+            key = self.store.requests.get(str(request_id))
+            if recommendation_id is not None:
+                record = await self.store.begin(DispatchApproval(
+                    request_id=request_id, recommendation_id=recommendation_id))
+            elif key is not None:
+                record = self.store.get(key)
+            else:
+                raise HTTPException(404, "APPROVAL_NOT_FOUND")
+            async with record.lock:
+                if (record.claimed or record.data["claim_held"] is not False
+                        or record.claim_request or record.data["command"]
+                        or record.data["parking_status"] or record.data["delivery_attempts"]
+                        or record.ack or record.events):
+                    raise HTTPException(409, "APPROVAL_MAY_HAVE_ACQUIRED_RESOURCES")
+                if record.data["state"] not in TERMINAL:
+                    self.transition(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
+                await self.persist()
+                return self.approval_view(request_id)
+
     def batch_view(self, data):
         items = []
         for stored in data["items"]:
@@ -644,15 +679,29 @@ class DispatchService:
             child = self.store.records.get(key)
             if child:
                 item.update(dispatch_id=key, state=child.data["state"], error=child.data["failure_reason"])
-                if item["state"] == "PENDING" and not child.claimed:
-                    item.update(state="UNKNOWN", error="APPROVAL_UNRESOLVED")
+                item["approval_status"] = self.approval_status(child)
+            else:
+                item["approval_status"] = "REJECTED" if item["state"] == "REJECTED" else "UNKNOWN"
             items.append(item)
-        unknown = sum(i["state"] == "UNKNOWN" or i["state"] == "PENDING" and not i.get("dispatch_id") for i in items)
-        approved = sum(i["state"] not in ("REJECTED", "UNKNOWN") and
-                       (i["state"] != "PENDING" or bool(i.get("dispatch_id"))) for i in items)
+        unknown = any(i["approval_status"] == "UNKNOWN" for i in items)
+        approved = sum(i["approval_status"] == "APPROVED" for i in items)
         status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
                   else "PARTIAL" if approved else "REJECTED")
         return {**data, "items": items, "status": status}
+
+    async def close_batch_item(self, request_id: UUID, recommendation_id: UUID):
+        async with self.batch_lock:
+            data = self.batches.get(str(request_id))
+            item = next((i for i in data["items"]
+                         if i["recommendation_id"] == str(recommendation_id)), None) if data else None
+            if item is None:
+                raise HTTPException(404, "BATCH_ITEM_NOT_FOUND")
+            child_id = uuid5(request_id, item["recommendation_id"])
+            if item.get("dispatch_id") and self.store.requests.get(str(child_id)) != item["dispatch_id"]:
+                raise HTTPException(409, "BATCH_CHILD_UNAVAILABLE")
+            if item["state"] != "REJECTED" or str(child_id) in self.store.requests:
+                await self.close_unstarted(child_id, recommendation_id)
+            return self.batch_view(data)
 
     async def approve_batch(self, body):
         key = str(body.request_id)
@@ -682,6 +731,7 @@ class DispatchService:
                                   for a in rec.assignments]}
                 self.batches[key] = data
                 self.batch_recommendations[str(body.batch_recommendation_id)] = key
+            await self.persist()
             for item in data["items"]:
                 if item["state"] not in ("PENDING", "UNKNOWN"):
                     continue

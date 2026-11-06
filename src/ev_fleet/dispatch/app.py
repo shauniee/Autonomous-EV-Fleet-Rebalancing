@@ -11,7 +11,7 @@ from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement
 from .service import DispatchService
 from .recovery import assess_recovery
 from ev_fleet.contracts.recovery import RecoveryAssessment, RecoveryRequest, RecoveryHandoffRequest, SimulatorSession
-from ev_fleet.contracts.dispatch import RecoveryOperation
+from ev_fleet.contracts.dispatch import DispatchApprovalResult, RecoveryOperation
 
 
 def create_app(settings=None, client=None, clock=None, background=True):
@@ -43,9 +43,23 @@ def create_app(settings=None, client=None, clock=None, background=True):
         service = app.state.service
         return await road_match_spawn(service.client, service.routing, position.model_dump())
 
-    @app.post("/api/v1/dispatches", status_code=202, response_model=Dispatch)
+    @app.post("/api/v1/dispatches", status_code=202, response_model=DispatchApprovalResult)
     async def approve(body: DispatchApproval):
-        return await app.state.service.approve(body)
+        service = app.state.service
+        await service.approve(body)
+        return service.approval_view(body.request_id)
+
+    @app.get("/api/v1/approvals/{request_id}", response_model=DispatchApprovalResult)
+    async def approval(request_id: UUID):
+        return app.state.service.approval_view(request_id)
+
+    @app.post("/api/v1/approvals/{request_id}/close", response_model=DispatchApprovalResult)
+    async def close_approval(request_id: UUID):
+        return await app.state.service.close_unstarted(request_id)
+
+    @app.post("/api/v1/batches/{request_id}/items/{recommendation_id}/close", response_model=BatchDispatch)
+    async def close_batch_item(request_id: UUID, recommendation_id: UUID):
+        return await app.state.service.close_batch_item(request_id, recommendation_id)
 
     @app.post("/api/v1/batches", status_code=202, response_model=BatchDispatch)
     async def approve_batch(body: BatchApproval):

@@ -101,7 +101,7 @@ describe('dispatcher dashboard', () => {
   });
 
   it('keeps the same approval pending while HTTP 202 reports UNKNOWN', async () => {
-    const uncertain = makeDispatch();
+    const uncertain = { ...makeDispatch(), approval_status: 'UNKNOWN', claim_held: null };
     uncertain.state = 'UNKNOWN';
     uncertain.failure_reason = 'CLAIM_UNCONFIRMED';
     const fetch = server();
@@ -116,10 +116,12 @@ describe('dispatcher dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
     const notifications = openNotifications();
     expect(await notifications.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeVisible();
-    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
     fireEvent.click(notifications.getByRole('button', { name: 'Clear activity' }));
-    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
     expect(notifications.queryByText(/approval not yet confirmed/)).not.toBeInTheDocument();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
