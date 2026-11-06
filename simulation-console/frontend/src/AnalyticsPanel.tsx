@@ -16,6 +16,11 @@ type Infra = { observed_at: string; hpa: Hpa | null;
   errors: Record<string, string> };
 type Snapshot = { infrastructure: Infra; experiment: Experiment | null;
   load_enabled: boolean; storage: string };
+const analyticsViews = [
+  { id: 'workload', label: 'Workload' },
+  { id: 'charts', label: 'Charts' },
+  { id: 'history', label: 'Runs' },
+] as const;
 const presets = [
   { id: 'NORMAL', title: 'Normal', evs: 10, hz: 0.2, rps: 2 },
   { id: 'HIGH', title: 'High', evs: 50, hz: 1, rps: 50 },
@@ -66,6 +71,7 @@ function Graph({title, samples, measure, maxValue, target}: {
   </div>;
 }
 export function AnalyticsPanel() {
+  const [view, setView] = useState<typeof analyticsViews[number]['id']>('workload');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [records, setRecords] = useState<Recorded[]>([]);
   const [duration, setDuration] = useState(60);
@@ -145,90 +151,106 @@ export function AnalyticsPanel() {
   });
   return <section className="analytics-section" aria-labelledby="analytics-title">
     <div className="analytics-heading">
-      <div><p className="eyebrow">SIMULATION · OBSERVABILITY</p>
-        <h2 id="analytics-title">Performance analytics</h2></div>
+      <h2 id="analytics-title">Performance analytics</h2>
       <span className="analytics-pill">{running ? 'Experiment running' : 'Infrastructure monitor'}</span>
     </div>
-    <p className="description">Real Kubernetes metrics and HPA decisions alongside controlled synthetic
-      dashboard HTTP load. Preset EV counts and update rates represent an equivalent workload only:
-      no Fleet telemetry, rental or Dispatch commands are sent. Scaling is not guaranteed.</p>
+    <div className="view-options" role="group" aria-label="Analytics view">
+      {analyticsViews.map(({ id, label }) => (
+        <button type="button" key={id} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>
+      ))}
+    </div>
     {error && <p className="warning" role="alert">{error}. Measurements cannot be verified.</p>}
     {infra && Object.keys(infra.errors).length > 0 && <p className="warning" role="status">
       Partial metrics: {Object.entries(infra.errors).map(([name, cause]) =>
         name + ': ' + cause + '. ').join('')}
     </p>}
-    <div className="analytics-metrics">
-      <div className="analytics-stat"><small>HPA CPU / target</small>
-        <strong>{fmt(infra?.hpa?.current_cpu_pct, '%')} / {fmt(infra?.hpa?.target_cpu_pct, '%')}</strong>
-        <small>Relative to requested CPU, not host CPU</small></div>
-      <div className="analytics-stat"><small>Replicas (current → desired)</small>
-        <strong>{fmt(infra?.hpa?.current_replicas)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
-        <small>Ready Pods: {fmt(infra?.pods?.ready)}</small></div>
-      <div className="analytics-stat"><small>Dashboard Pod CPU / memory</small>
-        <strong>{fmt(infra?.usage?.cpu_millicores,'m')} / {fmt(infra?.usage?.memory_mib,' MiB')}</strong>
-        <small>Measured across dashboard containers</small></div>
-      <div className="analytics-stat"><small>Synthetic HTTP throughput</small>
-        <strong>{fmt(experiment?.rps_observed,' req/s')}</strong>
-        <small>{experiment ? experiment.attempted + ' requests, ' + experiment.errors + ' errors' :
-          'No experiment yet'}</small></div>
-    </div>
-    <div className="analytics-load">
-      <h3>Workload controls</h3>
-      <p className="description">Fixed local presets. A maximum of 120 seconds per test,
-        bounded concurrency, and no custom request targets.</p>
-      <label>Duration <select value={duration} onChange={e => setDuration(Number(e.target.value))}
-        disabled={busy || running}>
-        {[30,60,90,120].map(n=><option key={n} value={n}>{n} seconds</option>)}
-      </select></label>
-      <div className="analytics-presets">
-        {presets.map(p => <button type="button" key={p.id} onClick={() => void control('start',p.id)}
-          disabled={busy || running || !snapshot?.load_enabled}>
-          <strong>{p.title}</strong><small>{p.evs} EV-equivalents · {p.hz} Hz</small>
-          <small>{p.rps} HTTP req/s</small>
-        </button>)}
+    <div className="analytics-layout" hidden={view !== 'workload'}>
+      <div className="analytics-load">
+        <h3>Workload controls</h3>
+        <label>Duration <select value={duration} onChange={e => setDuration(Number(e.target.value))}
+          disabled={busy || running}>
+          {[30,60,90,120].map(n=><option key={n} value={n}>{n} seconds</option>)}
+        </select></label>
+        <div className="analytics-presets">
+          {presets.map(p => <button type="button" key={p.id} onClick={() => void control('start',p.id)}
+            disabled={busy || running || !snapshot?.load_enabled}>
+            <strong>{p.title}</strong><small>{p.evs} EV-equivalents · {p.hz} Hz</small>
+            <small>{p.rps} HTTP req/s</small>
+          </button>)}
+        </div>
+        <button type="button" disabled={busy || !running}
+          onClick={() => void control('stop')}>Stop experiment</button>
+        {snapshot && !snapshot.load_enabled && <p className="warning">Load generation is disabled.</p>}
+        {message && <p role="status" className="success">{message}</p>}
       </div>
-      <button className="analytics-stop" type="button" disabled={busy || !running}
-        onClick={() => void control('stop')}>Stop experiment</button>
-      {snapshot && !snapshot.load_enabled && <p className="warning">Load generation is disabled.</p>}
-      {message && <p role="status" className="success">{message}</p>}
+      <div>
+        <h3>Current measurements</h3>
+        <div className="analytics-metrics">
+          <div className="analytics-stat"><small>HPA CPU / target</small>
+            <strong>{fmt(infra?.hpa?.current_cpu_pct, '%')} / {fmt(infra?.hpa?.target_cpu_pct, '%')}</strong>
+            <small>Relative to requested CPU, not host CPU</small></div>
+          <div className="analytics-stat"><small>Replicas (current → desired)</small>
+            <strong>{fmt(infra?.hpa?.current_replicas)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
+            <small>Ready Pods: {fmt(infra?.pods?.ready)}</small></div>
+          <div className="analytics-stat"><small>Dashboard Pod CPU / memory</small>
+            <strong>{fmt(infra?.usage?.cpu_millicores,'m')} / {fmt(infra?.usage?.memory_mib,' MiB')}</strong>
+            <small>Measured across dashboard containers</small></div>
+          <div className="analytics-stat"><small>Synthetic HTTP throughput</small>
+            <strong>{fmt(experiment?.rps_observed,' req/s')}</strong>
+            <small>{experiment ? experiment.attempted + ' requests, ' + experiment.errors + ' errors' :
+              'No experiment yet'}</small></div>
+        </div>
+        <div className="analytics-meta">
+          <span>Observed: {sgt(infra?.observed_at)}</span>
+          <span>Experiment: {experiment ? experiment.preset + ' · ' + experiment.state : 'None'}</span>
+          <span>p95 latency: {fmt(experiment?.p95_latency_ms,' ms')}</span>
+          <span>Storage: {snapshot?.storage === 'local-persistent-volume' ? 'Persistent volume' : 'Ephemeral'}</span>
+        </div>
+      </div>
     </div>
-    <div className="analytics-meta">
-      <span>Observed: {sgt(infra?.observed_at)}</span>
-      <span>Experiment: {experiment ? experiment.preset + ' · ' + experiment.state : 'None'}</span>
-      <span>p95 latency: {fmt(experiment?.p95_latency_ms,' ms')}</span>
-      <span>Storage: {snapshot?.storage === 'local-persistent-volume' ? 'Persistent volume' : 'Ephemeral'}</span>
+    <div hidden={view !== 'charts'}>
+      <div className="analytics-charts">
+        <Graph title="HPA CPU (%)" samples={samples} maxValue={100}
+          measure={s => s.hpa?.current_cpu_pct} target={infra?.hpa?.target_cpu_pct}/>
+        <Graph title="Replicas (current)" samples={samples}
+          maxValue={Math.max(3,infra?.hpa?.max_replicas ?? 3)}
+          measure={s => s.hpa?.current_replicas}/>
+        <Graph title="Synthetic HTTP requests / second" samples={samples}
+          maxValue={220} measure={(_,i) => observedRps[i]}/>
+        <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
+          maxValue={100} measure={s=>s.usage?.cpu_millicores}/>
+      </div>
+      <h3>Observed scaling events</h3>
+      {scalingEvents.length ? <div className="analytics-events">
+        {scalingEvents.map((event, i) => <p key={i}>
+          {sgt(event.time)} · Dashboard replicas {event.before} → {event.after}
+        </p>)}
+      </div> : <p className="description">
+        No measured replica-count change during this experiment. HPA may remain at one replica
+        even when HTTP load is generated.
+      </p>}
     </div>
-    <div className="analytics-charts">
-      <Graph title="HPA CPU (%)" samples={samples} maxValue={100}
-        measure={s => s.hpa?.current_cpu_pct} target={infra?.hpa?.target_cpu_pct}/>
-      <Graph title="Replicas (current)" samples={samples}
-        maxValue={Math.max(3,infra?.hpa?.max_replicas ?? 3)}
-        measure={s => s.hpa?.current_replicas}/>
-      <Graph title="Synthetic HTTP requests / second" samples={samples}
-        maxValue={220} measure={(_,i) => observedRps[i]}/>
-      <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
-        maxValue={100} measure={s=>s.usage?.cpu_millicores}/>
+    <div hidden={view !== 'history'}>
+      <h3>Recorded experiments</h3>
+      <p className="description">CSV contains timestamped CPU and HPA observations, replica counts,
+        throughput, errors and latency. Missing Kubernetes measurements are left blank.
+        Experiments persist through restarts when the analytics volume is retained.</p>
+      <div className="table-wrap"><table><thead><tr>
+        <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Mean req/s</th><th>Peak CPU</th><th>Peak Pods</th><th>Requests</th><th>Errors</th><th>Export</th>
+      </tr></thead><tbody>
+        {records.map(r=><tr key={r.id}><td>{sgt(r.started_at)}</td><td>{r.preset}</td>
+          <td>{r.state}</td><td>{fmt(r.mean_rps)}</td><td>{fmt(r.peak_hpa_cpu_pct, '%')}</td><td>{fmt(r.peak_replicas)}</td><td>{r.attempted}</td><td>{r.errors}</td>
+          <td><a href={'/api/probe/v1/analytics/runs/' + r.id + '/csv'}>CSV</a></td></tr>)}
+      </tbody></table></div>
+      {!records.length && <p className="description">No experiments recorded yet.</p>}
     </div>
-    <h3>Observed scaling events</h3>
-    {scalingEvents.length ? <div className="analytics-events">
-      {scalingEvents.map((event, i) => <p key={i}>
-        {sgt(event.time)} · Dashboard replicas {event.before} → {event.after}
-      </p>)}
-    </div> : <p className="description">
-      No measured replica-count change during this experiment. HPA may remain at one replica
-      even when HTTP load is generated.
-    </p>}
-    <h3>Recorded experiments</h3>
-    <p className="description">CSV contains timestamped CPU and HPA observations, replica counts,
-      throughput, errors and latency. Missing Kubernetes measurements are left blank.
-      Experiments persist through restarts when the analytics volume is retained.</p>
-    <div className="table-wrap"><table><thead><tr>
-      <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Mean req/s</th><th>Peak CPU</th><th>Peak Pods</th><th>Requests</th><th>Errors</th><th>Export</th>
-    </tr></thead><tbody>
-      {records.map(r=><tr key={r.id}><td>{sgt(r.started_at)}</td><td>{r.preset}</td>
-        <td>{r.state}</td><td>{fmt(r.mean_rps)}</td><td>{fmt(r.peak_hpa_cpu_pct, '%')}</td><td>{fmt(r.peak_replicas)}</td><td>{r.attempted}</td><td>{r.errors}</td>
-        <td><a href={'/api/probe/v1/analytics/runs/' + r.id + '/csv'}>CSV</a></td></tr>)}
-    </tbody></table></div>
-    {!records.length && <p className="description">No experiments recorded yet.</p>}
+    <details className="help">
+      <summary>About workload presets and measurements</summary>
+      <p className="description">Real Kubernetes metrics and HPA decisions accompany synthetic
+        dashboard HTTP load. Preset EV counts and update rates represent an equivalent workload.
+        The console sends no Fleet telemetry, rental or Dispatch commands during these experiments.
+        Scaling is not guaranteed. Runs use fixed local presets with bounded concurrency and
+        a maximum duration of 120 seconds.</p>
+    </details>
   </section>;
 }
