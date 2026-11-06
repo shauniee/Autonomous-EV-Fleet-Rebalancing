@@ -294,6 +294,8 @@ class FleetStore:
                 "effective_availability": "AVAILABLE" if (
                     not stale and runtime_available and not record["active_claim"] and record["active_rental"] is None
                     and record.get("active_charging_task") is None and telemetry
+                    and (not record.get("stranded_after_stop")
+                         or telemetry.parked_facility_id and telemetry.soc_pct > 0)
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
                     and telemetry.charging_state != "CHARGING"
                     and telemetry.active_dispatch_id is None) else "UNAVAILABLE",

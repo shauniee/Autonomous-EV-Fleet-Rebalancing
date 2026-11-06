@@ -139,7 +139,21 @@ export interface RecoveryAssessment {
   status: 'NOT_REQUIRED' | 'REQUIRED' | 'BLOCKED'; reason_code: string; can_resume: boolean;
   supported_action: 'RESUME_SIMULATION' | null; operation: RecoveryOperation | null;
   blockers: { code: string; detail: string }[];
-  evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null };
+  evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null;
+    recorded_position?: Position | null; recorded_soc_pct?: number | null;
+    claim_status?: string | null; parking_status?: string | null };
+}
+export interface RelocationEndRequest {
+  request_id: string; expected_assessment_revision: string; reason: string;
+}
+export interface RelocationResolution {
+  assessment_revision: string | null; can_end: boolean; blocker: string | null;
+  stop_position: Position | null; stop_soc_pct: number | null;
+  operation: {
+    request_id: string; reason: string;
+    status: 'REQUESTED' | 'CLEANUP_PENDING' | 'ENDED' | 'BLOCKED';
+    detail: string | null;
+  } | null;
 }
 export interface Dispatch {
   dispatch_id: string; request_id: string; recommendation_id?: string; vehicle_id: string | null; state: string;

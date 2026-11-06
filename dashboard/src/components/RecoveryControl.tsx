@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, message } from '../api/client';
 import type { RecoveryAssessment, RecoveryOperation, RecoveryRequest } from '../api/contracts';
 import { usePolling } from '../hooks/usePolling';
+import { RelocationResolutionControl } from './RelocationResolution';
 import type { Notify } from './Notifications';
 
 const checkpointTime = (value: string | null) => value
   ? `${new Date(value).toLocaleString('en-SG', { timeZone: 'Asia/Singapore', hour12: false })} SGT`
   : 'Unavailable';
 
-export function RecoveryControl({ dispatchId, notify }: { dispatchId: string; notify: Notify }) {
+export function RecoveryControl({ dispatchId, notify, showResolution }: { dispatchId: string; notify: Notify; showResolution?: boolean }) {
   const path = `/api/dispatch/dispatches/${encodeURIComponent(dispatchId)}/recovery`;
   const key = `fleet.pending-recovery.${dispatchId}`;
   const assessment = usePolling<RecoveryAssessment>(path, 5000);
@@ -80,6 +81,8 @@ export function RecoveryControl({ dispatchId, notify }: { dispatchId: string; no
     {operation?.status === 'RECOVERED' && <p className="muted">Recovery confirmed by the backend. Arrival remains a separate journey outcome.</p>}
     {data && <>
       <p className="muted">Recorded checkpoint: {checkpointTime(data.evidence.checkpoint_at)} · {data.evidence.checkpoint_source.replaceAll('_', ' ')}</p>
+      {data.evidence.recorded_position && <p className="muted">Recorded position {data.evidence.recorded_position.latitude.toFixed(5)}, {data.evidence.recorded_position.longitude.toFixed(5)}
+        {data.evidence.recorded_soc_pct != null && <> · Battery {data.evidence.recorded_soc_pct.toFixed(1)}%</>}</p>}
       {data.blockers.map(blocker => <p className="warning" key={blocker.code}>{blocker.code}: {blocker.detail}</p>)}
       {!data.blockers.length && !active && !data.can_resume && <p className="muted">{data.reason_code}</p>}
     </>}
@@ -88,8 +91,9 @@ export function RecoveryControl({ dispatchId, notify }: { dispatchId: string; no
     <div className="actions">
       <button disabled={!canReview} onClick={() => setReview(data!)}>Recover interrupted simulation</button>
       {pending && <button disabled={busy} onClick={() => void submit(pending)}>Retry same recovery request</button>}
-      <button onClick={assessment.refresh}>Reconcile recovery status</button>
+      {!showResolution && <button onClick={assessment.refresh}>Reconcile recovery status</button>}
     </div>
+    {showResolution && <RelocationResolutionControl dispatchId={dispatchId} notify={notify} refreshRecovery={assessment.refresh}/>}
     {review && <dialog ref={dialog} onCancel={() => setReview(null)} aria-labelledby={`recovery-title-${dispatchId}`}>
       <div className="eyebrow">Dispatcher approval</div>
       <h2 id={`recovery-title-${dispatchId}`}>Recover interrupted simulation</h2>

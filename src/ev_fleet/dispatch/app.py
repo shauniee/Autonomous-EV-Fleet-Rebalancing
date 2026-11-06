@@ -10,6 +10,9 @@ from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
 from .recovery import assess_recovery
+from .resolution import assess_resolution, reconcile_relocation, request_end, stop_intent
+from ev_fleet.contracts.recovery import (RelocationEndRequest, RelocationResolutionAssessment,
+    RelocationResolutionOperation, SimulatorStopRequest)
 from ev_fleet.contracts.recovery import RecoveryAssessment, RecoveryRequest, RecoveryHandoffRequest, SimulatorSession
 from ev_fleet.contracts.dispatch import DispatchApprovalResult, RecoveryOperation
 
@@ -86,6 +89,31 @@ def create_app(settings=None, client=None, clock=None, background=True):
     @app.get("/api/v1/dispatches/{dispatch_id}/traffic-check")
     async def traffic_check(dispatch_id: UUID):
         return await app.state.service.traffic_check(dispatch_id)
+
+    @app.get("/api/v1/dispatches/{dispatch_id}/resolution", response_model=RelocationResolutionAssessment)
+    async def resolution_assessment(dispatch_id: UUID):
+        return await assess_resolution(app.state.service, dispatch_id)
+
+    @app.post("/api/v1/dispatches/{dispatch_id}/resolution", status_code=202,
+              response_model=RelocationResolutionOperation)
+    async def end_relocation(dispatch_id: UUID, body: RelocationEndRequest):
+        return await request_end(app.state.service, dispatch_id, body)
+
+    @app.get("/api/v1/dispatches/{dispatch_id}/resolution/intent", response_model=SimulatorStopRequest)
+    async def resolution_intent(dispatch_id: UUID):
+        return await stop_intent(app.state.service, dispatch_id)
+
+    @app.post("/api/v1/dispatches/{dispatch_id}/reconcile", response_model=Dispatch)
+    async def reconcile_dispatch(dispatch_id: UUID):
+        service = app.state.service
+        record = service.store.get(dispatch_id)
+        async with record.lock:
+            service.recovery.ensure_ready()
+            try:
+                await reconcile_relocation(service, record)
+            finally:
+                await service.persist()
+            return record.view()
 
     @app.get("/api/v1/dispatches/{dispatch_id}/recovery", response_model=RecoveryAssessment)
     async def recovery_assessment(dispatch_id: UUID):

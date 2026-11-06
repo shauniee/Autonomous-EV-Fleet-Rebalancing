@@ -117,9 +117,16 @@ export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; 
     {vehicle && diagnostics && <div className="vehicle-diagnostics"><TwinHistoryPanel key={vehicle.vehicle_id} vehicle={vehicle}/></div>}
   </div>;
 }
+function needsRelocationResolution(dispatch: Dispatch, vehicle?: Vehicle) {
+  return dispatch.state === 'UNKNOWN' || dispatch.state === 'FAILED'
+    || dispatch.state === 'REJECTED' && (dispatch.claim_held !== false || dispatch.parking_status === 'RESERVED')
+    || dispatch.claim_held !== false && (vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
+}
 function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void; notify: Notify }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
+  const ended = dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION';
+  const showResolution = needsRelocationResolution(dispatch, vehicle) || ended;
   return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
@@ -129,15 +136,16 @@ function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatc
       <div><dt>Current SOC {vehicle?.stale ? '(stale)' : ''}</dt><dd>{number(vehicle?.telemetry?.soc_pct, '%')}</dd></div>
       <div><dt>Acknowledged / execution confirmed</dt><dd>{time(dispatch.acknowledged_at)}</dd></div>
       <div><dt>Last dispatch contact</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
+      {dispatch.parking_facility_id && <div><dt>Destination hold</dt><dd>{dispatch.parking_status ?? 'Unconfirmed'}</dd></div>}
+      {vehicle && <div><dt>Fleet availability</dt><dd>{vehicle.effective_availability}</dd></div>}
       <div><dt>Claim held</dt><dd>{dispatch.claim_held == null ? 'Unknown' : dispatch.claim_held ? 'Yes' : 'No'}</dd></div>
     </dl>
     {route && <><button className="map-reset" onClick={() => onTrack(dispatch.dispatch_id)}>View route on map</button>
       <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
-    {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
+    {dispatch.failure_reason && <p className="warning" role="status">{ended ? 'Ended by an operator' : dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
-    {(dispatch.recovery || dispatch.state === 'UNKNOWN' || dispatch.claim_held !== false &&
-      (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE')) &&
-      <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify}/>}
+    {(showResolution || dispatch.recovery) &&
+      <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify} showResolution={showResolution}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
@@ -152,9 +160,10 @@ export function RelocationPanel({ dispatches, vehicles, onTrack, notify, approva
   ];
   for (const dispatch of [...dispatches].reverse()) {
     const vehicle = vehicles.find(item => item.vehicle_id === dispatch.vehicle_id);
-    const needsAttention = dispatch.state === 'UNKNOWN' ||
-      ['BLOCKED', 'REQUESTED', 'RESTORING'].includes(dispatch.recovery?.status ?? '') ||
-      dispatch.claim_held !== false && (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
+    const ended = dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION';
+    const needsAttention = needsRelocationResolution(dispatch, vehicle)
+      || ended && !!dispatch.parking_facility_id && dispatch.parking_status !== 'RELEASED'
+      || !ended && ['BLOCKED', 'REQUESTED', 'RESTORING'].includes(dispatch.recovery?.status ?? '');
     const terminal = ['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state);
     groups[needsAttention ? 0 : terminal ? 2 : 1].dispatches.push(dispatch);
   }

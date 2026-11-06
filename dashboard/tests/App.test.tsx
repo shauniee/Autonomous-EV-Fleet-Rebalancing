@@ -41,6 +41,35 @@ function openNotifications() {
   return within(screen.getByRole('region', { name: 'Notifications' }));
 }
 describe('dispatcher dashboard', () => {
+  it('requires explicit confirmation to end a relocation and sends the reviewed revision', async () => {
+    const path = '/api/dispatch/dispatches/dispatch-1/resolution';
+    const fetch = server({
+      '/api/dispatch/dispatches': { dispatches: [{ ...makeDispatch(), state: 'FAILED' }] },
+      [path]: { assessment_revision: 'reviewed-state', can_end: true, blocker: null, operation: null,
+        stop_position: { latitude: 1.32, longitude: 103.85 }, stop_soc_pct: 64 },
+    });
+    const stops = () => fetch.mock.calls.filter(([url, init]) => url === path && init?.method === 'POST');
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
+    const end = await screen.findByRole('button', { name: 'End relocation' });
+    await waitFor(() => expect(end).toBeEnabled());
+    fireEvent.click(end);
+    const review = within(screen.getByRole('dialog', { name: 'End relocation' }));
+    expect(review.getByText(/Battery 64.0%/)).toBeVisible();
+    fireEvent.click(review.getByRole('button', { name: 'Leave open' }));
+    expect(stops()).toHaveLength(0);
+    fireEvent.click(end);
+    const confirm = within(screen.getByRole('dialog', { name: 'End relocation' }));
+    const button = confirm.getByRole('button', { name: 'Confirm end relocation' });
+    expect(button).toBeDisabled();
+    fireEvent.change(confirm.getByRole('textbox'), { target: { value: 'Execution stopped' } });
+    fireEvent.click(button);
+    expect(stops()).toHaveLength(1);
+    expect(JSON.parse(String(stops()[0][1]?.body))).toMatchObject({
+      expected_assessment_revision: 'reviewed-state', reason: 'Execution stopped', request_id: expect.any(String),
+    });
+  });
+
   it('renders all zones using backend severity, independently of high raw demand', async () => {
     server(); render(<App/>);
     expect(await screen.findByRole('button', { name: /Bishan NORMAL/ })).toBeInTheDocument();

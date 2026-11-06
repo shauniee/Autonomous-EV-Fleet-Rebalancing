@@ -446,6 +446,8 @@ class CheckpointRunner:
         if state.command is None or state.command.model_dump(mode="json") != command:
             raise RecoveryRequired("DISPATCH_COMMAND_CHANGED")
         if state.claim_held is False and state.state in ("SUCCEEDED", "REJECTED"):
+            if state.failure_reason == "OPERATOR_ENDED_RELOCATION":
+                raise RecoveryRequired("RELOCATION_ENDED_RESTORE_IDLE")
             node.movement.complete()
             self.acknowledgement = None
             self.acknowledged = False

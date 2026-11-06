@@ -14,10 +14,10 @@ from ev_fleet.common.settings import SimulatorRecoverySettings
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.recovery import (
     RecoveryAssessment, SimulatorCheckpoint, SimulatorCheckpointReceipt, SimulatorSession,
-    SimulatorCheckpointSnapshot, SimulatorConfiguration,
+    SimulatorCheckpointSnapshot, SimulatorConfiguration, SimulatorStopRequest, stop_checkpoint_evidence,
 )
 from ev_fleet.contracts.facilities import ParkingObservation
-from ev_fleet.contracts.dispatch import DispatchList
+from ev_fleet.contracts.dispatch import DispatchList, VehicleClaim
 
 
 def fingerprint(model):
@@ -243,7 +243,10 @@ class SimulatorRecovery:
         # Rotation may have committed before its response was lost.
         telemetry = record["telemetry"]
         identity_fields = {"session_id", "sequence"}
-        if (telemetry is None or physical.model_dump(exclude=identity_fields)
+        stopped = any(entry["receipt"]["command_id"] == str(checkpoint.completed_command_id)
+                      and entry.get("operator_stop", {}).get("checkpoint_revision") == previous["revision"]
+                      for entry in record["claims"].values())
+        if not stopped and (telemetry is None or physical.model_dump(exclude=identity_fields)
                 != telemetry.model_dump(exclude=identity_fields)):
             raise HTTPException(409, "IDLE_RECOVERY_TELEMETRY_MISMATCH")
         self.validate_checkpoint(vehicle_id, record, checkpoint)
@@ -325,6 +328,103 @@ class SimulatorRecovery:
                 raise HTTPException(409, "RECOVERY_DISPATCH_MISMATCH")
             self.validate_checkpoint(vehicle_id, record, body.checkpoint)
             return await self.rotate_owner(vehicle_id, record, body, body.checkpoint)
+
+    def stop_retry(self, record, body):
+        entry = record["claims"].get(str(body.dispatch_id))
+        previous = entry.get("operator_stop") if entry else None
+        if previous is None:
+            return None
+        if previous["fingerprint"] != fingerprint(body):
+            raise HTTPException(409, "SIMULATOR_STOP_ALREADY_RECORDED")
+        return VehicleClaim.model_validate(entry["receipt"])
+
+    async def stop_relocation(self, vehicle_id: str, body: SimulatorStopRequest):
+        store = self.store
+        if not store.enabled:
+            raise HTTPException(503, "SIMULATOR_DURABLE_STORAGE_REQUIRED")
+        async with store.lock:
+            self.gate(vehicle_id)
+            retry = self.stop_retry(store.record(vehicle_id), body)
+            if retry:
+                return retry
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                response = await client.get(f"{self.settings.dispatch_url}/api/v1/dispatches/{body.dispatch_id}/resolution/intent")
+                response.raise_for_status()
+                authorized = SimulatorStopRequest.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(503, "STOP_AUTHORIZATION_UNAVAILABLE") from exc
+        if authorized != body:
+            raise HTTPException(409, "STOP_NOT_AUTHORIZED")
+
+        async with store.lock:
+            self.gate(vehicle_id)
+            record = store.record(vehicle_id)
+            retry = self.stop_retry(record, body)
+            if retry:
+                return retry
+            owner, saved = record.get("simulator_owner"), record.get("simulator_checkpoint")
+            claim = record["active_claim"]
+            entry = record["claims"].get(str(body.dispatch_id))
+            if (str(body.expected_fleet_instance_id) != store.instance_id
+                    or record["control_version"] != body.expected_control_version
+                    or not owner or owner["generation"] != body.expected_generation
+                    or not saved or not claim or not entry or entry["receipt"] != claim
+                    or claim["dispatch_id"] != str(body.dispatch_id)
+                    or claim["command_id"] != str(body.command_id)
+                    or claim["vehicle_id"] != vehicle_id or claim["fleet_instance_id"] != store.instance_id
+                    or claim["status"] != "ACTIVE" or record["active_rental"] or record["active_charging_task"]):
+                raise HTTPException(409, "STOP_OWNERSHIP_CHANGED")
+            checkpoint = SimulatorCheckpoint.model_validate(saved["data"])
+            physical = checkpoint.physical
+            if (stop_checkpoint_evidence(checkpoint) != body.checkpoint_evidence
+                    or physical.session_id != record["session_id"]
+                    or str(physical.session_id) != owner["session_id"]
+                    or checkpoint.simulation is None or physical.relocation_state == "ARRIVED"
+                    or physical.charging_state == "CHARGING"):
+                raise HTTPException(409, "STOP_CHECKPOINT_CHANGED")
+            if checkpoint.command is not None:
+                if (checkpoint.command.dispatch_id != body.dispatch_id
+                        or checkpoint.command.command_id != body.command_id):
+                    raise HTTPException(409, "STOP_COMMAND_CHANGED")
+            if (checkpoint.command is None or checkpoint.accepted is False) and physical.position.model_dump() != claim["origin"]:
+                raise HTTPException(409, "STOP_ORIGIN_CHANGED")
+            stopped = physical.relocation_state == "FAILED" or checkpoint.accepted is False
+            if not stopped and owner["expires_at"] > store.clock.now():
+                raise HTTPException(409, "SIMULATOR_OWNER_STILL_ACTIVE")
+            self.validate_checkpoint(vehicle_id, record, checkpoint)
+
+            staged = deepcopy(record)
+            now = store.clock.now()
+            saved_physical = type(physical).model_validate({
+                **physical.model_dump(),
+                "active_dispatch_id": None, "distance_travelled_km": None,
+                "relocation_state": "IDLE", "availability": "UNAVAILABLE", "speed_kph": 0,
+                "power_kw": 0,
+            })
+            idle = SimulatorCheckpoint(vehicle_id=vehicle_id, fleet_instance_id=store.instance_id,
+                physical=saved_physical, completed_command_id=body.command_id,
+                simulation=checkpoint.simulation)
+            revision = saved["revision"] + 1
+            receipt = SimulatorCheckpointReceipt(request_id=body.request_id,
+                generation=owner["generation"], checkpoint_revision=revision,
+                command_fingerprint=None, durable=store.enabled)
+            staged["simulator_checkpoint"] = {"revision": revision, "data": idle.model_dump(mode="json"),
+                "request_id": str(body.request_id), "request_fingerprint": fingerprint(body),
+                "receipt": receipt.model_dump(mode="json"), "charging": saved.get("charging")}
+            staged["simulator_owner"]["expires_at"] = now
+            staged["simulator_owner"]["revision"] += 1
+            staged["simulator_restore"] = None
+            stored_claim = staged["claims"][str(body.dispatch_id)]
+            stored_claim["operator_stop"] = {"fingerprint": fingerprint(body), "checkpoint_revision": revision}
+            stored_claim["receipt"].update(status="RELEASED", outcome="REJECTED", released_at=now.isoformat())
+            staged.update(active_claim=None, state_version=record["state_version"] + 1,
+                          control_version=record["control_version"] + 1)
+            if physical.position.model_dump() != claim["origin"]:
+                staged["current_zone_id"] = None
+                staged["stranded_after_stop"] = True
+            await self.commit(vehicle_id, staged)
+            return VehicleClaim.model_validate(stored_claim["receipt"])
 
     async def rotate_owner(self, vehicle_id, record, body, checkpoint):
         """Caller holds Fleet lock and has validated the restoration evidence."""

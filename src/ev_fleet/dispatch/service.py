@@ -18,6 +18,7 @@ from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
 from .recovery import RecoveryCoordinator
+from .resolution import advance_resolution, stop_pending
 from .routing import RoutingSettings, driving_route
 from .traffic_routes import choose_traffic_route
 from ev_fleet.rebalancing.traffic import assess_traffic
@@ -66,7 +67,8 @@ class DispatchService:
                 parking_request=item["parking_request"], claimed=item["claimed"],
                 ack=item["ack"], events=item["events"],
                 event_sequence=item["event_sequence"],
-                release_outcome=item["release_outcome"], recovery=item.get("recovery"))
+                release_outcome=item["release_outcome"], recovery=item.get("recovery"),
+                resolution=item.get("resolution"))
             if record.data["delivery_attempts"]:
                 record.sent_tick = tick
             if record.claimed and record.data["state"] not in TERMINAL:
@@ -96,6 +98,7 @@ class DispatchService:
                 "event_sequence": record.event_sequence,
                 "release_outcome": record.release_outcome,
                 "recovery": record.recovery,
+                "resolution": record.resolution,
             } for key, record in self.store.records.items()}
             await self.repository.save({
                 "records": records,
@@ -376,7 +379,7 @@ class DispatchService:
             wanted = "OCCUPIED" if action == "complete" else "RELEASED"
             if (str(receipt.dispatch_id) != record.data["dispatch_id"] or
                     receipt.facility_id != record.data["parking_facility_id"] or
-                    receipt.status != wanted):
+                    receipt.vehicle_id != record.data["vehicle_id"] or receipt.status != wanted):
                 raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
             record.data["parking_status"] = receipt.status
             self.planning_revision += 1
@@ -474,6 +477,8 @@ class DispatchService:
 
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
+        if stop_pending(record):
+            return
         if record.data["state"] in TERMINAL:
             await self.sync_parking(record)
             return
@@ -570,7 +575,7 @@ class DispatchService:
                     continue
                 async with record.lock:
                     await self.refresh(record)
-                    if (not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
+                    if (stop_pending(record) or not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
                         record.data["state"] == "UNKNOWN" and record.data["failure_reason"] != "ACK_TIMEOUT"):
                         continue
                     # Only a positively reconciled claim can be delivered. ACK timeout permits same-ID redelivery.
@@ -584,6 +589,8 @@ class DispatchService:
             await self.persist()
 
     def check_command(self, record, body):
+        if stop_pending(record):
+            raise HTTPException(409, "RELOCATION_STOP_PENDING")
         if (not record.claimed or not record.data["delivery_attempts"] or
             record.data["command"]["command_id"] != str(body.command_id) or
             record.data["vehicle_id"] != body.vehicle_id):
@@ -789,7 +796,10 @@ class DispatchService:
                 if record.lock.locked():
                     continue
                 try:
-                    if record.recovery:
+                    if record.resolution and record.resolution["status"] in ("REQUESTED", "CLEANUP_PENDING"):
+                        await advance_resolution(self, record)
+                        continue
+                    if record.recovery and not (record.resolution and record.resolution["status"] == "ENDED"):
                         await self.recovery.advance(record)
                     if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
                         continue
