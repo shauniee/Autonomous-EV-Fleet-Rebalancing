@@ -4,7 +4,7 @@ import { number } from './format';
 import { OperationalTabs } from './OperationalTabs';
 import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 
-export function BatchPanel({ batch }: { batch: BatchRecommendation }) {
+export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation; onRelocation?: (id: string) => void }) {
   return <div className="recommendation" data-testid="batch-recommendation">
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
     <p className="recommendation-reason">{batch.explanation}</p>
@@ -31,7 +31,7 @@ export function BatchPanel({ batch }: { batch: BatchRecommendation }) {
       </tr>)}</tbody>
     </table></div> : <p className="muted">No vehicle-to-facility assignments were proposed.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
-    {batch.crds && <CrdsEvidence result={batch.crds}/>}
+    {batch.crds && <CrdsEvidence result={batch.crds} onRelocation={onRelocation}/>}
     {batch.crds ? <p className="muted">Step minima may come from different possible futures. The whole-plan gain above is calculated directly. Arrival estimates and charging delay influence stock availability; idle energy is not modeled. Final routes and benefit are revalidated on approval.</p>
       : <p className="muted">*Baseline uses the synthetic 30 km/h screening assumption; actual OneMap route and safe battery reserve are revalidated by Dispatch at approval. Traffic ETA is an estimate, not a real travel-time promise. Predicted arrival SOC currently reflects route distance, not queuing energy.</p>}
     <p className="muted">Allocations may change if capacity becomes unavailable.</p>
@@ -60,13 +60,17 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
   </dialog>;
 }
 
-export function BatchResult({ result, onRelocation }: { result: BatchDispatch; onRelocation?: (id: string) => void }) {
+export function BatchResult({ result, onRelocation, onClose, busy }: {
+  result: BatchDispatch; onRelocation?: (id: string) => void; onClose?: (recommendationId: string) => void; busy?: boolean;
+}) {
   return <section className="panel" aria-label="Batch approval outcomes">
     <div className="section-title"><h2>Batch approval outcome</h2><strong>{result.status}</strong></div>
     <p>{result.items.length} attempted assignments out of {result.requested_count} requested. See Relocations for confirmed execution and arrivals.</p>
-    <div className="table-scroll"><table><thead><tr><th>EV</th><th>Facility</th><th>Approval state</th><th>Details</th></tr></thead>
+    <div className="table-scroll"><table><thead><tr><th>EV</th><th>Facility</th><th>Approval</th><th>Relocation</th><th>Details</th></tr></thead>
       <tbody>{result.items.map(item => <tr key={item.recommendation_id}>
-        <td>{item.vehicle_id}</td><td>{item.facility_id}</td><td>{item.state}</td><td>{item.error || '—'}{item.dispatch_id && onRelocation && <> <button onClick={() => onRelocation(item.dispatch_id!)}>View relocation / recovery</button></>}</td>
+        <td>{item.vehicle_id}</td><td>{item.facility_id}</td><td>{item.approval_status ?? '—'}</td><td>{item.dispatch_id ? item.state : '—'}</td><td>{item.error || '—'}{item.dispatch_id && onRelocation && <> <button onClick={() => onRelocation(item.dispatch_id!)}>View relocation / recovery</button></>}
+          {!item.dispatch_id && item.approval_status === 'UNKNOWN' && onClose &&
+            <button disabled={busy} onClick={() => onClose(item.recommendation_id)}>Close unstarted approval</button>}</td>
       </tr>)}</tbody>
     </table></div>
   </section>;

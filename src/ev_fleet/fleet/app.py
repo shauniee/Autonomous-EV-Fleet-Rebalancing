@@ -11,7 +11,7 @@ from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
 from ev_fleet.contracts.charging_tasks import ChargingTaskCreate, ChargingTaskUpdate
 from ev_fleet.contracts.recovery import (SimulatorSessionRequest, SimulatorSession, SimulatorCheckpointRequest,
-    SimulatorCheckpointReceipt, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorIdleRestoreRequest)
+    SimulatorCheckpointReceipt, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorIdleRestoreRequest, SimulatorStopRequest)
 
 
 def create_app(store=None, cache=None):
@@ -81,6 +81,10 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/simulator-sessions", response_model=SimulatorSession)
     async def simulator_session(vehicle_id: str, body: SimulatorSessionRequest | SimulatorRestoreRequest | SimulatorIdleRestoreRequest):
         return await state.simulator_recovery.session(vehicle_id, body)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/simulator-stop", response_model=VehicleClaim)
+    async def simulator_stop(vehicle_id: str, body: SimulatorStopRequest):
+        return await state.simulator_recovery.stop_relocation(vehicle_id, body)
 
     @app.get("/api/v1/vehicles/{vehicle_id}/simulator-checkpoint", response_model=SimulatorCheckpointSnapshot)
     async def simulator_checkpoint_snapshot(vehicle_id: str):

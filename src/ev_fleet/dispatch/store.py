@@ -20,6 +20,7 @@ class DispatchRecord:
     progress_tick: float | None = None
     release_outcome: str | None = None
     recovery: dict | None = None
+    resolution: dict | None = None
 
     def view(self):
         result = deepcopy(self.data)

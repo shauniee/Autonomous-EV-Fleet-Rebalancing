@@ -38,7 +38,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
-export function RecommendationPanel({ recommendation }: { recommendation: Recommendation }) {
+export function RecommendationPanel({ recommendation, onRelocation }: { recommendation: Recommendation; onRelocation?: (id: string) => void }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
     <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
@@ -48,7 +48,7 @@ export function RecommendationPanel({ recommendation }: { recommendation: Recomm
       { id: 'overview', label: 'EV assessment', content: candidate ? <CandidateDetails candidate={candidate}/> :
         <p className="muted">No vehicle was proposed. Open Evidence to inspect the assessment.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
-        {recommendation.crds && <CrdsEvidence result={recommendation.crds}/>}
+        {recommendation.crds && <CrdsEvidence result={recommendation.crds} onRelocation={onRelocation}/>}
         <h4>Ranked vehicles</h4>
         {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
         <h4>Exclusions</h4>
@@ -117,9 +117,16 @@ export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; 
     {vehicle && diagnostics && <div className="vehicle-diagnostics"><TwinHistoryPanel key={vehicle.vehicle_id} vehicle={vehicle}/></div>}
   </div>;
 }
+function needsRelocationResolution(dispatch: Dispatch, vehicle?: Vehicle) {
+  return dispatch.state === 'UNKNOWN' || dispatch.state === 'FAILED'
+    || dispatch.state === 'REJECTED' && (dispatch.claim_held !== false || dispatch.parking_status === 'RESERVED')
+    || dispatch.claim_held !== false && (vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
+}
 function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void; notify: Notify }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
   const route = dispatch.command?.route;
+  const ended = dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION';
+  const showResolution = needsRelocationResolution(dispatch, vehicle) || ended;
   return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
     <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
     <p>{position(claim.data?.origin)} → {dispatch.command?.target_zone_id ?? 'Unknown destination'}</p>
@@ -129,19 +136,23 @@ function DispatchRow({ dispatch, vehicle, onTrack, notify }: { dispatch: Dispatc
       <div><dt>Current SOC {vehicle?.stale ? '(stale)' : ''}</dt><dd>{number(vehicle?.telemetry?.soc_pct, '%')}</dd></div>
       <div><dt>Acknowledged / execution confirmed</dt><dd>{time(dispatch.acknowledged_at)}</dd></div>
       <div><dt>Last dispatch contact</dt><dd>{time(dispatch.last_contact_at)}</dd></div>
+      {dispatch.parking_facility_id && <div><dt>Destination hold</dt><dd>{dispatch.parking_status ?? 'Unconfirmed'}</dd></div>}
+      {vehicle && <div><dt>Fleet availability</dt><dd>{vehicle.effective_availability}</dd></div>}
       <div><dt>Claim held</dt><dd>{dispatch.claim_held == null ? 'Unknown' : dispatch.claim_held ? 'Yes' : 'No'}</dd></div>
     </dl>
     {route && <><button className="map-reset" onClick={() => onTrack(dispatch.dispatch_id)}>View route on map</button>
       <details><summary>OneMap route & directions</summary><RouteDetails dispatch={dispatch} vehicle={vehicle}/></details></>}
-    {dispatch.failure_reason && <p className="warning" role="status">{dispatch.failure_reason}</p>}
+    {dispatch.failure_reason && <p className="warning" role="status">{ended ? 'Ended by an operator' : dispatch.failure_reason}</p>}
     {dispatch.state === 'UNKNOWN' && <p className="warning">Outcome uncertain. The backend retains ownership until reconciled.</p>}
-    {(dispatch.recovery || dispatch.state === 'UNKNOWN' || dispatch.claim_held !== false &&
-      (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE')) &&
-      <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify}/>}
+    {(showResolution || dispatch.recovery) &&
+      <RecoveryControl dispatchId={dispatch.dispatch_id} notify={notify} showResolution={showResolution}/>}
     <small className="identifier">{dispatch.dispatch_id}</small>
   </article>;
 }
-export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void; notify: Notify }) {
+export function RelocationPanel({ dispatches, vehicles, onTrack, notify, approvalBusy, onCloseApproval, onRetryApproval }: {
+  dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void; notify: Notify;
+  approvalBusy?: boolean; onCloseApproval?: (id: string) => void; onRetryApproval?: (dispatch: Dispatch) => void;
+}) {
   const groups: { title: string; dispatches: Dispatch[] }[] = [
     { title: 'Needs attention', dispatches: [] },
     { title: 'Active', dispatches: [] },
@@ -149,9 +160,10 @@ export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dis
   ];
   for (const dispatch of [...dispatches].reverse()) {
     const vehicle = vehicles.find(item => item.vehicle_id === dispatch.vehicle_id);
-    const needsAttention = dispatch.state === 'UNKNOWN' ||
-      ['BLOCKED', 'REQUESTED', 'RESTORING'].includes(dispatch.recovery?.status ?? '') ||
-      dispatch.claim_held !== false && (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
+    const ended = dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION';
+    const needsAttention = needsRelocationResolution(dispatch, vehicle)
+      || ended && !!dispatch.parking_facility_id && dispatch.parking_status !== 'RELEASED'
+      || !ended && ['BLOCKED', 'REQUESTED', 'RESTORING'].includes(dispatch.recovery?.status ?? '');
     const terminal = ['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state);
     groups[needsAttention ? 0 : terminal ? 2 : 1].dispatches.push(dispatch);
   }
@@ -163,7 +175,13 @@ export function RelocationPanel({ dispatches, vehicles, onTrack, notify }: { dis
         <h3 key={group.title} className="relocation-group-title">{group.title} <small className="muted">{group.dispatches.length}</small></h3>,
         ...group.dispatches.map(d => d.vehicle_id
           ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack} notify={notify}/>
-          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>),
+          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason === 'PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST'
+              ? 'Approval preparation stopped before a vehicle was assigned.' : d.failure_reason}</p>
+              {d.state === 'UNKNOWN' && d.claim_held === false && !d.command && <>
+                {d.recommendation_id && <button disabled={approvalBusy} onClick={() => onRetryApproval?.(d)}>Retry same approval</button>}
+                <button disabled={approvalBusy} onClick={() => onCloseApproval?.(d.request_id)}>Close unstarted approval</button>
+              </>}
+              <small className="identifier">{d.dispatch_id}</small></article>),
       ])}
     </div>
   </section>;

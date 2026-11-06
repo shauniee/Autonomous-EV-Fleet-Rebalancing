@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyTheme, type Theme } from './theme';
-import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, Dispatch, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
+import { usePendingApprovals } from './hooks/usePendingApprovals';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
 import { FleetPulse } from './components/FleetPulse';
@@ -18,18 +19,6 @@ import { DispatchConfirmation, FleetPanel, RecommendationPanel, RelocationPanel,
 
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
-function readPending(): Approval | null {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(pendingKey) || 'null');
-    return value && typeof value.request_id === 'string' && typeof value.recommendation_id === 'string' ? value : null;
-  } catch { return null; }
-}
-function readPendingBatch(): BatchApproval | null {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(batchPendingKey) || 'null');
-    return value && typeof value.request_id === 'string' && typeof value.batch_recommendation_id === 'string' ? value : null;
-  } catch { return null; }
-}
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
@@ -56,6 +45,12 @@ export default function App() {
       card?.scrollIntoView({ block: 'nearest' });
     });
   }
+  function openPlanningRelocation(id: string) {
+    openRelocation(id);
+    if (!dispatches.data?.dispatches.some(d => d.dispatch_id === id)) {
+      notify('warning', 'The relocation record is unavailable.');
+    }
+  }
   const mapPanel = useRef<HTMLElement>(null);
   function openMap(target: NonNullable<typeof mapFocus>) {
     setMapFocus(target);
@@ -76,7 +71,7 @@ export default function App() {
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
-  const [pendingBatch, setPendingBatchState] = useState<BatchApproval | null>(readPendingBatch);
+  const [pendingBatches, updateBatch] = usePendingApprovals<BatchApproval>(batchPendingKey, 'batch_recommendation_id');
   const [recommending, setRecommending] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [activity, setActivity] = useState<Notification[]>([]);
@@ -102,7 +97,8 @@ export default function App() {
     previousSeverity.current = currentSeverity;
   }, [hotspotZones, notify]);
   const [confirming, setConfirming] = useState(false);
-  const [pending, setPendingState] = useState<Approval | null>(readPending);
+  const [pendingApprovals, updateApproval] = usePendingApprovals<Approval>(pendingKey, 'recommendation_id');
+  const hasPending = pendingApprovals.length + pendingBatches.length > 0;
   const [submitting, setSubmitting] = useState(false);
   const [now, setNow] = useState(Date.now());
   const recommendationRequest = useRef<AbortController | null>(null);
@@ -113,28 +109,16 @@ export default function App() {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => { mounted.current = false; clearInterval(timer); recommendationRequest.current?.abort(); };
   }, []);
-  const setPending = useCallback((approval: Approval | null) => {
-    setPendingState(approval);
-    try { if (approval) sessionStorage.setItem(pendingKey, JSON.stringify(approval)); else sessionStorage.removeItem(pendingKey); }
-    catch { /* Memory still protects retries when browser storage is disabled. */ }
-  }, []);
-  const setPendingBatch = useCallback((value: BatchApproval | null) => {
-    setPendingBatchState(value);
-    try { if (value) sessionStorage.setItem(batchPendingKey, JSON.stringify(value)); else sessionStorage.removeItem(batchPendingKey); }
-    catch { /* In-memory retry still works when browser storage is blocked. */ }
-  }, []);
   useEffect(() => {
-    const matching = pending && dispatches.data?.dispatches.find(d => d.request_id === pending.request_id);
-    if (matching && (matching.claim_held === true ||
-        ['REJECTED', 'FAILED', 'SUCCEEDED'].includes(matching.state))) {
-      setPending(null); setRecommendation(null); setConfirming(false);
-      if (matching.state === 'REJECTED' || matching.state === 'FAILED') {
-        notify('error', `Dispatch ${matching.dispatch_id}: ${matching.state} — ${matching.failure_reason || 'Approval unsuccessful'}.`);
-      } else {
-        notify('info', `Dispatch ${matching.dispatch_id}: ${matching.state}. Follow its backend state in Relocations.`);
+    for (const pending of pendingApprovals) {
+      const matching = dispatches.data?.dispatches.find(d => d.request_id === pending.request_id);
+      if (matching && (matching.claim_held === true || ['REJECTED', 'FAILED', 'SUCCEEDED'].includes(matching.state))) {
+        updateApproval(pending, false);
+        notify(matching.state === 'REJECTED' || matching.state === 'FAILED' ? 'error' : 'info',
+          `Dispatch ${matching.state}. ${matching.failure_reason || 'Follow its status in Relocations.'}`);
       }
     }
-  }, [dispatches.data, pending, setPending, notify]);
+  }, [dispatches.data, pendingApprovals, updateApproval, notify]);
   const choose = useCallback((id: string) => {
     recommendationRequest.current?.abort(); setRecommending(false);
     setSelected(id); setDemandDetails(false); setSelectedFacility(''); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
@@ -161,9 +145,9 @@ export default function App() {
     && now - Date.parse(facilities.updatedAt) < 30000;
   const chargingAdviceFresh = !!chargingAdvice.data && !chargingAdvice.error && !!chargingAdvice.updatedAt
     && now - Date.parse(chargingAdvice.updatedAt) < 30000 && now - Date.parse(chargingAdvice.data.generated_at) < 30000;
-  const approvalBlocked = !fresh || !current || current.stale || !!pending || !!pendingBatch || submitting || remaining <= 0
+  const approvalBlocked = !fresh || !current || current.stale || submitting || remaining <= 0
     || (!!recommendation?.crds && (recommendation.crds.decision !== 'MOVE' || !recommendation.crds.approval_allowed));
-  const batchBlocked = !fresh || !facilitiesFresh || !!pending || !!pendingBatch || submitting || batchRemaining <= 0
+  const batchBlocked = !fresh || !facilitiesFresh || submitting || batchRemaining <= 0
     || (!!batch?.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed));
   async function recommend() {
     recommendationRequest.current?.abort();
@@ -192,19 +176,19 @@ export default function App() {
     if (submittingRef.current || (!retry && (!recommendation || approvalBlocked || Date.now() >= Date.parse(recommendation.expires_at)))) return;
     submittingRef.current = true; setSubmitting(true); setConfirming(false);
     const approval = retry ?? { request_id: crypto.randomUUID(), recommendation_id: recommendation!.recommendation_id };
-    setPending(approval);
+    updateApproval(approval, true);
+    if (!retry) setRecommendation(null);
     try {
-      const result = await api<Dispatch>('/api/dispatch/dispatches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
+      const result = await api<DispatchApprovalResult>('/api/dispatch/dispatches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
-      if (result.state === 'UNKNOWN' ||
-          (!['REJECTED', 'FAILED', 'SUCCEEDED'].includes(result.state) &&
-           result.claim_held !== true)) {
+      if (result.approval_status === 'UNKNOWN' || (!result.approval_status && (result.state === 'UNKNOWN' || result.claim_held !== true &&
+          !['REJECTED', 'FAILED', 'SUCCEEDED'].includes(result.state)))) {
         // HTTP 202 only confirms the coordinator received the request, not
         // that Fleet has acknowledged an atomic claim.
         notify('warning', `Dispatch ${result.dispatch_id}: approval not yet confirmed (${result.state}). Reconcile or retry the same request ID.`);
       } else {
-        setPending(null); setRecommendation(null);
+        updateApproval(approval, false);
         if (result.state === 'REJECTED' || result.state === 'FAILED') {
           notify('error', `Dispatch ${result.dispatch_id}: ${result.state} — ${result.failure_reason || 'Approval unsuccessful'}.`);
         } else {
@@ -214,7 +198,7 @@ export default function App() {
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) {
-        setPending(null); setRecommendation(null); notify('error', `${message(error)}. Request a new recommendation before approving again.`);
+        updateApproval(approval, false); notify('error', `${message(error)}. Request a new recommendation before approving again.`);
       } else notify('warning', `Approval outcome uncertain: ${message(error)}. Reconcile status or retry the same approval.`);
     } finally {
       submittingRef.current = false;
@@ -225,23 +209,24 @@ export default function App() {
     if (submittingRef.current || (!retry && (!batch || batchBlocked || Date.now() >= Date.parse(batch.expires_at)))) return;
     submittingRef.current = true; setSubmitting(true); setBatchConfirming(false);
     const approval = retry ?? { request_id: crypto.randomUUID(), batch_recommendation_id: batch!.batch_recommendation_id };
-    setPendingBatch(approval);
+    updateBatch(approval, true);
+    if (!retry) setBatch(null);
     try {
       const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
-      setBatchResult(result); setBatch(null);
+      setBatchResult(result);
       const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));
       if (dispatched?.dispatch_id) setSelectedDispatch(dispatched.dispatch_id);
       if (result.status === 'UNKNOWN') {
         notify('warning', 'Some batch outcomes are uncertain. Reconcile or retry using the same batch request ID.');
       } else {
-        setPendingBatch(null);
+        updateBatch(approval, false);
         reportBatchOutcome(result);
       }
     } catch (e) {
       if (!mounted.current) return;
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && ![408, 429].includes(e.status)) {
-        setPendingBatch(null); setBatch(null);
+        updateBatch(approval, false);
         notify('error', `${message(e)}. Refresh the batch recommendation before approving again.`);
       } else notify('warning', `Batch approval uncertain: ${message(e)}. Retry the same batch ID.`);
     } finally {
@@ -253,43 +238,60 @@ export default function App() {
   }
   function reportBatchOutcome(result: BatchDispatch) {
     notify(result.status === 'REJECTED' ? 'error' : result.status === 'PARTIAL' ? 'warning' : 'info',
-      `Batch outcome: ${result.status}. Check each child dispatch in Relocations.`);
+      result.status === 'REJECTED' ? 'Batch rejected. Request a fresh recommendation if needed.'
+        : `Batch outcome: ${result.status}. Follow admitted relocations in Relocations.`);
   }
-  const [reconcilingBatch, setReconcilingBatch] = useState(false);
-  async function reconcileBatch(request: BatchApproval) {
-    setReconcilingBatch(true);
+  const [checkingApproval, setCheckingApproval] = useState(false);
+  async function checkApproval(requestId: string, close = false) {
+    setCheckingApproval(true);
     try {
-      const result = await api<BatchDispatch>(`/api/dispatch/batches/${request.request_id}`);
-      setBatchResult(result);
-      if (result.status !== 'UNKNOWN') {
-        setPendingBatch(null);
-        setBatch(null);
-        reportBatchOutcome(result);
-      } else notify('warning', 'The batch approval is still unresolved.');
+      const result = await api<DispatchApprovalResult>(`/api/dispatch/approvals/${requestId}${close ? '/close' : ''}`,
+        close ? { method: 'POST' } : undefined);
+      const pending = pendingApprovals.find(item => item.request_id === requestId);
+      if (pending && result.approval_status !== 'UNKNOWN') updateApproval(pending, false);
+      dispatches.refresh();
+      notify(result.approval_status === 'UNKNOWN' ? 'warning' : 'info',
+        result.approval_status === 'UNKNOWN' ? 'Approval is still unconfirmed. Retry the same request to continue.'
+          : `Approval ${(result.approval_status ?? result.state).toLowerCase()}. ${result.state === 'REJECTED' ? 'Request a fresh recommendation if needed.' : 'See Relocations for the journey.'}`);
     } catch (error) {
-      notify('error', message(error));
-    } finally {
-      setReconcilingBatch(false);
-    }
+      notify('warning', message(error));
+    } finally { setCheckingApproval(false); }
+  }
+  async function reconcileBatch(requestId: string, closeItem?: string) {
+    setCheckingApproval(true);
+    try {
+      const path = `/api/dispatch/batches/${requestId}`;
+      const result = closeItem
+        ? await api<BatchDispatch>(`${path}/items/${closeItem}/close`, { method: 'POST' })
+        : await api<BatchDispatch>(path);
+      setBatchResult(result);
+      const pending = pendingBatches.find(item => item.request_id === requestId);
+      if (result.status !== 'UNKNOWN') {
+        if (pending) updateBatch(pending, false);
+        reportBatchOutcome(result);
+      } else notify('warning', 'Some approvals are still unconfirmed. Check the individual batch results.');
+      setOperationalTab('dispatch');
+      dispatches.refresh();
+    } catch (error) {
+      notify('warning', message(error));
+    } finally { setCheckingApproval(false); }
   }
 
   const activeNotifications: ActiveNotification[] = [];
-  if (pending) activeNotifications.push({
-    id: 'pending', title: submitting ? 'Submitting approval…' : 'Unresolved approval',
-    message: `Request ${pending.request_id}. New approvals are paused until this request is resolved.`,
+  for (const pending of pendingApprovals) activeNotifications.push({
+    id: pending.request_id, title: 'Unconfirmed approval',
+    message: `Request ${pending.request_id}. You can continue with other relocations.`,
     actions: <>
-      <button disabled={submitting} onClick={() => void approve(pending)}>Retry same approval</button>
-      <button disabled={submitting} onClick={dispatches.refresh}>Reconcile status</button>
+      <button disabled={submitting || checkingApproval} onClick={() => void checkApproval(pending.request_id)}>Check status</button>
+      <button disabled={submitting || checkingApproval} onClick={() => void approve(pending)}>Retry same approval</button>
     </>,
   });
-  if (pendingBatch) activeNotifications.push({
-    id: 'pending-batch', title: submitting ? 'Submitting batch…' : 'Unresolved batch approval',
-    message: `Batch request ${pendingBatch.request_id}. New approvals are paused until this request is resolved.`,
+  for (const pending of pendingBatches) activeNotifications.push({
+    id: pending.request_id, title: 'Unconfirmed batch approval',
+    message: `Batch ${pending.request_id}. You can continue with other relocations.`,
     actions: <>
-      <button disabled={submitting || reconcilingBatch} onClick={() => void approveBatch(pendingBatch)}>Retry same batch approval</button>
-      <button disabled={submitting || reconcilingBatch} onClick={() => void reconcileBatch(pendingBatch)}>
-        {reconcilingBatch ? 'Checking batch…' : 'Reconcile batch'}
-      </button>
+      <button disabled={submitting || checkingApproval} onClick={() => void reconcileBatch(pending.request_id)}>Check batch status</button>
+      <button disabled={submitting || checkingApproval} onClick={() => void approveBatch(pending)}>Retry same batch approval</button>
     </>,
   });
   const unavailable = [
@@ -431,16 +433,16 @@ export default function App() {
                   {purpose === 'CHARGE' ? <p className="muted">Simulated charging after arrival, up to 80%.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
                   {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => setSelectedFacility('')}>Clear advised charger</button></p>}
                 </section>}
-                {!demandDetails && recommendation && <RecommendationPanel key={recommendation.recommendation_id} recommendation={recommendation}/>}
-                {!demandDetails && batch && <BatchPanel key={batch.batch_recommendation_id} batch={batch}/>}
+                {!demandDetails && recommendation && <RecommendationPanel key={recommendation.recommendation_id} recommendation={recommendation} onRelocation={openPlanningRelocation}/>}
+                {!demandDetails && batch && <BatchPanel key={batch.batch_recommendation_id} batch={batch} onRelocation={openPlanningRelocation}/>}
                 {!demandDetails && result?.crds?.decision === 'DEFER' && unresolvedRelocations.length > 0 &&
                   <section className="assessment-followup" aria-label="Relocations to review">
                     <h3>Unresolved relocations</h3>
                     {unresolvedRelocations.map(d => <button key={d.dispatch_id} onClick={() => openRelocation(d.dispatch_id)}>Review {d.vehicle_id ?? d.dispatch_id} relocation / recovery</button>)}
                   </section>}
               </div>
-              {((zone && !demandDetails) || pending || pendingBatch) && <div className="inspector-actions">
-                {(pending || pendingBatch) && <button className="approval-notification-link" onClick={() => {
+              {((zone && !demandDetails) || hasPending) && <div className="inspector-actions">
+                {(hasPending) && <button className="approval-notification-link" onClick={() => {
                   setNotificationsOpen(true);
                   requestAnimationFrame(() => document.getElementById('notifications-title')?.focus());
                 }}>{submitting ? 'Approval in progress' : 'Resolve pending approval'}</button>}
@@ -451,7 +453,7 @@ export default function App() {
                   <button className="primary" disabled={!canReview} onClick={() => recommendation ? setConfirming(true) : setBatchConfirming(true)}>Review dispatch</button>
                 </> : <>
                   {requestBlocked && <p className="warning">{!fresh ? 'Fresh demand and fleet data are required.' : 'Fresh facility availability is required.'}</p>}
-                  <button className="primary" disabled={recommending || !!pending || !!pendingBatch || submitting || requestBlocked} onClick={() => {
+                  <button className="primary" disabled={recommending || requestBlocked} onClick={() => {
                     shouldFocusResult.current = true;
                     void recommend();
                   }}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
@@ -460,7 +462,8 @@ export default function App() {
               </div>}
             </aside>
           </div>
-          {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation}/>}
+          {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation} busy={submitting || checkingApproval}
+            onClose={item => void reconcileBatch(batchResult.request_id, item)}/>}
         </> },
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPulse fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
@@ -470,7 +473,11 @@ export default function App() {
           summary: dispatches.updatedAt && !dispatches.error && now - Date.parse(dispatches.updatedAt) < 10000
             ? `${dispatches.data?.dispatches.filter(d => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).length ?? 0} unfinished`
             : 'unavailable',
-          content: <RelocationPanel notify={notify} dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
+          content: <RelocationPanel notify={notify} approvalBusy={submitting || checkingApproval}
+            onCloseApproval={id => void checkApproval(id, true)}
+            onRetryApproval={d => {
+              if (d.recommendation_id) void approve({ request_id: d.request_id, recommendation_id: d.recommendation_id });
+            }} dispatches={dispatches.data?.dispatches ?? []} vehicles={vehicles} onTrack={id => {
             const target = dispatches.data?.dispatches.find(dispatch => dispatch.dispatch_id === id)?.command?.target_zone_id;
             if (target && target !== selected) choose(target);
             openMap({ dispatchId: id });
@@ -481,10 +488,10 @@ export default function App() {
             : 'unavailable',
           content: <ChargingOperations notify={notify} vehicles={vehicles} onUpdated={() => fleet.refresh()}
             advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
-            canPrepare={!!fresh && facilitiesFresh && !pending && !pendingBatch && !submitting && !recommending}
+            canPrepare={!!fresh && facilitiesFresh && !submitting && !recommending}
             onPrepare={(item: ChargerAdvice) => {
               if (!item.charger || !chargingAdviceFresh || !fresh || !facilitiesFresh
-                  || pending || pendingBatch || submitting || recommending) return;
+                  || submitting || recommending) return;
               // Prefill only; the operator must explicitly request and review the
               // live backend batch recommendation, then approve the dispatch.
               choose(item.charger.zone_id);

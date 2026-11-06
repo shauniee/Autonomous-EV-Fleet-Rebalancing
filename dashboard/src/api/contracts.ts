@@ -103,13 +103,22 @@ export interface Candidate {
   charging_assessment: string | null; exclusion_reasons: string[];
   crds_gain?: { worst_case_gain_vehicle_minutes: number; worst_case_future_id: string } | null;
 }
+export interface CrdsRelocationExclusion {
+  vehicle_id: string;
+  reason: 'TELEMETRY_UNAVAILABLE' | 'RELOCATION_FAILED' | 'RELOCATION_UNCONFIRMED'
+    | 'RELOCATION_OWNERSHIP_UNCONFIRMED' | 'VEHICLE_MISSING';
+  dispatch_ids: string[];
+}
 export interface CrdsMetadata {
   decision: 'MOVE' | 'HOLD' | 'DEFER'; reason_code: string; approval_allowed: boolean;
   worst_case_gain_vehicle_minutes: number | null; worst_case_future_id: string | null;
   shortage_changes_by_zone: Record<string, number>;
   arrival_minutes_min: number | null; arrival_minutes_max: number | null;
   scenario_count: number; scenario_model_version: string; epoch_id: string; input_fingerprint: string;
-  source_references: Record<string, unknown>;
+  source_references: Record<string, unknown> & {
+    relocation_exclusions?: CrdsRelocationExclusion[];
+    excluded_facility_ids?: string[];
+  };
   parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number };
 }
 export interface Recommendation {
@@ -130,10 +139,24 @@ export interface RecoveryAssessment {
   status: 'NOT_REQUIRED' | 'REQUIRED' | 'BLOCKED'; reason_code: string; can_resume: boolean;
   supported_action: 'RESUME_SIMULATION' | null; operation: RecoveryOperation | null;
   blockers: { code: string; detail: string }[];
-  evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null };
+  evidence: { checkpoint_source: 'LEGACY_TELEMETRY' | 'SIMULATOR_CHECKPOINT' | 'NONE'; checkpoint_at: string | null;
+    recorded_position?: Position | null; recorded_soc_pct?: number | null;
+    claim_status?: string | null; parking_status?: string | null };
+}
+export interface RelocationEndRequest {
+  request_id: string; expected_assessment_revision: string; reason: string;
+}
+export interface RelocationResolution {
+  assessment_revision: string | null; can_end: boolean; blocker: string | null;
+  stop_position: Position | null; stop_soc_pct: number | null;
+  operation: {
+    request_id: string; reason: string;
+    status: 'REQUESTED' | 'CLEANUP_PENDING' | 'ENDED' | 'BLOCKED';
+    detail: string | null;
+  } | null;
 }
 export interface Dispatch {
-  dispatch_id: string; request_id: string; vehicle_id: string | null; state: string;
+  dispatch_id: string; request_id: string; recommendation_id?: string; vehicle_id: string | null; state: string;
   command: { target_zone_id: string; target_position: Position; route?: RoadRoute | null } | null;
   created_at: string; acknowledged_at: string | null; last_contact_at: string | null;
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
@@ -182,7 +205,10 @@ export interface BatchRecommendation {
   assignments: ParkingAssignment[]; assumptions: string[];
 }
 export interface BatchApproval { request_id: string; batch_recommendation_id: string }
+export type ApprovalStatus = "APPROVED" | "REJECTED" | "UNKNOWN";
+export type DispatchApprovalResult = Dispatch & { approval_status?: ApprovalStatus };
 export interface BatchDispatchItem {
+  approval_status?: ApprovalStatus;
   recommendation_id: string; vehicle_id: string; facility_id: string;
   dispatch_id: string | null; state: string; error: string | null;
 }

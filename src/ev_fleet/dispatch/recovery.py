@@ -100,7 +100,7 @@ def evidence_blockers(dispatch, fleet, vehicle, claim, hold, facility, now, stal
 def local_snapshot(record):
     return deepcopy({"dispatch": record.view(), "ack": record.ack, "event_sequence": record.event_sequence,
         "release_outcome": record.release_outcome, "parking_request": record.parking_request,
-        "claim_request": record.claim_request, "claimed": record.claimed, "recovery": record.recovery})
+        "claim_request": record.claim_request, "claimed": record.claimed, "recovery": record.recovery, "resolution": record.resolution})
 
 
 def same_local(left, right):
@@ -282,6 +282,7 @@ async def assess_recovery(service, dispatch_id, *, details=False):
     operation = dispatch.recovery
     if operation and not service.repository.ready:
         operation = operation.model_copy(update={"intent_fingerprint": None})
+    ending = local["resolution"] and local["resolution"]["status"] in ("REQUESTED", "CLEANUP_PENDING", "ENDED")
     active = operation and operation.status in ("REQUESTED", "RESTORING")
     if active:
         status, reason = "REQUIRED", operation.reason_code or operation.status
@@ -298,8 +299,8 @@ async def assess_recovery(service, dispatch_id, *, details=False):
         sort_keys=True, default=str).encode()).hexdigest()
     result = RecoveryAssessment(dispatch_id=dispatch.dispatch_id, vehicle_id=dispatch.vehicle_id,
         assessed_at=now, assessment_revision=revision, status=status, reason_code=reason,
-        can_resume=candidate is not None and not blockers and not active,
-        supported_action="RESUME_SIMULATION" if candidate is not None and not blockers and not active else None,
+        can_resume=candidate is not None and not blockers and not active and not ending,
+        supported_action="RESUME_SIMULATION" if candidate is not None and not blockers and not active and not ending else None,
         blockers=blockers, evidence=evidence, operation=operation)
     return (result, local, observations, candidate) if details else result
 

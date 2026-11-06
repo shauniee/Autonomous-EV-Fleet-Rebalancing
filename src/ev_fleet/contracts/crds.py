@@ -100,6 +100,13 @@ class CrdsDemandSnapshot(Model):
         return self
 
 
+class CrdsRelocationExclusion(Model):
+    vehicle_id: str
+    reason: Literal["TELEMETRY_UNAVAILABLE", "RELOCATION_FAILED", "RELOCATION_UNCONFIRMED",
+                    "RELOCATION_OWNERSHIP_UNCONFIRMED", "VEHICLE_MISSING"]
+    dispatch_ids: list[UUID]
+
+
 class CrdsInputs(Model):
     evaluated_at: AwareDatetime
     fleet: FleetSnapshot
@@ -110,6 +117,8 @@ class CrdsInputs(Model):
     available_by_zone: dict[str, int]
     vehicle_zones: dict[str, str]
     excluded_vehicle_ids: list[str] = Field(default_factory=list)
+    relocation_exclusions: list[CrdsRelocationExclusion] = Field(default_factory=list)
+    excluded_facility_ids: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
 
 

@@ -6,7 +6,7 @@ from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajecto
 from .crds_routes import travel_minutes
 
 
-MODEL_VERSION = "crds-futures-v3"
+MODEL_VERSION = "crds-futures-v4"
 
 
 def parameters_for(settings):
@@ -30,21 +30,21 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
     zones = {z.zone_id: z for z in inputs.demand.zones}
     if target_zone_id not in zones or any(z.demand is None for z in zones.values()):
         raise ValueError("missing target or demand")
-    profiles = [("nominal", 0, 0, 0, False, False),
-                ("demand_shift", settings.demand_step, 0, 0, False, False),
-                ("late_returns", 0, settings.return_delay_minutes, 0, False, False),
-                ("unavailable_returns", 0, 0, 0, True, False),
-                ("delayed_inbound", 0, 0, settings.journey_delay_minutes, False, True),
+    profiles = [("nominal", 0, 0, 0, False),
+                ("demand_shift", settings.demand_step, 0, 0, False),
+                ("late_returns", 0, settings.return_delay_minutes, 0, False),
+                ("unavailable_returns", 0, 0, 0, True),
+                ("delayed_inbound", 0, 0, settings.journey_delay_minutes, False),
                 ("combined", settings.demand_step, settings.return_delay_minutes,
-                 settings.journey_delay_minutes, True, True)]
+                 settings.journey_delay_minutes, True)]
     levels = min(settings.max_age_levels, int((observation_age(inputs) + age_budget_seconds) // settings.age_step_seconds)) if expand_age else 0
     for level in range(1, levels + 1):
         profiles.append((f"age_{level}", settings.demand_step * level,
                          settings.return_delay_minutes * level,
-                         settings.journey_delay_minutes * level, True, True))
+                         settings.journey_delay_minutes * level, True))
     futures = []
     vehicles = {v.vehicle_id: v for v in inputs.fleet.vehicles}
-    for future_id, shift, return_delay, journey_delay, omit_returns, omit_uncertain in profiles:
+    for future_id, shift, return_delay, journey_delay, omit_returns in profiles:
         stock = {z: [inputs.available_by_zone[z]] * params.slot_count for z in zones}
 
         def credit(zone_id, minutes):
@@ -59,21 +59,6 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
                 raise ValueError("unresolved dispatch identity")
             vehicle = vehicles[dispatch.vehicle_id]
             command = dispatch.command
-            if (dispatch.recovery and dispatch.recovery.confirmed_paused and vehicle.stale
-                    and vehicle.simulator_recovery
-                    and dispatch.recovery.generation == vehicle.simulator_recovery.generation):
-                # Fenced, unavailable stock contributes neither an origin debit
-                # nor an arrival, including release/arrival cleanup windows.
-                continue
-            if not vehicle.active_claim:
-                origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
-                # An outside-zone EV was never counted in any zone's stock.
-                if origin is not None:
-                    if origin not in stock or min(stock[origin]) < 1:
-                        raise ValueError("pending intent stock is inconsistent")
-                    stock[origin] = [n - 1 for n in stock[origin]]
-            if dispatch.state == "UNKNOWN" and omit_uncertain:
-                continue
             route = command.route
             if route is None or vehicle.telemetry is None:
                 continue

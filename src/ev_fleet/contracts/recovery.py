@@ -1,4 +1,6 @@
 """Recovery diagnosis and guarded simulator checkpoint contracts."""
+import hashlib
+import json
 from typing import Literal
 from uuid import UUID
 
@@ -207,3 +209,48 @@ class SimulatorRestoreRequest(Model):
 class RecoveryHandoffRequest(Model):
     consumer_id: UUID
     simulation: SimulatorConfiguration
+
+
+class RelocationEndRequest(Model):
+    request_id: UUID
+    expected_assessment_revision: str
+    reason: str = Field(min_length=1, max_length=200, pattern=r"\S")
+
+
+class SimulatorStopRequest(Model):
+    request_id: UUID
+    dispatch_id: UUID
+    command_id: UUID
+    expected_fleet_instance_id: UUID
+    expected_control_version: int = Field(ge=1)
+    expected_generation: int = Field(ge=1)
+    checkpoint_evidence: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class RelocationResolutionOperation(Model):
+    request_id: UUID
+    reason: str
+    status: Literal["REQUESTED", "CLEANUP_PENDING", "ENDED", "BLOCKED"]
+    detail: str | None = None
+
+
+class RelocationResolutionAssessment(Model):
+    assessment_revision: str | None = None
+    stop_position: Position | None = None
+    stop_soc_pct: float | None = Field(default=None, ge=0, le=100)
+    can_end: bool = False
+    blocker: str | None = None
+    operation: RelocationResolutionOperation | None = None
+
+def stop_checkpoint_evidence(checkpoint: SimulatorCheckpoint) -> str:
+    """Ignore periodic timestamps and sequences, but bind the actual stop state."""
+    physical = checkpoint.physical.model_dump(mode="json", include={
+        "session_id", "position", "soc_pct", "odometer_km", "heading_deg", "speed_kph",
+        "relocation_state", "distance_travelled_km", "active_dispatch_id", "charging_state",
+        "parked_facility_id", "charging_power_kw",
+    })
+    data = checkpoint.model_dump(mode="json", include={
+        "vehicle_id", "fleet_instance_id", "command", "accepted", "simulation", "completed_command_id",
+    })
+    data["physical"] = physical
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
