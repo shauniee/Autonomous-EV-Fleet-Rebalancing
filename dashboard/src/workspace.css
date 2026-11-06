@@ -8,8 +8,15 @@
   white-space: nowrap;
 }
 
-.app { --page-gutter: clamp(12px, 1.65vw, 28px); }
-.app-header { position: relative; min-height: 60px; padding: 9px var(--page-gutter); gap: 10px 14px; justify-content: flex-start; }
+.app {
+  --page-gutter: clamp(12px, 1.65vw, 28px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  overflow: clip;
+}
+.app-header { position: relative; z-index: 1; min-height: 60px; padding: 9px var(--page-gutter); gap: 10px 14px; justify-content: flex-start; }
 .brand-lockup { margin-right: auto; gap: 10px; }
 .app-header .brand-icon { width: 34px; height: 34px; flex-basis: 34px; border-radius: 8px; }
 .app-header .brand-icon svg { width: 23px; height: 23px; }
@@ -95,22 +102,75 @@
 .notification-item-heading [data-tone=warning] { color: var(--warning-text); }
 .notification-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
-main { padding: 0 var(--page-gutter) 20px; }
+.app > main {
+  min-height: 0;
+  padding: 0 var(--page-gutter) 12px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+.app > main > .operational-tabs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app > main > .operational-tabs > .operational-panel {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.app > main > .operational-tabs > .operational-panel:focus-visible { outline-offset: -3px; }
 .operational-panel[hidden] { display: none; }
 .operational-tablist { margin: 0 0 12px; padding: 0 4px; gap: 4px; }
 .operational-tablist button { min-height: 44px; font-size: 13px; padding: 9px 13px; }
 .operational-tablist button:focus-visible { outline-offset: -3px; }
 .tab-count { color: var(--muted); font-size: 11px; }
 
+/* Only the main navigation gets full-width tabs. Evidence tabs stay compact. */
+.app > main > .operational-tabs > .operational-tablist {
+  gap: 6px;
+  margin: 0;
+  padding: 10px 0 12px;
+  border-bottom: 0;
+}
+.app > main > .operational-tabs > .operational-tablist > button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 52px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+.app > main > .operational-tabs > .operational-tablist > button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--surface-soft);
+}
+.app > main > .operational-tabs > .operational-tablist > button[aria-selected=true] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.app > main > .operational-tabs > .operational-tablist .tab-count {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+
 .workspace {
-  --workspace-height: clamp(470px, calc(100dvh - 130px), 900px);
   grid-template-columns: minmax(0, 1fr) clamp(370px, 31vw, 490px);
   align-items: stretch;
-  gap: 12px;
-  height: var(--workspace-height);
+  gap: 0 12px;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
 }
-.workspace > .panel { margin: 0; padding: 0; }
-.workspace .map-panel { min-height: 0; padding: 12px; overflow: auto; }
+.workspace > .panel { grid-row: 2; margin: 0; padding: 0; }
+.workspace .map-panel { min-height: 0; padding: 12px; overflow: auto; overscroll-behavior: contain; }
 .workspace .map-panel .map { flex: 1 0 220px; min-height: 220px; height: auto; }
 .map-title { margin: 0 0 10px; }
 .map-toolbar { align-items: center; gap: 7px; margin-bottom: 8px; }
@@ -149,7 +209,7 @@ main { padding: 0 var(--page-gutter) 20px; }
 .inspector-header h2 { margin: 0; font-size: 17px; }
 .inspector-header button { min-height: 32px; padding: 5px 9px; }
 .inspector-header h2:focus-visible, .table-scroll:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.inspector-body { min-height: 0; flex: 1; overflow: auto; padding: 10px 14px; scrollbar-gutter: stable; }
+.inspector-body { min-height: 0; flex: 1; overflow: auto; padding: 10px 14px; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .inspector-body p, .inspector-body li { overflow-wrap: anywhere; }
 .inspector-body .zone-list { margin: 0; gap: 6px; }
 .target-panel .zone-list button {
@@ -228,16 +288,27 @@ main { padding: 0 var(--page-gutter) 20px; }
 .panel .section-title { flex-wrap: wrap; }
 
 @media (max-width: 1040px) {
-  .workspace { display: block; height: auto; }
-  .compact-workspace-switch { display: flex; gap: 6px; margin-bottom: 10px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .compact-workspace-switch { display: flex; grid-column: 1 / -1; gap: 6px; margin-bottom: 10px; }
   .compact-workspace-switch button { flex: 1; min-width: 0; padding-inline: 8px; white-space: nowrap; }
   .workspace[data-compact-view=dispatch] .map-panel,
   .workspace[data-compact-view=map] .target-panel { display: none; }
-  .workspace .map-panel { overflow: visible; }
-  .inspector-body { overflow: visible; scrollbar-gutter: auto; }
-  .workspace .map-panel .map { height: clamp(300px, 55dvh, 550px); flex-basis: auto; }
   .compact-map-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .compact-map-selection button { margin-left: auto; }
+}
+
+@media (max-width: 760px) {
+  .app > main > .operational-tabs > .operational-tablist {
+    flex-wrap: wrap;
+    padding: 8px 0;
+  }
+  .app > main > .operational-tabs > .operational-tablist > button {
+    flex: 1 1 20%;
+    min-height: 44px;
+    padding-inline: 4px;
+    font-size: 12px;
+  }
+  .app > main > .operational-tabs > .operational-tablist .tab-count { display: none; }
 }
 
 @media (max-width: 650px) {

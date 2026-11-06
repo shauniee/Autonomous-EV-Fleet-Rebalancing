@@ -357,11 +357,11 @@ export default function App() {
     <main>
       <OperationalTabs activeTab={operationalTab} onTabChange={setOperationalTab} tabs={[
         { id: 'dispatch', label: 'Dispatch', content: <>
-          <div className="compact-workspace-switch" role="group" aria-label="Dispatch workspace">
-            <button aria-pressed={compactView === 'dispatch'} onClick={() => setCompactView('dispatch')}>Zones & dispatch</button>
-            <button aria-pressed={compactView === 'map'} onClick={() => setCompactView('map')}>Map</button>
-          </div>
           <div className="workspace" data-compact-view={compactView}>
+            <div className="compact-workspace-switch" role="group" aria-label="Dispatch workspace">
+              <button aria-pressed={compactView === 'dispatch'} onClick={() => setCompactView('dispatch')}>Zones & dispatch</button>
+              <button aria-pressed={compactView === 'map'} onClick={() => setCompactView('map')}>Map</button>
+            </div>
             <section ref={mapPanel} tabIndex={-1} className="panel map-panel workspace-main" aria-labelledby="map-title">
               <div className="section-title map-title"><h2 id="map-title">Singapore fleet map</h2><span className="muted">{zones.length ? `${zones.length} operating zones` : 'Awaiting zone feed'}</span></div>
               <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data}
