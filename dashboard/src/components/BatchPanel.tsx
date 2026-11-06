@@ -4,7 +4,7 @@ import { number } from './format';
 import { OperationalTabs } from './OperationalTabs';
 import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 
-export function BatchPanel({ batch }: { batch: BatchRecommendation }) {
+export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation; onRelocation?: (id: string) => void }) {
   return <div className="recommendation" data-testid="batch-recommendation">
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
     <p className="recommendation-reason">{batch.explanation}</p>
@@ -31,7 +31,7 @@ export function BatchPanel({ batch }: { batch: BatchRecommendation }) {
       </tr>)}</tbody>
     </table></div> : <p className="muted">No vehicle-to-facility assignments were proposed.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
-    {batch.crds && <CrdsEvidence result={batch.crds}/>}
+    {batch.crds && <CrdsEvidence result={batch.crds} onRelocation={onRelocation}/>}
     {batch.crds ? <p className="muted">Step minima may come from different possible futures. The whole-plan gain above is calculated directly. Arrival estimates and charging delay influence stock availability; idle energy is not modeled. Final routes and benefit are revalidated on approval.</p>
       : <p className="muted">*Baseline uses the synthetic 30 km/h screening assumption; actual OneMap route and safe battery reserve are revalidated by Dispatch at approval. Traffic ETA is an estimate, not a real travel-time promise. Predicted arrival SOC currently reflects route distance, not queuing energy.</p>}
     <p className="muted">Allocations may change if capacity becomes unavailable.</p>

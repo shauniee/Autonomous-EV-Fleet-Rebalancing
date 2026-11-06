@@ -38,7 +38,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
-export function RecommendationPanel({ recommendation }: { recommendation: Recommendation }) {
+export function RecommendationPanel({ recommendation, onRelocation }: { recommendation: Recommendation; onRelocation?: (id: string) => void }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
     <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
@@ -48,7 +48,7 @@ export function RecommendationPanel({ recommendation }: { recommendation: Recomm
       { id: 'overview', label: 'EV assessment', content: candidate ? <CandidateDetails candidate={candidate}/> :
         <p className="muted">No vehicle was proposed. Open Evidence to inspect the assessment.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
-        {recommendation.crds && <CrdsEvidence result={recommendation.crds}/>}
+        {recommendation.crds && <CrdsEvidence result={recommendation.crds} onRelocation={onRelocation}/>}
         <h4>Ranked vehicles</h4>
         {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
         <h4>Exclusions</h4>

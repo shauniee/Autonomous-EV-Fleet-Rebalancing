@@ -55,6 +55,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         source_references={"fleet_instance_id": str(inputs.fleet.instance_id),
             "fleet_version": inputs.fleet.snapshot_version, "demand_instance_id": str(inputs.demand.instance_id),
             "excluded_vehicle_ids": inputs.excluded_vehicle_ids,
+            "relocation_exclusions": [row.model_dump(mode="json") for row in inputs.relocation_exclusions],
+            "excluded_facility_ids": inputs.excluded_facility_ids,
             "unassigned_vehicle_ids": [v.vehicle_id for v in inputs.fleet.vehicles
                                        if v.vehicle_id not in inputs.vehicle_zones],
             "demand_versions": {z.zone_id: z.demand_version for z in inputs.demand.zones},
@@ -79,7 +81,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     reserved = {d.vehicle_id for d in inputs.planning.dispatches}
     assessments, sites, candidates = {}, {}, []
     for vehicle in sorted(inputs.fleet.vehicles, key=lambda v: v.vehicle_id):
-        if (vehicle_id and vehicle.vehicle_id != vehicle_id) or vehicle.vehicle_id in reserved:
+        if ((vehicle_id and vehicle.vehicle_id != vehicle_id) or vehicle.vehicle_id in reserved
+                or vehicle.effective_availability != "AVAILABLE"):
             continue
         choices = []
         for site in inputs.facilities.facilities:
@@ -185,6 +188,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         vehicle = next(v for v in inputs.fleet.vehicles if v.vehicle_id == result.selected_vehicle_id)
         if (clock.now() - vehicle.telemetry.observed_at).total_seconds() >= policy.stale_seconds:
             result = CrdsEvaluation(decision="DEFER", reason_code="STALE_AFTER_ROUTE_LOOKUP")
+    if result.decision == "HOLD" and not moves:
+        result.reason_code = "NO_ELIGIBLE_RELOCATIONS"
     metadata.decision, metadata.reason_code = result.decision, result.reason_code
     metadata.approval_allowed = settings.mode == "ACTIVE" and result.decision == "MOVE"
     if result.decision == "MOVE":
@@ -200,7 +205,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
 
 async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=15):
     """Greedy supported prefix; all steps use the same complete future set."""
-    if plan.metadata.decision == "DEFER":
+    if plan.metadata.decision == "DEFER" or not plan.moves:
         return [], plan.metadata, plan.metadata.reason_code
     params = plan.metadata.parameters
     futures = plan.futures

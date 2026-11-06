@@ -7,10 +7,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from ev_fleet.common.settings import CrdsSettings, Settings
+from ev_fleet.contracts.demand import DemandUpdate
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.rebalancing.crds_service import plan_batch, plan_one
+from tests.dispatch_support import Cluster
 from tests.routing_fixture import fixture_route
 
 
@@ -61,7 +64,7 @@ def dispatch_for(vehicle, observations, clock, *, command=True):
         "failure_reason": None, "claim_held": True}
 
 
-async def plan(observations, clock, *, batch=False):
+async def plan(observations, clock, *, batch=False, **selection):
     def respond(request):
         if request.url.path == "/api/v1/route-estimates":
             body = json.loads(request.content)
@@ -76,7 +79,7 @@ async def plan(observations, clock, *, batch=False):
 
     config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test")
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        result = await plan_one(client, Settings(), config, clock, {}, "cbd")
+        result = await plan_one(client, Settings(), config, clock, {}, "cbd", **selection)
         if batch:
             return result, await plan_batch(result, 5, client, config, clock)
         return result
@@ -150,7 +153,8 @@ def test_live_data_issues_and_outside_zone_stock(observations, clock, failure, r
         observations["/api/v1/dispatch-planning-state"]["observed_at"] = old
     elif failure == "unresolved":
         observations["/api/v1/dispatch-planning-state"]["dispatches"].append(
-            dispatch_for(observations["/api/v1/vehicles"]["vehicles"][0], observations, clock, command=False))
+            dispatch_for(observations["/api/v1/vehicles"]["vehicles"][0], observations, clock, command=False)
+            | {"vehicle_id": None})
     else:
         observations["/api/v1/vehicles"]["vehicles"][0]["telemetry"]["position"] = {
             "latitude": 1.16, "longitude": 103.61}
@@ -188,7 +192,7 @@ def test_fresh_telemetry_returns_ev_to_planning(observations, clock):
 def test_fresh_committed_ev_keeps_its_inbound_forecast(observations, clock):
     vehicles = observations["/api/v1/vehicles"]["vehicles"]
     vehicle = deepcopy(vehicles[0]) | {"vehicle_id": "inbound", "effective_availability": "UNAVAILABLE"}
-    dispatch = dispatch_for(vehicle, observations, clock)
+    dispatch = dispatch_for(vehicle, observations, clock) | {"state": "IN_PROGRESS"}
     vehicle["active_claim"] = {"dispatch_id": dispatch["dispatch_id"],
         "command_id": dispatch["command"]["command_id"],
         "fleet_instance_id": observations["/api/v1/vehicles"]["instance_id"],
@@ -204,8 +208,85 @@ def test_fresh_committed_ev_keeps_its_inbound_forecast(observations, clock):
     assert result.inputs.available_by_zone["bishan"] == 2
     assert "inbound" not in {m.vehicle_id for m in result.moves}
     assert max(next(f for f in result.futures if f.future_id == "nominal").zones["cbd"].usable_stock) == 1
-    # A live EV with an inconsistent claim must still block the calculation.
+    dispatch["state"] = "FAILED"
+    failed = asyncio.run(plan(observations, clock))
+    assert failed.metadata.decision == "MOVE"
+    assert failed.inputs.relocation_exclusions[0].reason == "RELOCATION_FAILED"
+    assert all(max(f.zones["cbd"].usable_stock) == 0 for f in failed.futures)
+
+    dispatch["state"] = "IN_PROGRESS"
+    # An inconsistent claim removes just the affected EV from the forecast.
     vehicle["active_claim"]["fleet_instance_id"] = str(uuid4())
     result = asyncio.run(plan(observations, clock))
-    assert result.metadata.decision == "DEFER"
-    assert "CLAIM_DISPATCH_MISMATCH" in result.metadata.reason_code
+    assert result.metadata.decision == "MOVE"
+    assert result.inputs.relocation_exclusions[0].reason == "RELOCATION_OWNERSHIP_UNCONFIRMED"
+    assert all(max(f.zones["cbd"].usable_stock) == 0 for f in result.futures)
+
+
+@pytest.mark.parametrize("state", ["FAILED", "REJECTED", "UNKNOWN", "PENDING"])
+def test_unresolved_relocation_removes_stock_and_blocks_only_its_site(observations, clock, state):
+    vehicles = observations["/api/v1/vehicles"]["vehicles"]
+    affected = deepcopy(vehicles[0]) | {"vehicle_id": "affected"}
+    vehicles.append(affected)
+    dispatch = dispatch_for(affected, observations, clock) | {
+        "state": state, "parking_facility_id": "mock-cbd-01", "claim_held": None,
+    }
+    observations["/api/v1/dispatch-planning-state"]["dispatches"].append(dispatch)
+    observations["/api/v1/facilities"]["facilities"].append(BY_ID["mock-cbd-02"].model_dump(mode="json"))
+    result, (children, _, _) = asyncio.run(plan(observations, clock, batch=True))
+    assert result.metadata.decision == "MOVE"
+    assert result.inputs.available_by_zone["bishan"] == 2
+    assert result.evaluation.selected_vehicle_id == "healthy"
+    assert result.evaluation.selected_facility_id == "mock-cbd-02"
+    assert len(children) == 1
+    assert result.inputs.excluded_facility_ids == ["mock-cbd-01"]
+    assert all(max(f.zones["cbd"].usable_stock) == 0 for f in result.futures)
+
+
+    route = fixture_route(vehicles[0]["telemetry"]["position"], BY_ID["mock-cbd-02"].position.model_dump())
+    revalidated = asyncio.run(plan(observations, clock, vehicle_id="healthy",
+        facility_id="mock-cbd-02", route_override=route, exclude_dispatch_id=str(uuid4())))
+    assert revalidated.metadata.approval_allowed
+    blocked = asyncio.run(plan(observations, clock, vehicle_id="healthy", facility_id="mock-cbd-01"))
+    assert blocked.metadata.reason_code == "NO_ELIGIBLE_RELOCATIONS"
+
+
+@pytest.mark.parametrize("churn", [1, 2])
+def test_active_crds_approval_retries_one_changed_planning_revision(clock, monkeypatch, churn):
+    monkeypatch.setenv("CRDS_MODE", "ACTIVE")
+    monkeypatch.setenv("DISPATCH_URL", "http://dispatch.test")
+
+    async def scenario():
+        cluster = Cluster(clock)
+        route = cluster.route
+        attempts = []
+
+        async def respond(request):
+            response = await route(request)
+            if request.url.path == "/api/v1/crds/revalidate":
+                attempts.append(json.loads(request.content)["expected_planning_revision"])
+                if len(attempts) <= churn:
+                    cluster.dispatch.planning_revision += 1
+            return response
+
+        monkeypatch.setattr(cluster, "route", respond)
+        async with cluster:
+            for zone_id in cluster.demand.zones:
+                await cluster.demand.update(zone_id, "demand", DemandUpdate(expected_version=0,
+                    observed_at=clock.now(), desired_available_vehicles=6 if zone_id == "cbd" else 0))
+            for name in ("healthy", "healthy-2"):
+                await cluster.vehicle(name)
+            recommendation = await cluster.recommend()
+            assert recommendation["crds"]["decision"] == "MOVE"
+            vehicle_id = recommendation["selected_vehicle_id"]
+            if churn == 1:
+                dispatch, _ = await cluster.approve(recommendation)
+                assert dispatch["claim_held"] is True
+            else:
+                with pytest.raises(HTTPException, match="CRDS_PLANNING_CHANGED"):
+                    await cluster.approve(recommendation)
+                assert (await cluster.fleet.get(vehicle_id))["active_claim"] is None
+                assert not cluster.facilities.holds
+            assert len(attempts) == 2 and attempts[1] == attempts[0] + 1
+
+    asyncio.run(scenario())

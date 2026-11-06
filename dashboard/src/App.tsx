@@ -45,6 +45,12 @@ export default function App() {
       card?.scrollIntoView({ block: 'nearest' });
     });
   }
+  function openPlanningRelocation(id: string) {
+    openRelocation(id);
+    if (!dispatches.data?.dispatches.some(d => d.dispatch_id === id)) {
+      notify('warning', 'The relocation record is unavailable.');
+    }
+  }
   const mapPanel = useRef<HTMLElement>(null);
   function openMap(target: NonNullable<typeof mapFocus>) {
     setMapFocus(target);
@@ -427,8 +433,8 @@ export default function App() {
                   {purpose === 'CHARGE' ? <p className="muted">Simulated charging after arrival, up to 80%.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
                   {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => setSelectedFacility('')}>Clear advised charger</button></p>}
                 </section>}
-                {!demandDetails && recommendation && <RecommendationPanel key={recommendation.recommendation_id} recommendation={recommendation}/>}
-                {!demandDetails && batch && <BatchPanel key={batch.batch_recommendation_id} batch={batch}/>}
+                {!demandDetails && recommendation && <RecommendationPanel key={recommendation.recommendation_id} recommendation={recommendation} onRelocation={openPlanningRelocation}/>}
+                {!demandDetails && batch && <BatchPanel key={batch.batch_recommendation_id} batch={batch} onRelocation={openPlanningRelocation}/>}
                 {!demandDetails && result?.crds?.decision === 'DEFER' && unresolvedRelocations.length > 0 &&
                   <section className="assessment-followup" aria-label="Relocations to review">
                     <h3>Unresolved relocations</h3>
