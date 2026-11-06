@@ -1,14 +1,23 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
+import type { Zone } from '../src/api/contracts';
 import { makeDispatch, makeFleet, makeHeat, makeRecommendation } from './fixtures';
-vi.mock('../src/components/SingaporeMap', () => ({ SingaporeMap: () => <div>Map canvas</div> }));
+vi.mock('../src/components/SingaporeMap', () => ({
+  SingaporeMap: ({ zones, onSelect }: { zones: Zone[]; onSelect: (id: string) => void }) => <div>
+    {zones.map(zone => <button key={zone.zone_id} onClick={() => onSelect(zone.zone_id)}>Map marker for {zone.name}</button>)}
+  </div>,
+}));
 
 function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/dispatch/dispatches/dispatch-1/recovery': {
+      dispatch_id: 'dispatch-1', status: 'BLOCKED', reason_code: 'CHECKPOINT_UNAVAILABLE', can_resume: false,
+      operation: null, blockers: [], evidence: { checkpoint_source: 'NONE', checkpoint_at: null },
+    },
     '/api/rebalancing/traffic/conditions': { source: 'DISABLED', status: 'DISABLED',
       generated_at: new Date().toISOString(), feeds: {}, speeds: [], incidents: [], roadworks: [] },
     '/api/rebalancing/charging-advice': { generated_at: new Date().toISOString(), trigger_soc_pct: 25,
@@ -17,7 +26,7 @@ function server(overrides: Record<string, unknown> = {}) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
     if (path === '/api/dispatch/dispatches' && init?.method === 'POST') return new Response(JSON.stringify(makeDispatch()));
-    const body = responses[path];
+    const body = responses[path === '/api/fleet/dashboard/vehicles' ? '/api/fleet/vehicles' : path];
     if (body instanceof Error) throw body;
     return new Response(JSON.stringify(body ?? { origin: { latitude: 1.35, longitude: 103.85 } }));
   });
@@ -26,6 +35,10 @@ async function selectAndRecommend() {
   fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
   await screen.findByTestId('recommendation');
+}
+function openNotifications() {
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
+  return within(screen.getByRole('region', { name: 'Notifications' }));
 }
 describe('dispatcher dashboard', () => {
   it('renders all zones using backend severity, independently of high raw demand', async () => {
@@ -36,6 +49,25 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByText('Current shortage')).toBeInTheDocument();
     expect(screen.getByText('Projected shortage')).toBeInTheDocument();
   });
+  it('collects hotspot severity changes in Notifications without emitting a toast', async () => {
+    const heat = makeHeat();
+    server({ '/api/demand/heat-map': heat });
+    render(<App/>);
+    await screen.findByRole('button', { name: /Bishan NORMAL/ });
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+
+    heat.zones[1].hotspot_severity = 'CRITICAL';
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
+    await screen.findByRole('button', { name: 'Notifications, 1 to review' });
+
+    expect(screen.queryByRole('status', { name: 'Hotspot updates' })).not.toBeInTheDocument();
+    const notifications = openNotifications();
+    expect(notifications.getByText('Bishan hotspot severity changed from NORMAL to CRITICAL.')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(openNotifications().getByText(/Bishan hotspot severity changed/)).toBeVisible();
+  });
+
   it('separates recommendation from approval and shows backend explanation', async () => {
     const fetch = server(); render(<App/>); await selectAndRecommend();
     expect(screen.getByText('Backend selected the highest scoring eligible EV.')).toBeInTheDocument();
@@ -45,7 +77,7 @@ describe('dispatcher dashboard', () => {
     expect(within(dialog).getByText('bishan')).toBeInTheDocument();
     expect(within(dialog).getByText('85%')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Dispatch dispatch-1:/);
+    await openNotifications().findByText(/Dispatch dispatch-1:/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
   it('does not report HTTP 202 with a rejected dispatch as approved', async () => {
@@ -62,7 +94,9 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('ONEMAP_ROUTE_REQUIRED');
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/ONEMAP_ROUTE_REQUIRED/)).toBeVisible();
+    expect(notifications.getByText('Error')).toBeVisible();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
@@ -80,8 +114,12 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Unresolved approval/)).toBeInTheDocument();
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeVisible();
+    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Clear activity' }));
+    expect(notifications.getByText('Unresolved approval')).toBeVisible();
+    expect(notifications.queryByText(/approval not yet confirmed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
@@ -90,12 +128,13 @@ describe('dispatcher dashboard', () => {
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';
     server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': new Error('Fleet down') }); render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD UNKNOWN/ }));
-    expect(screen.getByText(/FLEET_UNAVAILABLE/)).toBeInTheDocument();
+    expect(await openNotifications().findByText(/FLEET_UNAVAILABLE/)).toBeVisible();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled();
   });
   it('keeps fleet visible when Demand is unavailable', async () => {
     server({ '/api/demand/heat-map': new Error('Demand down') }); render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
     expect(await screen.findByTestId('vehicle-ev-01')).toHaveTextContent('90%');
     expect(await screen.findByText(/Demand · unavailable/)).toBeInTheDocument();
   });
@@ -117,8 +156,9 @@ describe('dispatcher dashboard', () => {
     rec.excluded_candidates = [{ ...rec.ranked_candidates[0], exclusion_reasons: ['STALE_TELEMETRY'] }];
     rec.ranked_candidates = [];
     server({ '/api/rebalancing/recommendations': rec }); render(<App/>); await selectAndRecommend();
-    expect(screen.getByText('No eligible EV')).toBeInTheDocument();
-    expect(screen.getByText('ev-01: STALE_TELEMETRY')).toBeInTheDocument();
+    expect(screen.getByText('No eligible EV')).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Evidence' }));
+    expect(screen.getByText('ev-01: STALE_TELEMETRY')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeDisabled();
   });
   it('shows stale telemetry and disables review while preserving the recommendation explanation', async () => {
@@ -130,7 +170,7 @@ describe('dispatcher dashboard', () => {
   });
   it('clears the recommendation when target changes', async () => {
     server(); render(<App/>); await selectAndRecommend();
-    fireEvent.click(screen.getByRole('button', { name: /Bishan NORMAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Map marker for Bishan' }));
     expect(screen.queryByTestId('recommendation')).not.toBeInTheDocument();
   });
   it('ignores a recommendation that arrives after its target was changed', async () => {
@@ -156,9 +196,9 @@ describe('dispatcher dashboard', () => {
     const view = render(<App/>); await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Approval outcome uncertain/);
+    await openNotifications().findByText(/Approval outcome uncertain/);
     view.unmount(); render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry same approval' }));
+    fireEvent.click(openNotifications().getByRole('button', { name: 'Retry same approval' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual(bodies[1]);
   });
@@ -173,12 +213,14 @@ describe('dispatcher dashboard', () => {
     server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
     render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.change(await screen.findByLabelText('Operating zone'), { target: { value: 'cbd' } });
     const facility = await screen.findByTestId('facility-mock-cbd-01');
     expect(facility).toHaveTextContent('CBD simulated parking 1');
     expect(facility).toHaveTextContent('12 / 90');
     expect(facility).toHaveTextContent('6 / 12');
     expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps observations available but blocks new destinations when the provider is unknown', async () => {
@@ -199,10 +241,13 @@ describe('dispatcher dashboard', () => {
     };
     server({ '/api/fleet/vehicles': snapshot });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
     const row = await screen.findByTestId('vehicle-ev-01');
-    expect(row).toHaveTextContent('RENTED');
-    expect(row).toHaveTextContent('Expected return');
     expect(row).toHaveTextContent('UNAVAILABLE');
+    const detail = screen.getByRole('region', { name: 'Selected vehicle details' });
+    expect(detail).toHaveTextContent('Rented');
+    expect(detail).toHaveTextContent('Expected return');
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
@@ -280,12 +325,14 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
     await screen.findByText('LTA DATAMALL · SIMULATED ALLOCATIONS');
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.change(await screen.findByLabelText('Operating zone'), { target: { value: 'cbd' } });
     const card = await screen.findByTestId('facility-lta-parking-LTA-A1');
     expect(card).toHaveTextContent('3 / total unknown');
     expect(card).toHaveTextContent('Reported by LTA before simulated allocations4');
     expect(card).toHaveTextContent('Charging bays availableUnknown');
     expect(screen.getByText(/LTA charging: ERROR/)).toHaveTextContent('LTA_AUTH_FAILED');
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
     await screen.findByTestId('batch-recommendation');
     const requests = fetch.mock.calls.filter(([path, init]) =>
@@ -389,6 +436,7 @@ describe('dispatcher dashboard', () => {
     expect(await within(panel).findByText(/Traffic feed unavailable: Rebalancing down/)).toBeInTheDocument();
     expect(within(panel).getByText('UNAVAILABLE')).toBeInTheDocument();
     expect(within(panel).queryByText(/Live LTA traffic ranking is disabled/)).not.toBeInTheDocument();
+    expect(openNotifications().getByText(/Traffic: Rebalancing down/)).toBeVisible();
   });
 
   it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {
@@ -428,7 +476,8 @@ describe('dispatcher dashboard', () => {
     const fetch = server({ '/api/fleet/vehicles': fleet,
       '/api/fleet/vehicles/ev-01/telemetry-history?limit=100': history });
     render(<App/>);
-    fireEvent.click(await screen.findByText('EV digital twin diagnostics', { exact: true }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'EV digital twin diagnostics' }));
     const panel = await screen.findByRole('region', { name: 'EV digital twin diagnostics' });
     expect(within(panel).getByText('28 km/h')).toBeInTheDocument();
     expect(within(panel).getByText('32°C')).toBeInTheDocument();

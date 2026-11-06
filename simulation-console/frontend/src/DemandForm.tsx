@@ -95,10 +95,9 @@ export function DemandForm({
     <section>
       <h2>Set zone demand</h2>
       <p className="description">
-        Demand is desired available vehicles, not API traffic or real rentals.
-        This input does not create vehicles or approve relocations.
+        Set a target for available vehicles in each selected zone.
       </p>
-      <form className="demand-form" onSubmit={submit}>
+      <form className="demand-layout" onSubmit={submit}>
         <fieldset className="demand-zones" disabled={busy || !available}>
           <legend>Zones ({selectedZones.length} selected)</legend>
           <div className="demand-selection-actions">
@@ -111,61 +110,70 @@ export function DemandForm({
               setResults([]);
             }}>Clear selection</button>
           </div>
-          {zones.map((item) => (
-            <label key={item.zone_id}>
-              <input type="checkbox" checked={selected.includes(item.zone_id)}
-                onChange={(event) => {
-                  setSelected((previous) => event.target.checked
-                    ? [...previous, item.zone_id]
-                    : previous.filter((id) => id !== item.zone_id));
-                  setResults([]);
-                }} />
-              <span>{item.name}<small>Current desired supply: {item.demand?.desired_available_vehicles ?? 'Unknown'}</small></span>
-            </label>
-          ))}
-          {!zones.length && <p>No zones observed.</p>}
+          <div className="zone-picker">
+            {zones.map((item) => (
+              <label key={item.zone_id}>
+                <input type="checkbox" checked={selected.includes(item.zone_id)}
+                  onChange={(event) => {
+                    setSelected((previous) => event.target.checked
+                      ? [...previous, item.zone_id]
+                      : previous.filter((id) => id !== item.zone_id));
+                    setResults([]);
+                  }} />
+                <span>{item.name}<small>Current desired supply: {item.demand?.desired_available_vehicles ?? 'Unknown'}</small></span>
+              </label>
+            ))}
+            {!zones.length && <p>No zones observed.</p>}
+          </div>
         </fieldset>
-        <label>
-          Desired available vehicles
-          <input
-            type="number"
-            min="0"
-            max="10000"
-            step="1"
-            required
-            value={value}
-            disabled={busy || !available}
-            onChange={(event) => {
-              setValue(event.target.value);
-              setResults([]);
-              setValidation('');
-            }}
-          />
-        </label>
-        <button type="submit" disabled={busy || !available || !selectedZones.length}>
-          {busy ? `Applying… (${results.length}/${selectedZones.length})` : `Apply demand to ${selectedZones.length} selected zone${selectedZones.length === 1 ? '' : 's'}`}
-        </button>
-        <p className="description">Applies the entered value to each selected zone. Updates are independent; successful changes remain applied if another zone fails.</p>
+        <div className="demand-settings">
+          <label>
+            Desired available vehicles
+            <input
+              type="number"
+              min="0"
+              max="10000"
+              step="1"
+              required
+              value={value}
+              disabled={busy || !available}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setResults([]);
+                setValidation('');
+              }}
+            />
+          </label>
+          <button className="primary-action" type="submit" disabled={busy || !available || !selectedZones.length}>
+            {busy ? `Applying… (${results.length}/${selectedZones.length})` : `Apply demand to ${selectedZones.length} selected zone${selectedZones.length === 1 ? '' : 's'}`}
+          </button>
+          <p className="description">Updates apply independently. Successful changes remain applied if another zone fails.</p>
+          {!available && (
+            <p className="warning">
+              Fresh zone observations are required before submitting demand.
+            </p>
+          )}
+          {validation && <p className="warning" role="alert">{validation}</p>}
+          <div className="demand-results" aria-live="polite" aria-busy={busy}
+            tabIndex={results.length ? 0 : undefined}>
+            {results.map((result) => (
+              <p key={result.zoneId} className={result.success ? 'success' : 'warning'}>
+                <strong>{zones.find((item) => item.zone_id === result.zoneId)?.name ?? result.zoneId}: </strong>
+                {result.message}
+              </p>
+            ))}
+          </div>
+          <details className="help">
+            <summary>How demand updates work</summary>
+            <p className="description">
+              This input sets a supply target without generating API traffic, creating vehicles,
+              starting rentals, or approving relocations. A new timestamp is sent only when you apply. Demand can expire, and the
+              app’s demand simulator may replace it after its manual hold. Inputs are
+              never reapplied automatically.
+            </p>
+          </details>
+        </div>
       </form>
-      {!available && (
-        <p className="warning">
-          Fresh zone observations are required before submitting demand.
-        </p>
-      )}
-      {validation && <p className="warning" role="alert">{validation}</p>}
-      <div aria-live="polite" aria-busy={busy}>
-        {results.map((result) => (
-          <p key={result.zoneId} className={result.success ? 'success' : 'warning'}>
-            <strong>{zones.find((item) => item.zone_id === result.zoneId)?.name ?? result.zoneId}: </strong>
-            {result.message}
-          </p>
-        ))}
-      </div>
-      <p className="description">
-        A new timestamp is sent only when you apply. Demand can expire, and the
-        app’s demand simulator may replace it after its manual hold. Inputs are
-        never reapplied automatically.
-      </p>
     </section>
   );
 }

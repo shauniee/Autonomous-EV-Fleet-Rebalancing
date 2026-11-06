@@ -80,66 +80,80 @@ export function TrafficScenariosPanel({ dispatches, available }: {
   }
   const current = snapshot?.scenarios ?? [];
   return <section aria-label="Traffic simulation controller">
-    <h2>Traffic Simulation Controller</h2>
-    <p className="description">Simulation only. Choose a segment from a real approved road route, not a
-      guessed or straight connector. These scenarios can affect traffic-aware recommendations and dispatch
-      checks; they never authorise EV movement or issue a new command.</p>
-    <p><strong>{snapshot?.enabled ? 'Scenario control enabled' : 'Scenario control disabled'}</strong>
-      {' · '}{current.length} active scenarios · version {snapshot?.version ?? 'Unknown'}</p>
-    <form className="demand-form" onSubmit={submit}>
-      <label>Approved route
-        <select required value={selected} disabled={busy || !available || !snapshot?.enabled}
-          onChange={e => { setSelected(e.target.value); setSegment('0'); }}>
-          <option value="">Choose an EV journey</option>
-          {candidates.map(d => <option key={d.dispatch_id} value={d.dispatch_id}>
-            {d.vehicle_id} · {d.state} · {d.dispatch_id.slice(0,8)} ({d.command!.route!.geometry.length - 1} segments)
-          </option>)}
-        </select>
-      </label>
-      <label>Road geometry segment index (0 to {maxIndex})
-        <input type="number" required min="0" max={maxIndex} step="1"
-          disabled={!route || busy} value={segment} onChange={e => setSegment(e.target.value)}/>
-      </label>
-      <p className="description">Selected road: {route?.[Number(segment)]?.latitude.toFixed(5) ?? '—'},
-        {route?.[Number(segment)]?.longitude.toFixed(5) ?? '—'} to{' '}
-        {route?.[Number(segment)+1]?.latitude.toFixed(5) ?? '—'},
-        {route?.[Number(segment)+1]?.longitude.toFixed(5) ?? '—'}.
-        Pick a route segment you can identify on the Operator Dashboard.</p>
-      <label>Condition
-        <select value={kind} onChange={e => setKind(e.target.value as Scenario['kind'])} disabled={busy}>
-          <option value="CONGESTION">Heavy congestion (orange)</option>
-          <option value="ROADWORKS">Roadworks (amber)</option>
-          <option value="ROAD_CLOSED">Road closed (red)</option>
-        </select>
-      </label>
-      {kind !== 'ROAD_CLOSED' && <label>Simulated speed (km/h)
-        <input type="number" value={speed} min="3" max="80" required
-          onChange={e => setSpeed(e.target.value)} disabled={busy}/>
-      </label>}
-      <label>Expires after (minutes)
-        <input type="number" value={minutes} min="1" max="120" required
-          onChange={e => setMinutes(e.target.value)} disabled={busy}/>
-      </label>
-      <button type="submit" disabled={!snapshot?.enabled || !available || !route || busy}>
-        {busy ? 'Applying…' : 'Apply simulated condition'}</button>
-    </form>
-    {error && <p role="alert" className="warning">{error}</p>}
-    {message && <p role="status" className="success">{message}</p>}
-    <h3>Active road conditions</h3>
-    <div className="table-wrap"><table><thead><tr>
-      <th>Condition</th><th>Road segment</th><th>Speed</th><th>Expires</th><th>Action</th>
-    </tr></thead><tbody>{current.map(s => <tr key={s.id}>
-      <td>{s.kind}</td><td>{s.dispatch_id.slice(0,8)} · segment {s.segment_index}</td>
-      <td>{s.speed_kph == null ? 'Closed' : s.speed_kph + ' km/h'}</td>
-      <td>{new Date(s.expires_at).toLocaleTimeString('en-SG', {timeZone:'Asia/Singapore'})} SGT</td>
-      <td><button disabled={busy} onClick={() => write('DELETE',
-        `/api/probe/v1/traffic/scenarios/${s.id}?expected_version=${snapshot!.version}`)}>
-        Remove</button></td>
-    </tr>)}</tbody></table></div>
-    {!current.length && <p className="description">No simulated road conditions active.</p>}
-    <button disabled={busy || !current.length} onClick={() => write('DELETE',
-      `/api/probe/v1/traffic/scenarios?expected_version=${snapshot!.version}`)}>Clear all scenarios</button>
-    <p className="description">Mode resets on Rebalancing service restart; missing live traffic is never
-      considered proof that roads are clear. The simulation console is a privileged local-only interface.</p>
+    <h2>Traffic scenarios</h2>
+    <div className="section-toolbar">
+      <p role="status"><strong>{snapshot?.enabled ? 'Scenario control enabled' : 'Scenario control disabled'}</strong>
+        {' · '}{current.length} active · version {snapshot?.version ?? 'Unknown'}</p>
+      <button disabled={busy || !current.length} onClick={() => write('DELETE',
+        `/api/probe/v1/traffic/scenarios?expected_version=${snapshot!.version}`)}>Clear all scenarios</button>
+    </div>
+    <div className="split-layout">
+      <div>
+        <form className="traffic-form" onSubmit={submit}>
+          <div className="traffic-route">
+            <label>Approved route
+              <select required value={selected} disabled={busy || !available || !snapshot?.enabled}
+                onChange={e => { setSelected(e.target.value); setSegment('0'); }}>
+                <option value="">Choose an EV journey</option>
+                {candidates.map(d => <option key={d.dispatch_id} value={d.dispatch_id}>
+                  {d.vehicle_id} · {d.state} · {d.dispatch_id.slice(0,8)} ({d.command!.route!.geometry.length - 1} segments)
+                </option>)}
+              </select>
+            </label>
+            <label>Segment (0–{maxIndex})
+              <input type="number" required min="0" max={maxIndex} step="1"
+                disabled={!route || busy} value={segment} onChange={e => setSegment(e.target.value)}/>
+            </label>
+          </div>
+          {route && <p className="description">Selected road: {route[Number(segment)]?.latitude.toFixed(5) ?? '—'},
+            {route[Number(segment)]?.longitude.toFixed(5) ?? '—'} to{' '}
+            {route[Number(segment)+1]?.latitude.toFixed(5) ?? '—'},
+            {route[Number(segment)+1]?.longitude.toFixed(5) ?? '—'}.</p>}
+          <div className="traffic-fields">
+            <label>Condition
+              <select value={kind} onChange={e => setKind(e.target.value as Scenario['kind'])} disabled={busy}>
+                <option value="CONGESTION">Heavy congestion (orange)</option>
+                <option value="ROADWORKS">Roadworks (amber)</option>
+                <option value="ROAD_CLOSED">Road closed (red)</option>
+              </select>
+            </label>
+            {kind !== 'ROAD_CLOSED' && <label>Simulated speed (km/h)
+              <input type="number" value={speed} min="3" max="80" required
+                onChange={e => setSpeed(e.target.value)} disabled={busy}/>
+            </label>}
+            <label>Expires after (minutes)
+              <input type="number" value={minutes} min="1" max="120" required
+                onChange={e => setMinutes(e.target.value)} disabled={busy}/>
+            </label>
+          </div>
+          <button className="primary-action" type="submit" disabled={!snapshot?.enabled || !available || !route || busy}>
+            {busy ? 'Applying…' : 'Apply simulated condition'}</button>
+        </form>
+        {error && <p role="alert" className="warning">{error}</p>}
+        {message && <p role="status" className="success">{message}</p>}
+      </div>
+      <div>
+        <h3>Active road conditions</h3>
+        <div className="table-wrap"><table><thead><tr>
+          <th>Condition</th><th>Road segment</th><th>Speed</th><th>Expires</th><th>Action</th>
+        </tr></thead><tbody>{current.map(s => <tr key={s.id}>
+          <td>{s.kind}</td><td>{s.dispatch_id.slice(0,8)} · segment {s.segment_index}</td>
+          <td>{s.speed_kph == null ? 'Closed' : s.speed_kph + ' km/h'}</td>
+          <td>{new Date(s.expires_at).toLocaleTimeString('en-SG', {timeZone:'Asia/Singapore'})} SGT</td>
+          <td><button disabled={busy} onClick={() => write('DELETE',
+            `/api/probe/v1/traffic/scenarios/${s.id}?expected_version=${snapshot!.version}`)}>
+            Remove</button></td>
+        </tr>)}</tbody></table></div>
+        {!current.length && <p className="description">No simulated road conditions active.</p>}
+      </div>
+    </div>
+    <details className="help">
+      <summary>Traffic scenario guidance</summary>
+      <p className="description">Choose a segment you can identify on the Operator Dashboard from a real
+        approved road route. Scenarios can affect traffic-aware recommendations and dispatch checks.
+        They never authorise EV movement or issue a new command.</p>
+      <p className="description">Mode resets on Rebalancing service restart. Missing live traffic is never
+        considered proof that roads are clear. The simulation console is a privileged local-only interface.</p>
+    </details>
   </section>;
 }

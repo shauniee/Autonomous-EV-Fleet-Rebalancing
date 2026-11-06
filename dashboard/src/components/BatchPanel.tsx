@@ -1,15 +1,13 @@
 import { useEffect, useRef } from 'react';
 import type { BatchDispatch, BatchRecommendation } from '../api/contracts';
 import { number } from './format';
-import { CrdsSummary } from './CrdsSummary';
+import { OperationalTabs } from './OperationalTabs';
+import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 
-export function BatchPanel({ batch, remaining, disabled, onReview }: {
-  batch: BatchRecommendation; remaining: number; disabled: boolean; onReview: () => void;
-}) {
+export function BatchPanel({ batch }: { batch: BatchRecommendation }) {
   return <div className="recommendation" data-testid="batch-recommendation">
-    <div className="eyebrow">{batch.purpose === 'CHARGE' ? 'Charging destination recommendation' : 'Automatic facility recommendation'}</div>
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
-    <p>{batch.explanation}</p>
+    <p className="recommendation-reason">{batch.explanation}</p>
     {batch.crds && <CrdsSummary result={batch.crds}/>}
     {batch.traffic_status && <p className="muted">Traffic feed: <strong>{batch.traffic_status}</strong> · Preliminary straight-corridor estimates only. Actual route is validated on approval.</p>}
     {batch.unfulfilled_count > 0 && <p className="warning" role="status">
@@ -18,7 +16,8 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
           : batch.unfulfilled_reason === 'CAPACITY_OR_STOCK_LIMIT' ? 'Remaining parking, charging or donor stock limits this batch.'
           : 'A complete supported assignment is not available. Review the assessment details.'
         : 'Eligible vehicles and parking spaces could not be matched.'}</p>}
-    <div className="table-scroll"><table aria-label="Batch vehicle-to-parking assignments">
+    <OperationalTabs label="Recommendation details" tabs={[
+      { id: 'assignments', label: 'Assignments', content: batch.assignments.length ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Proposed assignments"><table aria-label="Batch vehicle-to-parking assignments">
       <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>{batch.crds ? 'Step minimum gain' : 'Score'}</th></tr></thead>
       <tbody>{batch.assignments.map(item => <tr key={item.recommendation_id}>
         <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ' · parking'}</td>
@@ -30,12 +29,16 @@ export function BatchPanel({ batch, remaining, disabled, onReview }: {
           </> : 'Unknown'}</td>
         <td>{item.crds_gain ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(item.score)}</td>
       </tr>)}</tbody>
-    </table></div>
+    </table></div> : <p className="muted">No vehicle-to-facility assignments were proposed.</p> },
+      { id: 'evidence', label: 'Evidence', content: <>
+    {batch.crds && <CrdsEvidence result={batch.crds}/>}
     {batch.crds ? <p className="muted">Step minima may come from different possible futures. The whole-plan gain above is calculated directly. Arrival estimates and charging delay influence stock availability; idle energy is not modeled. Final routes and benefit are revalidated on approval.</p>
       : <p className="muted">*Baseline uses the synthetic 30 km/h screening assumption; actual OneMap route and safe battery reserve are revalidated by Dispatch at approval. Traffic ETA is an estimate, not a real travel-time promise. Predicted arrival SOC currently reflects route distance, not queuing energy.</p>}
-    <p className={remaining ? 'muted' : 'warning'}>{remaining ? `Expires in ${remaining}s` : 'Batch recommendation expired.'}</p>
-    <p className="muted">No EV or parking space is claimed until an operator explicitly approves. Allocations may change if capacity becomes unavailable.</p>
-    <button className="primary" disabled={disabled || batch.recommended_count === 0 || remaining <= 0 || (!!batch.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed))} onClick={onReview}>Review dispatch</button>
+    <p className="muted">Allocations may change if capacity becomes unavailable.</p>
+    {batch.assumptions.length > 0 && <><h4>Assumptions</h4>
+      <ul>{batch.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></>}
+    </> },
+    ]}/>
   </div>;
 }
 

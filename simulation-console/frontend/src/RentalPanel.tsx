@@ -28,6 +28,7 @@ function km(a: { latitude: number; longitude: number }, b: { latitude: number; l
 export function RentalPanel({ vehicles, zones, available }: {
   vehicles: RentalVehicle[]; zones: ForecastZone[]; available: boolean;
 }) {
+  const [view, setView] = useState<'active' | 'forecast'>('active');
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -99,22 +100,32 @@ export function RentalPanel({ vehicles, zones, available }: {
     <p role="status">Rental workload: <strong>{error ? 'Unavailable' : status?.running ? 'Enabled' : status ? 'Paused' : 'Checking…'}</strong>
       {status && ` · ${status.actual_replicas}/${status.desired_replicas} existing Pods`}</p>
     {error && <p className="warning">{error}</p>}
-    <button disabled={busy || !status || status.running} onClick={() => void control('start')}>Start customer rentals</button>{' '}
-    <button disabled={busy || !status || !status.running} onClick={() => void control('stop')}>Stop after active rentals finish</button>
+    <div className="button-row">
+      <button className="primary-action" disabled={busy || !status || status.running} onClick={() => void control('start')}>Start customer rentals</button>
+      <button disabled={busy || !status || !status.running} onClick={() => void control('stop')}>Stop after active rentals finish</button>
+    </div>
     {notice && <p role="status">{notice}</p>}
-    <h3>Active customer rentals ({rentals.length})</h3>
-    <div className="table-wrap"><table><thead><tr><th>Vehicle</th><th>Anticipated return zone</th><th>Expected return</th><th>Current SOC</th></tr></thead>
-      <tbody>{rentals.map(v => <tr key={v.vehicle_id}><td>{v.vehicle_id}</td>
-        <td>{v.active_rental?.expected_return_zone_id ?? 'Unknown'}</td>
-        <td>{v.active_rental?.expected_end_at ? new Date(v.active_rental.expected_end_at).toLocaleTimeString('en-SG', { timeZone: 'Asia/Singapore' }) + ' SGT' : 'Unknown'}</td>
-        <td>{typeof v.telemetry?.soc_pct === 'number' ? v.telemetry.soc_pct.toFixed(1) + '%' : 'Unknown'}</td></tr>)}</tbody></table></div>
-    {!rentals.length && <p>No active rentals observed.</p>}
-    <h3>Possible available supply in the next 30 minutes</h3>
-    <p className="description">Advisory only: the table assumes no additional pickups, uses reported zone assignment and estimates return energy from straight-line distance with safety factors. It is <strong>not</strong> an automatic rebalancing input or a guarantee of a return.</p>
-    <div className="table-wrap"><table><thead><tr><th>Zone</th><th>Available now</th><th>Potential rental returns</th><th>Shortage now</th><th>Shortage if returns arrive</th></tr></thead>
-      <tbody>{forecast.map(f => <tr key={f.zone.zone_id}><td>{f.zone.name}</td><td>{available ? f.availableNow : 'Unknown'}</td>
-        <td>{available ? f.expected : 'Unknown'}</td><td>{available ? f.shortage ?? 'Unknown' : 'Unknown'}</td>
-        <td>{available ? f.possibleShortage ?? 'Unknown' : 'Unknown'}</td></tr>)}</tbody></table></div>
-    {!zones.length && <p>No zone demand observations available.</p>}
+    <div className="view-options" role="group" aria-label="Rental observations">
+      <button type="button" aria-pressed={view === 'active'} onClick={() => setView('active')}>Active rentals ({rentals.length})</button>
+      <button type="button" aria-pressed={view === 'forecast'} onClick={() => setView('forecast')}>Return forecast</button>
+    </div>
+    <div hidden={view !== 'active'}>
+      <h3>Active customer rentals ({rentals.length})</h3>
+      <div className="table-wrap"><table><thead><tr><th>Vehicle</th><th>Anticipated return zone</th><th>Expected return</th><th>Current SOC</th></tr></thead>
+        <tbody>{rentals.map(v => <tr key={v.vehicle_id}><td>{v.vehicle_id}</td>
+          <td>{v.active_rental?.expected_return_zone_id ?? 'Unknown'}</td>
+          <td>{v.active_rental?.expected_end_at ? new Date(v.active_rental.expected_end_at).toLocaleTimeString('en-SG', { timeZone: 'Asia/Singapore' }) + ' SGT' : 'Unknown'}</td>
+          <td>{typeof v.telemetry?.soc_pct === 'number' ? v.telemetry.soc_pct.toFixed(1) + '%' : 'Unknown'}</td></tr>)}</tbody></table></div>
+      {!rentals.length && <p>No active rentals observed.</p>}
+    </div>
+    <div hidden={view !== 'forecast'}>
+      <h3>Possible available supply in the next 30 minutes</h3>
+      <p className="description">Advisory only: the table assumes no additional pickups, uses reported zone assignment and estimates return energy from straight-line distance with safety factors. It is <strong>not</strong> an automatic rebalancing input or a guarantee of a return.</p>
+      <div className="table-wrap"><table><thead><tr><th>Zone</th><th>Available now</th><th>Potential rental returns</th><th>Shortage now</th><th>Shortage if returns arrive</th></tr></thead>
+        <tbody>{forecast.map(f => <tr key={f.zone.zone_id}><td>{f.zone.name}</td><td>{available ? f.availableNow : 'Unknown'}</td>
+          <td>{available ? f.expected : 'Unknown'}</td><td>{available ? f.shortage ?? 'Unknown' : 'Unknown'}</td>
+          <td>{available ? f.possibleShortage ?? 'Unknown' : 'Unknown'}</td></tr>)}</tbody></table></div>
+      {!zones.length && <p>No zone demand observations available.</p>}
+    </div>
   </section>;
 }
