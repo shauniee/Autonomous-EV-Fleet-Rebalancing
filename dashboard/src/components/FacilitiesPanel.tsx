@@ -1,17 +1,22 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { FacilitiesSnapshot, Facility } from '../api/contracts';
+import type { FacilitiesSnapshot, Facility, Zone } from '../api/contracts';
 import { time } from './format';
 
 const PAGE_SIZE = 12;
 
-export function FacilitiesPanel({ facilities, selectedZone, error, snapshot }: {
-  facilities: Facility[]; selectedZone: string; error?: string; snapshot?: FacilitiesSnapshot | null;
+export function FacilitiesPanel({ zones, facilities, selectedZone, error, snapshot, onShowOnMap }: {
+  zones: Zone[]; facilities: Facility[]; selectedZone: string; error?: string; snapshot?: FacilitiesSnapshot | null;
+  onShowOnMap: (facility: Facility) => void;
 }) {
+  const [zoneOverride, setZoneOverride] = useState<string | null>(null);
+  const [type, setType] = useState('all');
+  const zone = zoneOverride ?? selectedZone;
   const [page, setPage] = useState(1);
-  const visible = useMemo(() => selectedZone
-    ? facilities.filter(site => site.zone_id === selectedZone).sort((a, b) =>
+  const visible = useMemo(() => zone
+    ? facilities.filter(site => site.zone_id === zone && (type === 'all' ||
+      (type === 'parking' ? site.facility_type !== 'CHARGING' : site.facility_type === 'CHARGING' || (site.charging_bays ?? 0) > 0))).sort((a, b) =>
       a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }) || a.facility_id.localeCompare(b.facility_id))
-    : [], [facilities, selectedZone]);
+    : [], [facilities, zone, type]);
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const start = (currentPage - 1) * PAGE_SIZE;
@@ -19,6 +24,7 @@ export function FacilitiesPanel({ facilities, selectedZone, error, snapshot }: {
   const pageNumbers = [...new Set([1, currentPage - 1, currentPage, currentPage + 1, pageCount])]
     .filter(value => value >= 1 && value <= pageCount).sort((a, b) => a - b);
   useEffect(() => { setPage(value => Math.min(value, pageCount)); }, [pageCount]);
+  useEffect(() => { setPage(1); }, [zone, type]);
   const live = snapshot?.data_source === 'LTA_DATAMALL';
   return <section className="panel" aria-label="Parking and charging facilities">
     <div className="section-title"><h2>Parking & charging facilities</h2><span className="mock-tag">{live ? 'LTA DATAMALL · SIMULATED ALLOCATIONS' : 'MOCK · NOT REAL PARKING'}</span></div>
@@ -29,9 +35,20 @@ export function FacilitiesPanel({ facilities, selectedZone, error, snapshot }: {
       LTA {feed.name}: {feed.status} · Last successful fetch {time(feed.last_success_at ?? undefined)}{feed.error_code ? ` · ${feed.error_code}` : ''}
     </p>)}
     {error && <p className="warning" role="status">Facilities service unavailable. {facilities.length ? 'Last known data shown.' : 'No locations loaded.'}</p>}
-    {!selectedZone && <p className="empty">Select a zone above to inspect its parking and charging facilities. {facilities.length} map markers available.</p>}
-    {selectedZone && !visible.length && <p className="empty">No facilities available for this zone.</p>}
-    {visible.length > 0 && <nav className="facility-pagination" aria-label="Facilities pagination">
+    <div className="facility-filters">
+      <label htmlFor="facility-zone">Operating zone</label>
+      <select className="form-select" id="facility-zone" value={zone} onChange={event => setZoneOverride(event.target.value)}>
+        <option value="">Select a zone</option>
+        {zones.map(item => <option key={item.zone_id} value={item.zone_id}>{item.name}</option>)}
+      </select>
+      <div className="segmented-controls" role="group" aria-label="Facility type">
+        {[['all', 'All sites'], ['parking', 'Parking'], ['charging', 'Charging']].map(([value, label]) =>
+          <button key={value} aria-pressed={type === value} onClick={() => setType(value)}>{label}</button>)}
+      </div>
+    </div>
+    {!zone && <p className="empty">Select a zone to inspect its parking and charging facilities. {facilities.length} map markers available.</p>}
+    {zone && !visible.length && <p className="empty">No matching facilities reported for this zone.</p>}
+    {pageCount > 1 && <nav className="facility-pagination" aria-label="Facilities pagination">
       <div className="pagination-summary"><span role="status"><strong>{start + 1}–{Math.min(start + PAGE_SIZE, visible.length)}</strong> of {visible.length} facilities</span><small>{PAGE_SIZE} facilities per page</small></div>
       <div className="pagination-controls">
         <div className="pagination-pages">
@@ -61,6 +78,7 @@ export function FacilitiesPanel({ facilities, selectedZone, error, snapshot }: {
             <div><dt>Fetched at</dt><dd>{time(site.availability_observed_at ?? undefined)}</dd></div>
           </>}
         </dl>
+        <button onClick={() => onShowOnMap(site)}>Show on map</button>
         <small>{site.source === 'MOCK' ? 'Charging bays are included in total parking capacity.'
           : site.facility_type === 'CHARGING' ? 'One simulated vehicle per charger. General parking capacity and access are unknown.'
           : 'Total capacity and associated charging facilities are not supplied by this feed.'}</small>

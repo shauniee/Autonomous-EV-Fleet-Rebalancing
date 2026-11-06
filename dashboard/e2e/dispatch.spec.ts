@@ -13,7 +13,7 @@ test('select hotspot, recommend, explicitly approve, observe real relocation and
   let loadedTiles = 0;
   page.on('response', response => { if (response.url().includes('tile.openstreetmap.org') && response.ok()) loadedTiles++; });
   await page.goto('/');
-  await page.getByRole('button', { name: 'CBD CRITICAL' }).click();
+  await page.getByRole('button', { name: /^CBD CRITICAL/ }).click();
   await page.getByRole('button', { name: 'Recommend EV', exact: true }).click();
   await expect(page.getByTestId('recommendation')).toBeVisible();
   const before = await (await request.get('/api/fleet/vehicles')).json();
@@ -47,6 +47,9 @@ test('select hotspot, recommend, explicitly approve, observe real relocation and
   expect(active.acknowledged_at).not.toBeNull();
   await page.screenshot({ path: 'test-results/dashboard-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('tab', { name: 'Dispatch', exact: true }).click();
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
+  await expect(page.locator('.map')).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const map = document.querySelector('.map')!.getBoundingClientRect();
     return [...document.querySelectorAll('.map path.leaflet-interactive')].every(path => {
@@ -64,7 +67,9 @@ test('tile and Demand failures preserve working Fleet and dispatch panels', asyn
   await page.route('**/api/demand/heat-map', route => route.fulfill({ status: 503, body: '{}' }));
   await page.goto('/');
   await expect(page.getByText('Map tiles unavailable.', { exact: false })).toBeVisible();
+  await page.locator('.feed-health summary').click();
   await expect(page.getByText('Demand · unavailable', { exact: false })).toBeVisible();
+  await page.getByRole('tab', { name: 'Fleet', exact: true }).click();
   await expect(page.getByTestId('vehicle-ev-browser-01')).toBeVisible();
   await page.getByRole('tab', { name: /Relocations/ }).click();
   await expect(page.getByRole('heading', { name: 'Relocations', exact: true })).toBeVisible();

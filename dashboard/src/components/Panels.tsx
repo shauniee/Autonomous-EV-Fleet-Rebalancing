@@ -1,10 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Candidate, Claim, Dispatch, Recommendation, Vehicle, Zone } from '../api/contracts';
 import { usePolling, type Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { RouteDetails } from './RouteDetails';
 import { RecoveryControl } from './RecoveryControl';
-import { CrdsSummary } from './CrdsSummary';
+import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
+import { OperationalTabs } from './OperationalTabs';
+import { TwinHistoryPanel } from './TwinHistoryPanel';
 import { SimulatorStatus } from './SimulatorStatus';
 
 export function ServiceStatus({ name, resource }: { name: string; resource: Resource<unknown> }) {
@@ -35,22 +37,25 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
-export function RecommendationPanel({ recommendation, remaining, onReview, disabled }: {
-  recommendation: Recommendation; remaining: number; onReview: () => void; disabled: boolean;
-}) {
+export function RecommendationPanel({ recommendation }: { recommendation: Recommendation }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
-    <div className="eyebrow">Backend recommendation</div><h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
+    <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
+    <p className="recommendation-reason">{recommendation.explanation}</p>
     {recommendation.crds && <CrdsSummary result={recommendation.crds}/>}
-    <p>{recommendation.explanation}</p>{candidate && <CandidateDetails candidate={candidate}/>}
-    <p className={remaining > 0 ? 'muted' : 'warning'}>{remaining > 0 ? `Expires in ${remaining}s` : 'Recommendation expired. Request a new recommendation.'}</p>
-    <button className="primary" disabled={disabled || !candidate || remaining <= 0 || (!!recommendation.crds && (!recommendation.crds.approval_allowed || recommendation.crds.decision !== 'MOVE'))} onClick={onReview}>Review dispatch</button>
-    <details><summary>Ranking, exclusions & assumptions</summary>
-      <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol>
-      {recommendation.excluded_candidates.map(c => <p key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</p>)}
-      {recommendation.excluded_candidates.length === 0 && <p>No excluded vehicles.</p>}
-      {recommendation.assumptions.map((text, i) => <p key={i}>{text}</p>)}
-    </details>
+    <OperationalTabs label="Recommendation details" tabs={[
+      { id: 'overview', label: 'EV assessment', content: candidate ? <CandidateDetails candidate={candidate}/> :
+        <p className="muted">No vehicle was proposed. Open Evidence to inspect the assessment.</p> },
+      { id: 'evidence', label: 'Evidence', content: <>
+        {recommendation.crds && <CrdsEvidence result={recommendation.crds}/>}
+        <h4>Ranked vehicles</h4>
+        {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
+        <h4>Exclusions</h4>
+        {recommendation.excluded_candidates.length ? <ul>{recommendation.excluded_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</li>)}</ul> : <p>No excluded vehicles.</p>}
+        {recommendation.assumptions.length > 0 && <><h4>Assumptions</h4>
+          <ul>{recommendation.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></>}
+      </> },
+    ]}/>
   </div>;
 }
 export function DispatchConfirmation({ recommendation, vehicle, expired, onClose, onApprove }: {
@@ -73,11 +78,43 @@ export function DispatchConfirmation({ recommendation, vehicle, expired, onClose
     <div className="actions"><button onClick={onClose} autoFocus>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve 1 EV</button></div>
   </dialog>;
 }
-export function FleetPanel({ vehicles }: { vehicles: Vehicle[] }) {
-  return <section className="panel"><div className="section-title"><h2>Fleet overview</h2><span className="muted">{vehicles.length} vehicles</span></div>
-    <div className="table-scroll"><table><thead><tr><th>Vehicle</th><th>Zone / coordinates</th><th>SOC</th><th>Parking / charging</th><th>Rental</th><th>Availability</th><th>Relocation</th><th>Physical telemetry</th><th>Simulator</th></tr></thead>
-      <tbody>{vehicles.map(v => <tr key={v.vehicle_id} data-testid={`vehicle-${v.vehicle_id}`}><td><strong>{v.vehicle_id}</strong></td><td>{v.current_zone_id ?? position(v.telemetry?.position)}</td><td>{number(v.telemetry?.soc_pct, '%')}</td><td>{v.telemetry?.parked_facility_id ?? 'Unallocated'}{v.telemetry?.charging_state === 'CHARGING' && <small>CHARGING (simulated) · {number(v.telemetry.charging_power_kw, ' kW')}</small>}{v.telemetry?.charging_state === 'COMPLETE' && <small>Charging complete · parked</small>}</td><td>{v.active_rental ? <><Badge value="RENTED"/><small>Expected return {time(v.active_rental.expected_end_at)}</small></> : '—'}</td><td><Badge value={v.effective_availability}/></td><td><Badge value={v.effective_relocation_state}/></td><td><Badge value={v.stale ? 'STALE' : v.connectivity}/><small>Received {time(v.received_at)}</small></td><td><SimulatorStatus vehicle={v}/></td></tr>)}</tbody>
-    </table></div><p className="muted">Simulator readiness describes local coordination. Dispatch eligibility also requires fresh physical telemetry and valid ownership.</p>{vehicles.length === 0 && <p className="empty">No fleet observations available.</p>}</section>;
+export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; initialVehicle?: string }) {
+  const [selected, setSelected] = useState('');
+  const [diagnostics, setDiagnostics] = useState(false);
+  const vehicle = vehicles.find(item => item.vehicle_id === selected) ?? vehicles.find(item => item.vehicle_id === initialVehicle);
+  return <div className="fleet-workspace">
+    <section className="panel">
+      <div className="section-title"><h2>Fleet overview</h2><span className="muted">{vehicles.length} vehicles</span></div>
+      {vehicles.length > 0 ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Fleet vehicle table">
+        <table><thead><tr><th>Vehicle</th><th>Location</th><th>SOC</th><th>Availability</th><th>Telemetry</th></tr></thead>
+          <tbody>{vehicles.map(v => <tr key={v.vehicle_id} data-testid={`vehicle-${v.vehicle_id}`} data-selected={vehicle?.vehicle_id === v.vehicle_id}>
+            <td><button className="text-button" aria-pressed={vehicle?.vehicle_id === v.vehicle_id} onClick={() => {
+              setSelected(v.vehicle_id);
+            }}>{v.vehicle_id}</button></td>
+            <td>{v.current_zone_id ?? position(v.telemetry?.position)}</td>
+            <td>{number(v.telemetry?.soc_pct, '%')}</td>
+            <td><Badge value={v.effective_availability}/></td>
+            <td><Badge value={v.stale ? 'STALE' : v.connectivity}/><small>Received {time(v.received_at)} SGT</small></td>
+          </tr>)}</tbody>
+        </table>
+      </div> : <p className="empty">No fleet observations available.</p>}
+    </section>
+    {vehicle && <section className="panel vehicle-detail" aria-label="Selected vehicle details">
+      <div className="section-title"><h2>{vehicle.vehicle_id}</h2><Badge value={vehicle.effective_availability}/></div>
+      <dl className="candidate-metrics">
+        <div><dt>Parking / charging</dt><dd>{vehicle.telemetry?.parked_facility_id ?? 'Unallocated'}
+          {vehicle.telemetry?.charging_state === 'CHARGING' && <small>Charging (simulated) · {number(vehicle.telemetry.charging_power_kw, ' kW')}</small>}
+          {vehicle.telemetry?.charging_state === 'COMPLETE' && <small>Charging complete · parked</small>}</dd></div>
+        <div><dt>Rental</dt><dd>{vehicle.active_rental ? <>Rented<small>Expected return {time(vehicle.active_rental.expected_end_at)} SGT</small></> : 'No active rental'}</dd></div>
+        <div><dt>Relocation</dt><dd><Badge value={vehicle.effective_relocation_state}/></dd></div>
+        <div><dt>Claim</dt><dd>{vehicle.active_claim ? 'Held' : 'None reported'}</dd></div>
+        <div><dt>Simulator</dt><dd><SimulatorStatus vehicle={vehicle}/></dd></div>
+      </dl>
+      <p className="muted">Dispatch eligibility also requires fresh telemetry and valid ownership.</p>
+      <button aria-expanded={diagnostics} onClick={() => setDiagnostics(!diagnostics)}>EV digital twin diagnostics</button>
+    </section>}
+    {vehicle && diagnostics && <div className="vehicle-diagnostics"><TwinHistoryPanel key={vehicle.vehicle_id} vehicle={vehicle}/></div>}
+  </div>;
 }
 function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehicle?: Vehicle; onTrack: (id: string) => void }) {
   const claim = usePolling<Claim>(`/api/fleet/vehicles/${encodeURIComponent(dispatch.vehicle_id!)}/claims/${dispatch.dispatch_id}`, 10000);
@@ -104,8 +141,29 @@ function DispatchRow({ dispatch, vehicle, onTrack }: { dispatch: Dispatch; vehic
   </article>;
 }
 export function RelocationPanel({ dispatches, vehicles, onTrack }: { dispatches: Dispatch[]; vehicles: Vehicle[]; onTrack: (id: string) => void }) {
-  return <section className="panel"><div className="section-title"><h2>Relocations</h2><span className="muted">Live status & recent outcomes</span></div>
-    {dispatches.length === 0 && <p className="empty">No dispatches yet. Choose a zone and request a recommendation to begin.</p>}
-    <div className="dispatch-grid">{[...dispatches].reverse().map(d => d.vehicle_id ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/> : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>)}</div>
+  const groups: { title: string; dispatches: Dispatch[] }[] = [
+    { title: 'Needs attention', dispatches: [] },
+    { title: 'Active', dispatches: [] },
+    { title: 'Recent outcomes', dispatches: [] },
+  ];
+  for (const dispatch of [...dispatches].reverse()) {
+    const vehicle = vehicles.find(item => item.vehicle_id === dispatch.vehicle_id);
+    const needsAttention = dispatch.state === 'UNKNOWN' ||
+      ['BLOCKED', 'REQUESTED', 'RESTORING'].includes(dispatch.recovery?.status ?? '') ||
+      dispatch.claim_held !== false && (dispatch.state === 'FAILED' || vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
+    const terminal = ['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state);
+    groups[needsAttention ? 0 : terminal ? 2 : 1].dispatches.push(dispatch);
+  }
+  return <section className="panel relocation-view">
+    <div className="section-title"><h2>Relocations</h2><span className="muted">Live status & recent outcomes</span></div>
+    {dispatches.length === 0 && <p className="empty">No dispatches yet. Choose a zone in Dispatch to begin.</p>}
+    <div className="dispatch-grid relocation-groups">
+      {groups.filter(group => group.dispatches.length > 0).flatMap(group => [
+        <h3 key={group.title} className="relocation-group-title">{group.title} <small className="muted">{group.dispatches.length}</small></h3>,
+        ...group.dispatches.map(d => d.vehicle_id
+          ? <DispatchRow key={d.dispatch_id} dispatch={d} vehicle={vehicles.find(v => v.vehicle_id === d.vehicle_id)} onTrack={onTrack}/>
+          : <article key={d.dispatch_id} id={`relocation-${d.dispatch_id}`} className="dispatch-card" tabIndex={-1}><Badge value={d.state}/><p>{d.failure_reason}</p><small>{d.dispatch_id}</small></article>),
+      ])}
+    </div>
   </section>;
 }
