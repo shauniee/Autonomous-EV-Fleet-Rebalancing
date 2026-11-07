@@ -298,7 +298,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                 "created_at": now.isoformat(), "expires_at": expires.isoformat(),
                 "crds": metadata.model_dump(mode="json"),
                 "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
-                "explanation": f"CRDS proposes {len(assignments)} of {body.quantity} EVs. {metadata.reason_code}.",
+                "explanation": f"CRDS recommends {len(assignments)} of {body.quantity} requested EVs.",
                 "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
                     "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
             await batch_store.put({**result, "recommendation_id": result["batch_recommendation_id"]},

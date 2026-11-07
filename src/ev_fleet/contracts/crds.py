@@ -8,7 +8,7 @@ from .common import Model, Position
 from .routing import RoadRoute
 from .demand import ZoneState
 from .dispatch import Dispatch
-from .facilities import FacilitiesSnapshot
+from .facilities import FacilitiesSnapshot, Facility
 from .vehicles import FleetSnapshot
 
 
@@ -120,6 +120,9 @@ class CrdsInputs(Model):
     relocation_exclusions: list[CrdsRelocationExclusion] = Field(default_factory=list)
     excluded_facility_ids: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
+    # Diagnostic only. The calculation fingerprint uses the filtered inputs.
+    telemetry_exclusions: dict[str, str] = Field(default_factory=dict, exclude=True)
+    withheld_facilities: list[Facility] = Field(default_factory=list, exclude=True)
 
 
 class CrdsRouteRequest(Model):

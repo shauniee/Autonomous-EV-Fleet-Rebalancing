@@ -7,15 +7,11 @@ import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation; onRelocation?: (id: string) => void }) {
   return <div className="recommendation" data-testid="batch-recommendation">
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
-    <p className="recommendation-reason">{batch.explanation}</p>
-    {batch.crds && <CrdsSummary result={batch.crds}/>}
+    {!batch.crds && <p className="recommendation-reason">{batch.explanation}</p>}
+    {batch.crds && <CrdsSummary result={batch.crds} batchStop={batch.unfulfilled_reason ?? null}/>}
     {batch.traffic_status && <p className="muted">Traffic feed: <strong>{batch.traffic_status}</strong> · Preliminary straight-corridor estimates only. Actual route is validated on approval.</p>}
-    {batch.unfulfilled_count > 0 && <p className="warning" role="status">
-      {batch.unfulfilled_count} requested EV(s) remain unfulfilled. {batch.crds
-        ? batch.unfulfilled_reason === 'NO_USEFUL_MOVE' ? 'Additional moves do not provide enough modeled fleet-wide benefit.'
-          : batch.unfulfilled_reason === 'CAPACITY_OR_STOCK_LIMIT' ? 'Remaining parking, charging or donor stock limits this batch.'
-          : 'A complete supported assignment is not available. Review the assessment details.'
-        : 'Eligible vehicles and parking spaces could not be matched.'}</p>}
+    {!batch.crds && batch.unfulfilled_count > 0 && <p className="warning" role="status">
+      Eligible vehicles and parking spaces could not be matched.</p>}
     <OperationalTabs label="Recommendation details" tabs={[
       { id: 'assignments', label: 'Assignments', content: batch.assignments.length ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Proposed assignments"><table aria-label="Batch vehicle-to-parking assignments">
       <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>{batch.crds ? 'Step minimum gain' : 'Score'}</th></tr></thead>
@@ -25,7 +21,7 @@ export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation
         <td>{number(item.distance_km / 30 * 60, ' min')}</td>
         <td>{item.traffic_assessment?.estimated_duration_seconds != null ?
           <>{number(item.traffic_assessment.estimated_duration_seconds / 60, ' min')}
-            {item.traffic_assessment.blocked ? ' · BLOCKED' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
+            {item.traffic_assessment.blocked ? ' · Route blocked' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
           </> : 'Unknown'}</td>
         <td>{item.crds_gain ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(item.score)}</td>
       </tr>)}</tbody>

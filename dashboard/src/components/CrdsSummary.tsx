@@ -1,54 +1,92 @@
-import type { CrdsMetadata, CrdsRelocationExclusion } from '../api/contracts';
-import { Badge, number } from './format';
+import type { CrdsMetadata, CrdsVehicleDecision } from '../api/contracts';
+import { crdsMessage } from './crdsMessages';
+import { number } from './format';
 
-const exclusionReasons: Record<CrdsRelocationExclusion['reason'], string> = {
-  TELEMETRY_UNAVAILABLE: 'Current vehicle telemetry is unavailable',
-  RELOCATION_FAILED: 'The relocation failed',
-  RELOCATION_UNCONFIRMED: 'The relocation outcome is unconfirmed',
-  RELOCATION_OWNERSHIP_UNCONFIRMED: 'The vehicle and relocation records disagree',
-  VEHICLE_MISSING: 'The vehicle is missing from the fleet snapshot',
-};
+const groupLabels = {
+  RECOMMENDED: 'Recommended EVs',
+  NOT_SELECTED: 'EVs not selected',
+  EXCLUDED: 'Excluded EVs',
+  INCOMPLETE: 'EVs with incomplete assessments',
+} satisfies Record<CrdsVehicleDecision['outcome'], string>;
 
-export function CrdsSummary({ result }: { result: CrdsMetadata }) {
-  const excluded = result.source_references.relocation_exclusions?.length ?? 0;
+function decisionEvidence(result: CrdsMetadata) {
+  const evidence = result.source_references.decision_evidence;
+  return evidence?.version === 1 ? evidence : undefined;
+}
+
+export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batchStop?: string | null }) {
+  const evidence = decisionEvidence(result);
+  const excluded = Object.values(evidence?.vehicles ?? {}).filter(row => row.outcome === 'EXCLUDED');
+  const singleBlocker = excluded.length > 0 && excluded.every(row => row.reason === excluded[0].reason)
+    ? excluded[0].reason : null;
+  const assessment = evidence?.assessment_reasons ?? result.reason_code.split(',');
+  const batchReasons = evidence?.batch_stop_reasons.length ? evidence.batch_stop_reasons : batchStop ? [batchStop] : [];
+  const messages = result.decision === 'HOLD' && assessment.includes('NO_ELIGIBLE_RELOCATIONS') && singleBlocker
+    ? [...assessment, singleBlocker] : assessment;
+  const stopMessages = [...new Set(batchReasons
+    .filter(reason => !messages.includes(reason)).map(reason => crdsMessage(reason)))];
+  const label = result.decision === 'MOVE' ? 'Recommended'
+    : result.decision === 'HOLD' ? 'No move recommended' : 'Assessment unavailable';
+
   return <section aria-label="Fleet-wide availability assessment">
-    <Badge value={result.decision}/>
+    <strong>{label}</strong>
+    <p className="recommendation-reason" role={result.decision === 'DEFER' ? 'status' : undefined}>
+      {result.decision === 'MOVE' && batchStop !== undefined
+        ? 'The proposed moves reduce the modeled EV shortfall across the fleet, even in the least favorable scenario checked.'
+        : [...new Set(messages.map(code => crdsMessage(code)))].join(' ')}
+    </p>
+    {result.decision !== 'DEFER' && stopMessages.length > 0 &&
+      <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">
       <div><dt>Minimum modeled shortage reduction</dt><dd>{number(result.worst_case_gain_vehicle_minutes, ' vehicle-minutes')}</dd></div>
       <div><dt>Arrival estimate</dt><dd>{number(result.arrival_minutes_min)}–{number(result.arrival_minutes_max)} min</dd></div>
     </dl>}
-    {result.decision === 'HOLD' && <p>{result.reason_code === 'NO_ELIGIBLE_RELOCATIONS'
-      ? 'No eligible EV and destination pair is available for this request.'
-      : 'Waiting is preferred within the assessed candidates and possible futures.'}</p>}
-    {result.decision === 'DEFER' && <p role="status">CRDS needs trustworthy planning inputs before it can recommend a move. Check the assessment details and request a new recommendation when the inputs are current.</p>}
-    {excluded > 0 && <p>{excluded} {excluded === 1 ? 'EV was' : 'EVs were'} excluded because of unresolved relocation evidence. Open Evidence for details.</p>}
+    {excluded.length > 0 && <p>{excluded.length} {excluded.length === 1 ? 'EV was' : 'EVs were'} excluded. Open Evidence to see why.</p>}
     {result.decision === 'MOVE' && !result.approval_allowed && <p className="muted">Advisory mode. This move is available for review only.</p>}
-    <p className="muted">The calculation compares {result.scenario_count} declared futures over {result.parameters.horizon_minutes} minutes. These are modeled outcomes, not guaranteed arrivals.</p>
   </section>;
 }
 
 export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; onRelocation?: (id: string) => void }) {
-  const excluded = result.source_references.relocation_exclusions ?? [];
+  const evidence = decisionEvidence(result);
+  const legacyExclusions = result.source_references.relocation_exclusions ?? [];
   const sites = result.source_references.excluded_facility_ids?.length ?? 0;
   return <section aria-label="Fleet-wide assessment evidence">
-    <h4>Effect on zones in the minimum-benefit future</h4>
-    {Object.keys(result.shortage_changes_by_zone).length > 0 ? <>
-      <p className="muted">Positive values mean additional shortage. Negative values mean shortage relief.</p>
-      <dl className="candidate-metrics">{Object.entries(result.shortage_changes_by_zone).map(([zone, change]) =>
-        <div key={zone}><dt>{zone}</dt><dd>{number(change, ' vehicle-minutes')}</dd></div>)}</dl>
-    </> : <p className="muted">No zone impact reported for this assessment.</p>}
-    {excluded.length > 0 && <>
+    {evidence ? Object.entries(groupLabels).map(([outcome, label]) => {
+      const rows = Object.entries(evidence.vehicles).filter(([, row]) => row.outcome === outcome);
+      return rows.length > 0 && <div key={outcome}>
+        <h4>{label} ({rows.length})</h4>
+        <ul>{rows.map(([id, row]) => <li key={id}>
+          <strong>{id}</strong> · {crdsMessage(row.reason)}
+          {row.related_reasons.length > 0 && <> {row.related_reasons.map(reason => crdsMessage(reason)).join(' ')}</>}
+          {row.arrival_soc_pct != null && row.reserve_pct != null &&
+            <> {row.arrival_soc_pct < 0 ? 'The EV is expected to run out of battery before arrival.'
+              : `Estimated battery on arrival ${number(row.arrival_soc_pct, '%')}.`}
+              {' '}Required reserve {number(row.reserve_pct, '%')}.</>}
+          {row.gain_vehicle_minutes != null && <> Minimum modeled benefit {number(row.gain_vehicle_minutes, ' vehicle-minutes')}.</>}
+          {row.origin_shortage_increase != null &&
+            <> Shortage in the origin zone increases by {number(row.origin_shortage_increase, ' vehicle-minutes')} in this scenario.</>}
+          {row.dispatch_ids.map(dispatch => onRelocation &&
+            <button key={dispatch} onClick={() => onRelocation(dispatch)}>View relocation for {id}</button>)}
+        </li>)}</ul>
+      </div>;
+    }) : legacyExclusions.length > 0 && <>
       <h4>Relocations excluded from supply</h4>
-      <ul>{excluded.map(row => <li key={row.vehicle_id}>
-        <strong>{row.vehicle_id}</strong> · {exclusionReasons[row.reason]}
-        {onRelocation && row.dispatch_ids.map(id =>
+      <ul>{legacyExclusions.map(row => <li key={row.vehicle_id}>
+        <strong>{row.vehicle_id}</strong> · {crdsMessage(row.reason)}
+        {row.dispatch_ids.map(id => onRelocation &&
           <button key={id} onClick={() => onRelocation(id)}>View relocation for {row.vehicle_id}</button>)}
       </li>)}</ul>
     </>}
     {sites > 0 && <p>CRDS excluded {sites} {sites === 1 ? 'site' : 'sites'} while destination reservations are unconfirmed.</p>}
-    <h4>Assessment details</h4>
-    <p>Reason: {result.reason_code} · Model: {result.scenario_model_version}</p>
-    <p>Minimum-benefit future: {result.worst_case_future_id ?? 'Not assessed'}</p>
-    <small className="identifier">Calculation {result.epoch_id} · {result.input_fingerprint}</small>
+    {result.decision !== 'DEFER' && <>
+      <h4>Modeled effect on EV supply</h4>
+      <p className="muted">One vehicle-minute means being short one EV for one minute. CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes and recommends moves only above {number(result.parameters.minimum_gain_vehicle_minutes, ' vehicle-minutes')} of minimum benefit.</p>
+      {Object.keys(result.shortage_changes_by_zone).length > 0 && <>
+        <p className="muted">In the least favorable scenario, positive values show more shortage and negative values show less.</p>
+        <dl className="candidate-metrics">{Object.entries(result.shortage_changes_by_zone).map(([zone, change]) =>
+          <div key={zone}><dt>{zone}</dt><dd>{number(change, ' vehicle-minutes')}</dd></div>)}</dl>
+      </>}
+    </>}
+    <small className="identifier">Assessment reference {result.epoch_id}</small>
   </section>;
 }

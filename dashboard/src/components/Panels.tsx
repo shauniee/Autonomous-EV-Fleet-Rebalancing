@@ -38,18 +38,22 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
 export function RecommendationPanel({ recommendation, onRelocation }: { recommendation: Recommendation; onRelocation?: (id: string) => void }) {
   const candidate = recommendation.ranked_candidates.find(c => c.vehicle_id === recommendation.selected_vehicle_id);
   return <div className="recommendation" data-testid="recommendation">
-    <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds?.decision === 'HOLD' ? 'Wait before relocating' : recommendation.crds?.decision === 'DEFER' ? 'Fresh assessment needed' : 'No eligible EV')}</h3>
-    <p className="recommendation-reason">{recommendation.explanation}</p>
+    <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds ? 'Relocation assessment' : 'No eligible EV')}</h3>
+    {!recommendation.crds && <p className="recommendation-reason">{recommendation.explanation}</p>}
     {recommendation.crds && <CrdsSummary result={recommendation.crds}/>}
     <OperationalTabs label="Recommendation details" tabs={[
       { id: 'overview', label: 'EV assessment', content: candidate ? <CandidateDetails candidate={candidate}/> :
         <p className="muted">No vehicle was proposed. Open Evidence to inspect the assessment.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
         {recommendation.crds && <CrdsEvidence result={recommendation.crds} onRelocation={onRelocation}/>}
-        <h4>Ranked vehicles</h4>
-        {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
-        <h4>Exclusions</h4>
-        {recommendation.excluded_candidates.length ? <ul>{recommendation.excluded_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</li>)}</ul> : <p>No excluded vehicles.</p>}
+        {recommendation.crds?.source_references.decision_evidence?.version !== 1 && <>
+          <h4>Ranked vehicles</h4>
+          {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
+        </>}
+        {!recommendation.crds && <>
+          <h4>Exclusions</h4>
+          {recommendation.excluded_candidates.length ? <ul>{recommendation.excluded_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id}: {c.exclusion_reasons.join(', ')}</li>)}</ul> : <p>No excluded vehicles.</p>}
+        </>}
         {recommendation.assumptions.length > 0 && <><h4>Assumptions</h4>
           <ul>{recommendation.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul></>}
       </> },

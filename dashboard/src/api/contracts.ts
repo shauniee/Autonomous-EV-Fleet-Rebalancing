@@ -110,6 +110,23 @@ export interface CrdsRelocationExclusion {
     | 'RELOCATION_OWNERSHIP_UNCONFIRMED' | 'VEHICLE_MISSING';
   dispatch_ids: string[];
 }
+export interface CrdsVehicleDecision {
+  outcome: 'RECOMMENDED' | 'EXCLUDED' | 'NOT_SELECTED' | 'INCOMPLETE';
+  reason: string;
+  facility_id?: string;
+  related_reasons: string[];
+  dispatch_ids: string[];
+  arrival_soc_pct?: number;
+  reserve_pct?: number;
+  gain_vehicle_minutes?: number;
+  origin_shortage_increase?: number;
+}
+export interface CrdsDecisionEvidence {
+  version: 1;
+  assessment_reasons: string[];
+  batch_stop_reasons: string[];
+  vehicles: Record<string, CrdsVehicleDecision>;
+}
 export interface CrdsMetadata {
   decision: 'MOVE' | 'HOLD' | 'DEFER'; reason_code: string; approval_allowed: boolean;
   worst_case_gain_vehicle_minutes: number | null; worst_case_future_id: string | null;
@@ -119,6 +136,7 @@ export interface CrdsMetadata {
   source_references: Record<string, unknown> & {
     relocation_exclusions?: CrdsRelocationExclusion[];
     excluded_facility_ids?: string[];
+    decision_evidence?: CrdsDecisionEvidence;
   };
   parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number };
 }

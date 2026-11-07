@@ -98,6 +98,11 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     zones = {z.zone_id: z for z in demand.zones}
     healthy, relocation_exclusions, excluded_sites, issues = isolate_relocations(
         fleet, [d for d in planning.dispatches if str(d.dispatch_id) != exclude_dispatch_id], zones, stale_ids)
+    telemetry_exclusions = {
+        v.vehicle_id: ("NO_TELEMETRY" if v.telemetry is None else
+                       "OFFLINE" if v.connectivity != "ONLINE" else "STALE_TELEMETRY")
+        for v in fleet.vehicles if v.vehicle_id in stale_ids
+    }
     excluded = stale_ids | {row.vehicle_id for row in relocation_exclusions}
     # Count origin stock only after filtering. Healthy inbound EVs already
     # have a Fleet claim, so capacity() does not count them at their origin.
@@ -107,6 +112,7 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     issues.update(capacity_issues)
     # Dispatch blocks overlapping approvals while acquisition is unresolved.
     # Keep the affected site out of planning until ownership is reconciled.
+    withheld = [site for site in facilities.facilities if site.facility_id in excluded_sites]
     facilities = facilities.model_copy(update={"facilities": [
         site for site in facilities.facilities if site.facility_id not in excluded_sites]})
     if not -5 <= (now - fleet.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
@@ -126,4 +132,5 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
         traffic=traffic, available_by_zone={z: row["available_evs"] for z, row in counts.items()},
         vehicle_zones=vehicle_zones, excluded_vehicle_ids=sorted(excluded),
         relocation_exclusions=relocation_exclusions,
-        excluded_facility_ids=sorted(excluded_sites), issues=sorted(issues))
+        excluded_facility_ids=sorted(excluded_sites), issues=sorted(issues),
+        telemetry_exclusions=telemetry_exclusions, withheld_facilities=withheld)

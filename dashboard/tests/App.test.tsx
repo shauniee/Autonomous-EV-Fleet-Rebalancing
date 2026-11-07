@@ -624,3 +624,68 @@ describe('dispatcher dashboard', () => {
   });
 
 });
+
+describe('CRDS recommendation explanations', () => {
+  const crds: NonNullable<ReturnType<typeof makeRecommendation>['crds']> = {
+    decision: 'DEFER', reason_code: 'ROUTE_EVIDENCE_UNAVAILABLE', approval_allowed: false,
+    worst_case_gain_vehicle_minutes: null, worst_case_future_id: null, shortage_changes_by_zone: {},
+    arrival_minutes_min: null, arrival_minutes_max: null,
+    scenario_count: 4, scenario_model_version: 'fixture', epoch_id: 'assessment-ref', input_fingerprint: '',
+    parameters: { horizon_minutes: 30, slot_minutes: 1, minimum_gain_vehicle_minutes: 1 },
+    source_references: {},
+  };
+
+  it('shows a routing defer and its per-EV disposition without rendering provider codes', async () => {
+    const recommendation = { ...makeRecommendation(), selected_vehicle_id: null, ranked_candidates: [],
+      explanation: 'ONEMAP_AUTH_FAILED', crds: { ...crds, source_references: { decision_evidence: {
+        version: 1, assessment_reasons: ['ROUTING_ACCESS_UNAVAILABLE'], batch_stop_reasons: [],
+        vehicles: {
+          'ev-01': { outcome: 'INCOMPLETE', reason: 'ROUTING_ACCESS_UNAVAILABLE', related_reasons: [], dispatch_ids: [] },
+          'ev-02': { outcome: 'EXCLUDED', reason: 'OFFLINE', related_reasons: [], dispatch_ids: [] },
+        },
+      } } } };
+    server({ '/api/rebalancing/recommendations': recommendation });
+    render(<App/>);
+    await selectAndRecommend();
+    const result = screen.getByTestId('recommendation');
+    expect(result).toHaveTextContent('Assessment unavailable');
+    expect(result).toHaveTextContent('could not access the routing service');
+    expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeDisabled();
+    fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
+    expect(result).toHaveTextContent('EVs with incomplete assessments (1)');
+    expect(result).toHaveTextContent('ev-02 · The EV is offline.');
+    expect(result).not.toHaveTextContent(/ONEMAP_AUTH_FAILED|ROUTE_EVIDENCE_UNAVAILABLE/);
+  });
+
+  it('renders a readable fallback for an unknown legacy code', async () => {
+    server({ '/api/rebalancing/recommendations': { ...makeRecommendation(), selected_vehicle_id: null,
+      explanation: 'UNKNOWN_INTERNAL_CODE', crds: { ...crds, reason_code: 'UNKNOWN_INTERNAL_CODE' } } });
+    render(<App/>);
+    await selectAndRecommend();
+    expect(screen.getByTestId('recommendation')).toHaveTextContent('could not verify the information');
+    expect(screen.getByTestId('recommendation')).not.toHaveTextContent('UNKNOWN_INTERNAL_CODE');
+  });
+
+  it('shows why a partial batch stopped and keeps the proposed EV reviewable', async () => {
+    server({ '/api/rebalancing/batch-recommendations': {
+      batch_recommendation_id: 'batch-1', target_zone_id: 'cbd', requested_count: 3, recommended_count: 1,
+      unfulfilled_count: 2, expires_at: new Date(Date.now() + 30_000).toISOString(),
+      explanation: 'CAPACITY_OR_STOCK_LIMIT', assumptions: [],
+      assignments: [{ recommendation_id: 'rec-1', vehicle_id: 'ev-01', facility_id: 'cbd-01', facility_name: 'CBD parking' }],
+      crds: { ...crds, decision: 'MOVE', approval_allowed: true, worst_case_gain_vehicle_minutes: 12,
+        source_references: { decision_evidence: {
+          version: 1, assessment_reasons: ['USEFUL_SHORTAGE_REDUCTION'], batch_stop_reasons: ['BATCH_PARKING_LIMIT'],
+          vehicles: {},
+        } } },
+    } });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs' }));
+    const result = await screen.findByTestId('batch-recommendation');
+    expect(result).toHaveTextContent('1 of 3 EVs recommended');
+    expect(result).toHaveTextContent('used the remaining parking spaces');
+    expect(result).not.toHaveTextContent('CAPACITY_OR_STOCK_LIMIT');
+    expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeEnabled();
+  });
+});

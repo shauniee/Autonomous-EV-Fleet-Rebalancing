@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyTheme, type Theme } from './theme';
 import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError, message } from './api/client';
+import { recommendationError } from './components/crdsMessages';
 import { usePendingApprovals } from './hooks/usePendingApprovals';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
@@ -175,7 +176,7 @@ export default function App() {
         if (!controller.signal.aborted) setBatch(result);
       }
       if (!controller.signal.aborted) setNow(Date.now());
-    } catch (error) { if (!controller.signal.aborted) notify('error', message(error)); }
+    } catch (error) { if (!controller.signal.aborted) notify('error', recommendationError(error)); }
     finally { if (!controller.signal.aborted) setRecommending(false); }
   }
   async function approve(retry?: Approval) {
@@ -455,8 +456,11 @@ export default function App() {
                 }}>{submitting ? 'Approval in progress' : 'Resolve pending approval'}</button>}
                 {zone && !demandDetails && (result ? <>
                   {resultRemaining > 0 ? <span className="muted">Expires in {resultRemaining}s</span> : <span className="warning">Expired · edit request to start again</span>}
-                  {resultRemaining > 0 && (!fresh || (batch && !facilitiesFresh) || (recommendation && current?.stale)) &&
-                    <span className="warning">Approval requires fresh observations.</span>}
+                  {resultRemaining > 0 && (recommendation?.selected_vehicle_id || !!batch?.recommended_count) &&
+                    (!fresh || (batch && !facilitiesFresh) || (recommendation && (!current || current.stale))) &&
+                    <span className="warning">{!fresh ? 'Wait for current demand and fleet data before reviewing.'
+                      : batch && !facilitiesFresh ? 'Wait for current parking availability before reviewing.'
+                        : 'Wait for a current update from the recommended EV before reviewing.'}</span>}
                   <button className="primary" disabled={!canReview} onClick={() => recommendation ? setConfirming(true) : setBatchConfirming(true)}>Review dispatch</button>
                 </> : <>
                   {requestBlocked && <p className="warning">{!fresh ? 'Fresh demand and fleet data are required.' : 'Fresh facility availability is required.'}</p>}

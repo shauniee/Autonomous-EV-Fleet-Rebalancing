@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from ev_fleet.common.settings import CrdsSettings, Settings
 from ev_fleet.contracts.demand import DemandUpdate
 from ev_fleet.facilities.catalog import BY_ID
+from ev_fleet.rebalancing.crds import evaluate_moves
+from ev_fleet.contracts.crds import CrdsEvaluation, CrdsEvaluationTask, CrdsTaskResult
 from ev_fleet.rebalancing.crds_service import plan_batch, plan_one
 from tests.dispatch_support import Cluster
 from tests.routing_fixture import fixture_route
@@ -64,22 +66,37 @@ def dispatch_for(vehicle, observations, clock, *, command=True):
         "failure_reason": None, "claim_held": True}
 
 
-async def plan(observations, clock, *, batch=False, **selection):
+async def plan(observations, clock, *, batch=False, worker=False, route_error=None,
+               route_distance=None, traffic=None, **selection):
     def respond(request):
         if request.url.path == "/api/v1/route-estimates":
+            if route_error:
+                return httpx.Response(503, json={"error": {"code": route_error}})
             body = json.loads(request.content)
             fleet = observations["/api/v1/vehicles"]
             vehicle = next(v for v in fleet["vehicles"] if v["vehicle_id"] == body["vehicle_id"])
             origin = vehicle["telemetry"]["position"]
+            road = fixture_route(origin, BY_ID[body["facility_id"]].position.model_dump())
+            if route_distance:
+                road = road.model_copy(update={"distance_km": route_distance})
             return httpx.Response(200, json={"vehicle_id": body["vehicle_id"],
                 "facility_id": body["facility_id"], "fleet_instance_id": fleet["instance_id"],
                 "control_version": 1, "origin": origin,
-                "route": fixture_route(origin, BY_ID[body["facility_id"]].position.model_dump()).model_dump(mode="json")})
+                "route": road.model_dump(mode="json")})
+        if request.url.path == "/api/v1/crds/evaluate":
+            task = CrdsEvaluationTask.model_validate_json(request.content)
+            evaluation = evaluate_moves(task.futures, task.moves, task.parameters)
+            reply = CrdsTaskResult(epoch_id=task.epoch_id, model_version=task.model_version,
+                input_fingerprint=task.input_fingerprint, future_ids=[f.future_id for f in task.futures],
+                evaluation=evaluation)
+            return httpx.Response(200, json=reply.model_dump(mode="json"))
         return httpx.Response(200, json=observations[request.url.path])
 
-    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test")
+    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test",
+        execution_mode="HTTP" if worker else "LOCAL",
+        worker_urls=["http://worker1.test", "http://worker2.test"] if worker else [])
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        result = await plan_one(client, Settings(), config, clock, {}, "cbd", **selection)
+        result = await plan_one(client, Settings(), config, clock, traffic or {}, "cbd", **selection)
         if batch:
             return result, await plan_batch(result, 5, client, config, clock)
         return result
@@ -112,6 +129,10 @@ def test_unreachable_ev_does_not_block_single_or_batch(observations, clock, fail
     assert result.metadata.source_references["excluded_vehicle_ids"] == ["unreachable"]
     assert result.inputs.available_by_zone == {"bishan": 2, "cbd": 0}
     assert metadata.decision == "MOVE" and len(children) == 1
+    row = result.metadata.source_references["decision_evidence"]["vehicles"]["unreachable"]
+    assert row["outcome"] == "EXCLUDED"
+    assert row["reason"] == {"offline": "OFFLINE", "missing": "NO_TELEMETRY"}.get(failure, "STALE_TELEMETRY")
+    assert len(row["dispatch_ids"]) == 1
     assert all(max(f.zones["cbd"].usable_stock) == 0 for f in result.futures)
     assert observations == before  # Filtering does not mutate owning state.
 
@@ -176,6 +197,8 @@ def test_all_stale_fleet_holds_without_selecting_an_ev(observations, clock):
     assert result.metadata.decision == "HOLD"
     assert result.evaluation.selected_vehicle_id is None
     assert result.metadata.approval_allowed is False
+    rows = result.metadata.source_references["decision_evidence"]["vehicles"]
+    assert {row["reason"] for row in rows.values()} == {"STALE_TELEMETRY"}
 
 
 def test_fresh_telemetry_returns_ev_to_planning(observations, clock):
@@ -290,3 +313,99 @@ def test_active_crds_approval_retries_one_changed_planning_revision(clock, monke
             assert len(attempts) == 2 and attempts[1] == attempts[0] + 1
 
     asyncio.run(scenario())
+
+
+def test_recommendation_explains_same_ranking_locally_and_over_http(observations, clock):
+    local = asyncio.run(plan(observations, clock))
+    distributed = asyncio.run(plan(observations, clock, worker=True))
+    assert distributed.evaluation == local.evaluation
+    assert distributed.metadata.approval_allowed == local.metadata.approval_allowed is True
+    evidence = local.metadata.source_references["decision_evidence"]
+    assert distributed.metadata.source_references["decision_evidence"] == evidence
+    assert evidence["vehicles"]["healthy"]["outcome"] == "RECOMMENDED"
+    assert evidence["vehicles"]["healthy-2"]["reason"] == "STABLE_ORDER_TIEBREAK"
+
+
+def test_batch_explains_parking_limit_and_keeps_child_evidence_scoped(observations, clock):
+    site = observations["/api/v1/facilities"]["facilities"][0]
+    site.update(parking_available=1, charging_available=0)
+    _, (children, metadata, reason) = asyncio.run(plan(observations, clock, batch=True))
+    assert reason == "CAPACITY_OR_STOCK_LIMIT"
+    assert len(children) == 1 and metadata.approval_allowed
+    evidence = metadata.source_references["decision_evidence"]
+    assert evidence["batch_stop_reasons"] == ["BATCH_PARKING_LIMIT"]
+    assert evidence["vehicles"]["healthy-2"]["reason"] == "BATCH_PARKING_LIMIT"
+    child = children[0].metadata.source_references["decision_evidence"]
+    assert list(child["vehicles"]) == ["healthy"]
+
+
+def test_requested_ev_missing_and_road_reserve_are_distinct_exclusions(observations, clock):
+    missing = asyncio.run(plan(observations, clock, vehicle_id="unknown"))
+    assert missing.metadata.decision == "HOLD"
+    rows = missing.metadata.source_references["decision_evidence"]["vehicles"]
+    assert list(rows) == ["unknown"]
+    assert rows["unknown"]["reason"] == "VEHICLE_MISSING"
+    low_reserve = asyncio.run(plan(observations, clock, vehicle_id="healthy", route_distance=250))
+    assert low_reserve.metadata.decision == "HOLD"
+    row = low_reserve.metadata.source_references["decision_evidence"]["vehicles"]["healthy"]
+    assert row["reason"] == "ROUTE_BELOW_OPERATIONAL_RESERVE"
+    assert row["arrival_soc_pct"] < row["reserve_pct"]
+
+
+def test_route_access_defers_without_reporting_eligible_evs_as_rejected(observations, clock):
+    result, (children, metadata, reason) = asyncio.run(
+        plan(observations, clock, batch=True, route_error="ONEMAP_AUTH_FAILED"))
+    assert not children and reason == "ROUTE_EVIDENCE_UNAVAILABLE"
+    assert metadata.decision == result.evaluation.decision == "DEFER"
+    evidence = metadata.source_references["decision_evidence"]
+    assert evidence["assessment_reasons"] == ["ROUTING_ACCESS_UNAVAILABLE"]
+    assert {row["outcome"] for row in evidence["vehicles"].values()} == {"INCOMPLETE"}
+    assert "ONEMAP_AUTH_FAILED" not in json.dumps(evidence)
+
+
+def test_late_batch_defer_discards_provisional_recommendations(observations, clock, monkeypatch):
+    from ev_fleet.rebalancing import crds_service
+
+    async def scenario():
+        initial = await plan(observations, clock)
+        evaluate = crds_service.evaluate_candidates
+        calls = 0
+
+        async def evaluate_with_late_failure(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return CrdsEvaluation(decision="DEFER", reason_code="WORKER_RESULTS_INCOMPLETE"), {}
+            return await evaluate(*args, **kwargs)
+
+        monkeypatch.setattr(crds_service, "evaluate_candidates", evaluate_with_late_failure)
+        config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
+            children, metadata, reason = await plan_batch(initial, 3, client, config, clock)
+        assert calls == 2 and not children
+        assert reason == "WORKER_RESULTS_INCOMPLETE" and not metadata.approval_allowed
+        evidence = metadata.source_references["decision_evidence"]
+        assert {row["outcome"] for row in evidence["vehicles"].values()} == {"INCOMPLETE"}
+
+    asyncio.run(scenario())
+
+
+def test_known_road_closure_excludes_the_ev(observations, clock):
+    origin = observations["/api/v1/vehicles"]["vehicles"][0]["telemetry"]["position"]
+    destination = BY_ID["mock-cbd-01"].position.model_dump()
+    traffic = {"source": "SIMULATION", "simulated_events": [
+        {"id": "closure", "kind": "ROAD_CLOSED", "start": origin, "end": destination}
+    ]}
+    result = asyncio.run(plan(observations, clock, vehicle_id="healthy", traffic=traffic))
+    assert result.metadata.decision == "HOLD"
+    row = result.metadata.source_references["decision_evidence"]["vehicles"]["healthy"]
+    assert row["outcome"] == "EXCLUDED" and row["reason"] == "ROAD_ROUTE_BLOCKED"
+
+
+def test_eligible_ev_below_benefit_threshold_is_not_excluded(observations, clock):
+    observations["/api/v1/zones"]["zones"][1]["demand"]["desired_available_vehicles"] = 0
+    result = asyncio.run(plan(observations, clock))
+    assert result.metadata.decision == "HOLD"
+    rows = result.metadata.source_references["decision_evidence"]["vehicles"]
+    assert {row["outcome"] for row in rows.values()} == {"NOT_SELECTED"}
+    assert {row["reason"] for row in rows.values()} == {"NO_USEFUL_MOVE"}
