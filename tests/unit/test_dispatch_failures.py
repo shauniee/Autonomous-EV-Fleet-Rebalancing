@@ -5,6 +5,8 @@ from fastapi import HTTPException
 from ev_fleet.contracts.demand import DemandUpdate
 from tests.dispatch_support import Cluster
 from ev_fleet.contracts.dispatch import CommandAcknowledgement, DispatchEvent
+from ev_fleet.dispatch.service import DispatchService
+from tests.unit.test_persistence import MemoryRepository
 import httpx
 
 
@@ -35,10 +37,13 @@ def test_lost_claim_response_and_expired_retry_are_reconciled(clock):
             cluster.failures.append({"method": "PUT", "path": "/claims/", "action": "lose_response"})
             dispatch, body = await cluster.approve()
             assert dispatch["state"] == "UNKNOWN"
+            assert dispatch["revalidated_metrics"]["approval_decision"]["status"] == "UNKNOWN"
             assert (await cluster.fleet.get("ev-1"))["active_claim"]
             clock.advance(11)
             result = await cluster.dispatch.approve(body)
             assert result["state"] == "PENDING" and result["dispatch_id"] == dispatch["dispatch_id"]
+            assert result["revalidated_metrics"]["approval_decision"]["status"] == "APPROVED"
+            assert len(cluster.fleet.vehicles["ev-1"]["claims"]) == 1
     asyncio.run(scenario())
 
 
@@ -117,6 +122,9 @@ def test_failed_execution_retains_claim_and_blocks_new_recommendation(clock):
                 sequence=0, observed_at=clock.now(), kind="FAILED", distance_travelled_km=1, reason="BATTERY_DEPLETED")
             result = await cluster.dispatch.event(dispatch["dispatch_id"], event)
             assert result["state"] == "FAILED" and result["claim_held"]
+            assert result["failure_reason"] == "BATTERY_DEPLETED"
+            assert result["revalidated_metrics"]["approval_decision"] == dispatch["revalidated_metrics"]["approval_decision"]
+            assert result["revalidated_metrics"]["approval_decision"]["status"] == "APPROVED"
             assert (await cluster.recommend())["selected_vehicle_id"] is None
     asyncio.run(scenario())
 
@@ -132,4 +140,37 @@ def test_command_never_polled_still_times_out_without_releasing(clock):
             assert result["state"] == "UNKNOWN" and result["failure_reason"] == "ACK_TIMEOUT"
             assert result["delivery_attempts"] == 0 and result["claim_held"]
             assert (await cluster.dispatch.commands("ev-1"))["commands"][0] == dispatch["command"]
+    asyncio.run(scenario())
+
+def test_rejection_evidence_matches_conflict_status_lookup_and_reload(clock):
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            repository = MemoryRepository()
+            cluster.dispatch.repository = repository
+            await cluster.vehicle()
+            recommendation = await cluster.recommend()
+            await cluster.telemetry(soc=19)
+            request_id = str(uuid4())
+            body = {"request_id": request_id, "recommendation_id": recommendation["recommendation_id"]}
+            base = "http://dispatch.test/api/v1"
+            rejected = await cluster.client.post(f"{base}/dispatches", json=body)
+            assert rejected.status_code == 409
+            error = rejected.json()["error"]
+            assert error["code"] == "ROUTE_BELOW_OPERATIONAL_RESERVE"
+            assert error["request_id"] == rejected.headers["X-Request-ID"]
+            evidence = error["approval_decision"]
+            assert evidence["status"] == "REJECTED" and evidence["vehicle_id"] == "ev-1"
+            assert evidence["arrival_soc_pct"] < evidence["reserve_pct"]
+            status = await cluster.client.get(f"{base}/approvals/{request_id}")
+            retry = await cluster.client.post(f"{base}/dispatches", json=body)
+            assert status.status_code == 200 and retry.status_code == 202
+            for response in (status, retry):
+                assert response.json()["approval_status"] == "REJECTED"
+                assert response.json()["revalidated_metrics"]["approval_decision"] == evidence
+            restored = DispatchService(cluster.client, cluster.config, clock, repository)
+            await restored.start()
+            assert restored.approval_view(request_id)["revalidated_metrics"]["approval_decision"] == evidence
+            assert not cluster.fleet.vehicles["ev-1"]["claims"]
+            assert not cluster.facilities.holds
+
     asyncio.run(scenario())

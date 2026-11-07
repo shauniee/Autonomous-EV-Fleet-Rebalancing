@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Dispatch, Facility, Vehicle, Zone } from '../api/contracts';
-import { Badge, number, position, time } from './format';
+import { number, position, time } from './format';
+import { approvalDetails, approvalLabels, approvalStatus, journeyIssue, journeyLabel } from './approvalMessages';
 import type { Notify } from './Notifications';
 import { OperationalTabs } from './OperationalTabs';
 import { RecoveryControl } from './RecoveryControl';
@@ -49,25 +50,16 @@ function needsRelocationResolution(dispatch: Dispatch, vehicle?: Vehicle) {
     || dispatch.state === 'REJECTED' && (dispatch.claim_held !== false || dispatch.parking_status === 'RESERVED')
     || dispatch.claim_held !== false && (vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
 }
-function relocationIssue({ state, failure_reason }: Dispatch) {
-  switch (failure_reason) {
-    case 'OPERATOR_ENDED_RELOCATION': return 'Ended by an operator.';
-    case 'OPERATOR_CLOSED_UNSTARTED_APPROVAL': return 'Approval closed before the relocation started.';
-    case 'PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST': return 'Approval paused before a vehicle was assigned.';
-    case 'VEHICLE_OFFLINE_OR_STALE': return 'Vehicle updates are unavailable. Check the relocation status.';
-    case 'ACK_TIMEOUT': return 'The vehicle has not confirmed the move. Check the relocation status.';
-    case 'PROGRESS_TIMEOUT': return 'Vehicle updates stopped. Check the relocation status.';
-  }
-  if (state === 'UNKNOWN') return 'The relocation status is unclear. Check for an update.';
-  if (state === 'FAILED') return 'The relocation could not be completed.';
-  if (state === 'REJECTED') return 'The relocation was not approved.';
-  if (failure_reason && state === 'ARRIVAL_PENDING') return 'Arrival has not been confirmed yet.';
-  return null;
-}
-
 function RelocationIssue({ dispatch }: { dispatch: Dispatch }) {
-  const issue = relocationIssue(dispatch);
-  return issue && <p className={dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION' ? 'muted' : 'warning'} role="status">{issue}</p>;
+  const status = approvalStatus(dispatch);
+  const evidence = dispatch.revalidated_metrics?.approval_decision;
+  const issue = status === 'APPROVED' ? journeyIssue(dispatch.state, dispatch.failure_reason) : '';
+  return <>
+    <p className={status === 'APPROVED' ? 'muted' : 'warning'}><strong>Approval {approvalLabels[status].toLowerCase()}.</strong>
+      {' '}{approvalDetails(status, evidence, status === 'APPROVED' ? null : dispatch.failure_reason)}
+    </p>
+    {issue && <p className={dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION' ? 'muted' : 'warning'} role="status">{issue}</p>}
+  </>;
 }
 
 function DispatchRow({ dispatch, vehicle, origin, destination, onTrack, notify }: {
@@ -82,7 +74,7 @@ function DispatchRow({ dispatch, vehicle, origin, destination, onTrack, notify }
   const ended = dispatch.failure_reason === 'OPERATOR_ENDED_RELOCATION';
   const showResolution = needsRelocationResolution(dispatch, vehicle) || ended;
   return <article id={`relocation-${dispatch.dispatch_id}`} tabIndex={-1} className="dispatch-card" data-testid={`dispatch-${dispatch.dispatch_id}`}>
-    <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3><Badge value={dispatch.state}/></div>
+    <div className="section-title"><h3>{dispatch.vehicle_id ?? 'Unassigned EV'}</h3>{approvalStatus(dispatch) === 'APPROVED' && <span>{ended ? 'Ended' : journeyLabel(dispatch.state)}</span>}</div>
     <RelocationIssue dispatch={dispatch}/>
     <RelocationRoute dispatch={dispatch} origin={origin} destination={destination}/>
     <dl className="candidate-metrics"><div><dt>Distance travelled</dt><dd>{number(dispatch.distance_travelled_km, ' km')}</dd></div>
@@ -121,7 +113,7 @@ export function RelocationPanel({
   const vehicleById = new Map(vehicles.map(vehicle => [vehicle.vehicle_id, vehicle]));
   const zoneNames = new Map(zones.map(zone => [zone.zone_id, zone.name]));
   const facilityById = new Map(facilities.map(facility => [facility.facility_id, facility]));
-  const vehicleIds = [...new Set(dispatches.map(dispatch => dispatch.vehicle_id ?? ''))].filter(Boolean).sort();
+  const vehicleIds = [...new Set(dispatches.map(dispatch => dispatch.vehicle_id ?? dispatch.revalidated_metrics?.approval_decision?.vehicle_id ?? ''))].filter(Boolean).sort();
   const destinationIds = [...new Set(dispatches.map(dispatch => dispatch.command?.target_zone_id ?? ''))]
     .filter(Boolean)
     .sort((a, b) => (zoneNames.get(a) ?? a).localeCompare(zoneNames.get(b) ?? b));
@@ -130,7 +122,9 @@ export function RelocationPanel({
 
   const matches = [];
   for (const dispatch of dispatches) {
-    const { vehicle_id, parking_facility_id } = dispatch;
+    const approval = dispatch.revalidated_metrics?.approval_decision;
+    const vehicle_id = dispatch.vehicle_id ?? approval?.vehicle_id;
+    const parking_facility_id = dispatch.parking_facility_id ?? approval?.facility_id;
     const recordedOrigin = dispatch.revalidated_metrics?.origin;
     const originZoneId = recordedOrigin?.zone_id ?? '';
     const originFacilityId = recordedOrigin?.facility_id ?? '';
@@ -277,7 +271,7 @@ export function RelocationPanel({
                 origin={origin} destination={destination} onTrack={onTrack} notify={notify}/>
             : <article key={dispatch.dispatch_id} id={`relocation-${dispatch.dispatch_id}`}
                 className="dispatch-card" tabIndex={-1} data-testid={`dispatch-${dispatch.dispatch_id}`}>
-                <div className="section-title"><h3>Unassigned EV</h3><Badge value={dispatch.state}/></div>
+                <div className="section-title"><h3>{dispatch.revalidated_metrics?.approval_decision?.vehicle_id ?? 'Unassigned EV'}</h3></div>
                 <RelocationIssue dispatch={dispatch}/>
                 <RelocationRoute dispatch={dispatch} origin={origin} destination={destination}/>
                 {dispatch.state === 'UNKNOWN' && dispatch.claim_held === false && !dispatch.command &&

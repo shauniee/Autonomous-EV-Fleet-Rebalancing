@@ -120,12 +120,14 @@ describe('dispatcher dashboard', () => {
     expect(within(dialog).getByText('bishan')).toBeInTheDocument();
     expect(within(dialog).getByText('85%')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Approve 1 EV' }));
-    await openNotifications().findByText(/Dispatch dispatch-1:/);
+    await openNotifications().findByText(/ev-01 · Approved/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
   it('does not report HTTP 202 with a rejected dispatch as approved', async () => {
     const rejected = makeDispatch();
     rejected.state = 'REJECTED';
+    rejected.claim_held = false;
+    rejected.acknowledged_at = null;
     rejected.failure_reason = 'ONEMAP_ROUTE_REQUIRED';
     const fetch = server();
     const base = fetch.getMockImplementation()!;
@@ -138,7 +140,8 @@ describe('dispatcher dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
     const notifications = openNotifications();
-    expect(await notifications.findByText(/ONEMAP_ROUTE_REQUIRED/)).toBeVisible();
+    expect(await notifications.findByText(/could not verify a usable road route/)).toBeVisible();
+    expect(notifications.queryByText(/ONEMAP_ROUTE_REQUIRED/)).not.toBeInTheDocument();
     expect(notifications.getByText('Error')).toBeVisible();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
@@ -158,11 +161,11 @@ describe('dispatcher dashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
     const notifications = openNotifications();
-    expect(await notifications.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeVisible();
+    expect(await notifications.findByText(/Approval is still unconfirmed/)).toBeVisible();
     expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
     fireEvent.click(notifications.getByRole('button', { name: 'Clear activity' }));
     expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
-    expect(notifications.queryByText(/approval not yet confirmed/)).not.toBeInTheDocument();
+    expect(notifications.queryByText(/Approval is still unconfirmed/)).not.toBeInTheDocument();
     fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
@@ -283,7 +286,7 @@ describe('dispatcher dashboard', () => {
     const view = render(<App/>); await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    await openNotifications().findByText(/Approval outcome uncertain/);
+    await openNotifications().findByText(/Approval is still unconfirmed/);
     view.unmount(); render(<App/>);
     fireEvent.click(openNotifications().getByRole('button', { name: 'Retry same approval' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
@@ -380,7 +383,7 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Confirm 1 EV relocation');
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
     const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });
-    expect(result).toHaveTextContent('APPROVED');
+    expect(result).toHaveTextContent('Approved');
     const submissions = fetch.mock.calls.filter(([path, init]) =>
       path === '/api/dispatch/batches' && init?.method === 'POST');
     expect(submissions).toHaveLength(1);
@@ -687,5 +690,69 @@ describe('CRDS recommendation explanations', () => {
     expect(result).toHaveTextContent('used the remaining parking spaces');
     expect(result).not.toHaveTextContent('CAPACITY_OR_STOCK_LIMIT');
     expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeEnabled();
+  });
+});
+
+describe('approval decision explanations', () => {
+  it('shows a structured rejection in Notifications and relocation history', async () => {
+    const evidence = { status: 'REJECTED' as const, reason_code: 'PARKING_FULL', vehicle_id: 'ev-01' };
+    const rejected = { ...makeDispatch(), state: 'REJECTED', vehicle_id: null, command: null,
+      claim_held: false, acknowledged_at: null, failure_reason: 'PARKING_DESTINATION_CHANGED',
+      revalidated_metrics: { approval_decision: evidence } };
+    const reference = '11ee1111-1111-4111-8111-111111111111';
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    let submitted = false;
+    fetch.mockImplementation(async (input, init) => {
+      if (String(input) !== '/api/dispatch/dispatches') return base(input, init);
+      if (init?.method === 'POST') {
+        submitted = true;
+        return new Response(JSON.stringify({ error: { code: rejected.failure_reason,
+          request_id: reference, approval_decision: evidence } }), { status: 409 });
+      }
+      return new Response(JSON.stringify({ dispatches: submitted ? [rejected] : [] }));
+    });
+    render(<App/>);
+    await selectAndRecommend();
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/parking space is no longer available/)).toHaveTextContent(reference);
+    expect(notifications.queryByText(/PARKING_DESTINATION_CHANGED/)).not.toBeInTheDocument();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
+    const history = await screen.findByTestId('dispatch-dispatch-1');
+    expect(history).toHaveTextContent('ev-01');
+    expect(history).toHaveTextContent('Approval rejected.');
+    expect(history).toHaveTextContent('The parking space is no longer available.');
+  });
+
+  it('uses a safe fallback for an unreadable HTTP error and explains the same request after lookup', async () => {
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    let requestId = '';
+    fetch.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/dispatch/dispatches' && init?.method === 'POST') {
+        requestId = JSON.parse(String(init.body)).request_id;
+        return new Response(JSON.stringify({ error: { code: { unexpected: true }, approval_decision: 'bad' } }),
+          { status: 503 });
+      }
+      if (String(input) === `/api/dispatch/approvals/${requestId}`) {
+        return new Response(JSON.stringify({ ...makeDispatch(), request_id: requestId, state: 'FAILED',
+          approval_status: 'APPROVED', failure_reason: 'BATTERY_DEPLETED',
+          revalidated_metrics: { approval_decision: { status: 'APPROVED', reason_code: 'CRDS_APPROVAL_CONFIRMED' } },
+        }));
+      }
+      return base(input, init);
+    });
+    render(<App/>);
+    await selectAndRecommend();
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/Approval is still unconfirmed/)).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Check status' }));
+    expect(await notifications.findByText(/ev-01 · Approved/)).toHaveTextContent('ran out of battery during relocation');
+    expect(notifications.queryByText(/BATTERY_DEPLETED|unexpected/)).not.toBeInTheDocument();
   });
 });

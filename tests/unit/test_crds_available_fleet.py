@@ -409,3 +409,51 @@ def test_eligible_ev_below_benefit_threshold_is_not_excluded(observations, clock
     rows = result.metadata.source_references["decision_evidence"]["vehicles"]
     assert {row["outcome"] for row in rows.values()} == {"NOT_SELECTED"}
     assert {row["reason"] for row in rows.values()} == {"NO_USEFUL_MOVE"}
+
+
+@pytest.mark.parametrize("reason,outcome,gain", [
+    ("NO_USEFUL_MOVE", "NOT_SELECTED", 0.5),
+    ("RENTED", "EXCLUDED", None),
+])
+def test_dispatch_preserves_fresh_crds_rejection_reason(clock, monkeypatch, reason, outcome, gain):
+    monkeypatch.setenv("CRDS_MODE", "ACTIVE")
+    monkeypatch.setenv("DISPATCH_URL", "http://dispatch.test")
+
+    async def scenario():
+        cluster = Cluster(clock)
+        route = cluster.route
+
+        async def respond(request):
+            response = await route(request)
+            if request.url.path != "/api/v1/crds/revalidate":
+                return response
+            assert response.status_code == 200
+            await response.aread()
+            payload = response.json()
+            metadata = payload["metadata"]
+            metadata.update(decision="HOLD", approval_allowed=False,
+                            reason_code="NO_USEFUL_MOVE" if gain is not None else "NO_ELIGIBLE_RELOCATIONS")
+            row = metadata["source_references"]["decision_evidence"]["vehicles"][selected]
+            row.update(outcome=outcome, reason=reason, gain_vehicle_minutes=gain)
+            return httpx.Response(200, json={**payload, "allowed": False})
+
+        monkeypatch.setattr(cluster, "route", respond)
+        async with cluster:
+            for zone_id in cluster.demand.zones:
+                await cluster.demand.update(zone_id, "demand", DemandUpdate(expected_version=0,
+                    observed_at=clock.now(), desired_available_vehicles=6 if zone_id == "cbd" else 0))
+            for name in ("healthy", "healthy-2"):
+                await cluster.vehicle(name)
+            recommendation = await cluster.recommend()
+            selected = recommendation["selected_vehicle_id"]
+            rejected = await cluster.client.post("http://dispatch.test/api/v1/dispatches", json={
+                "request_id": str(uuid4()), "recommendation_id": recommendation["recommendation_id"]})
+            assert rejected.status_code == 409
+            error = rejected.json()["error"]
+            assert error["code"].startswith("CRDS_BENEFIT_CHANGED:")
+            assert error["approval_decision"]["reason_code"] == reason
+            assert error["approval_decision"].get("gain_vehicle_minutes") == gain
+            assert not cluster.fleet.vehicles[selected]["claims"]
+            assert not cluster.facilities.holds
+
+    asyncio.run(scenario())

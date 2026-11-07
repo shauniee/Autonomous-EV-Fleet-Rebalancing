@@ -206,6 +206,15 @@ main { width: 100%; max-width: 1880px; margin: 0 auto; padding: 28px var(--page-
 table { font-size: 12px; }
 th { padding: 13px 14px; background: var(--surface-soft); font-weight: 680; letter-spacing: .045em; }
 td { padding: 14px; }
+.batch-approval-table { table-layout: fixed; }
+.batch-approval-table th:first-child { width: 23%; }
+.batch-approval-table th, .batch-approval-table td { overflow-wrap: anywhere; white-space: normal; }
+.batch-approval-table td { vertical-align: top; }
+.batch-approval-table button { margin-top: 6px; }
+@media (max-width: 600px) {
+  .batch-approval-table th, .batch-approval-table td { padding: 9px; }
+  .batch-approval-table button { padding-inline: 8px; }
+}
 tbody tr:hover { background: var(--surface-soft); }
 tbody tr:last-child td { border-bottom: 0; }
 .dispatch-card, .facility-card { border-radius: 11px; padding: 17px; background: var(--surface); }

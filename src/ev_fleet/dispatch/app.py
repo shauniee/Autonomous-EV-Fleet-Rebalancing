@@ -2,13 +2,15 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from uuid import UUID
 import httpx
-from fastapi import Header
+from fastapi import Header, Request
+from fastapi.responses import JSONResponse
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
 from .routing import road_match_spawn
 from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
+from .approval_evidence import ApprovalCheckError
 from .recovery import assess_recovery
 from .resolution import assess_resolution, reconcile_relocation, request_end, stop_intent
 from ev_fleet.contracts.recovery import (RelocationEndRequest, RelocationResolutionAssessment,
@@ -47,9 +49,15 @@ def create_app(settings=None, client=None, clock=None, background=True):
         return await road_match_spawn(service.client, service.routing, position.model_dump())
 
     @app.post("/api/v1/dispatches", status_code=202, response_model=DispatchApprovalResult)
-    async def approve(body: DispatchApproval):
+    async def approve(body: DispatchApproval, request: Request):
         service = app.state.service
-        await service.approve(body)
+        try:
+            await service.approve(body)
+        except ApprovalCheckError as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": {
+                "code": exc.detail, "request_id": request.state.request_id,
+                "approval_decision": exc.decision.model_dump(mode="json", exclude_none=True),
+            }})
         return service.approval_view(body.request_id)
 
     @app.get("/api/v1/approvals/{request_id}", response_model=DispatchApprovalResult)

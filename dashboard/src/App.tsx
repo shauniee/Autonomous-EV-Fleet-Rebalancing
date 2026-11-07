@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyTheme, type Theme } from './theme';
 import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
-import { api, ApiError, message } from './api/client';
+import { api, ApiError } from './api/client';
 import { recommendationError } from './components/crdsMessages';
+import { approvalErrorMessage, approvalStatus, batchApprovalLabels, dispatchApprovalMessage } from './components/approvalMessages';
 import { usePendingApprovals } from './hooks/usePendingApprovals';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
@@ -119,10 +120,9 @@ export default function App() {
   useEffect(() => {
     for (const pending of pendingApprovals) {
       const matching = dispatches.data?.dispatches.find(d => d.request_id === pending.request_id);
-      if (matching && (matching.claim_held === true || ['REJECTED', 'FAILED', 'SUCCEEDED'].includes(matching.state))) {
+      if (matching && approvalStatus(matching) !== 'UNKNOWN') {
         updateApproval(pending, false);
-        notify(matching.state === 'REJECTED' || matching.state === 'FAILED' ? 'error' : 'info',
-          `Dispatch ${matching.state}. ${matching.failure_reason || 'Follow its status in Relocations.'}`);
+        notify(approvalStatus(matching) === 'REJECTED' ? 'error' : 'info', dispatchApprovalMessage(matching));
       }
     }
   }, [dispatches.data, pendingApprovals, updateApproval, notify]);
@@ -189,24 +189,15 @@ export default function App() {
       const result = await api<DispatchApprovalResult>('/api/dispatch/dispatches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
       if (!mounted.current) return;
       if (result.command?.route) setSelectedDispatch(result.dispatch_id);
-      if (result.approval_status === 'UNKNOWN' || (!result.approval_status && (result.state === 'UNKNOWN' || result.claim_held !== true &&
-          !['REJECTED', 'FAILED', 'SUCCEEDED'].includes(result.state)))) {
-        // HTTP 202 only confirms the coordinator received the request, not
-        // that Fleet has acknowledged an atomic claim.
-        notify('warning', `Dispatch ${result.dispatch_id}: approval not yet confirmed (${result.state}). Reconcile or retry the same request ID.`);
-      } else {
-        updateApproval(approval, false);
-        if (result.state === 'REJECTED' || result.state === 'FAILED') {
-          notify('error', `Dispatch ${result.dispatch_id}: ${result.state} — ${result.failure_reason || 'Approval unsuccessful'}.`);
-        } else {
-          notify('info', `Dispatch ${result.dispatch_id}: ${result.state}. Follow its live backend status in Relocations.`);
-        }
-      }
+      const status = approvalStatus(result);
+      if (status !== 'UNKNOWN') updateApproval(approval, false);
+      notify(status === 'UNKNOWN' ? 'warning' : status === 'REJECTED' ? 'error' : 'info',
+        dispatchApprovalMessage(result));
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) {
-        updateApproval(approval, false); notify('error', `${message(error)}. Request a new recommendation before approving again.`);
-      } else notify('warning', `Approval outcome uncertain: ${message(error)}. Reconcile status or retry the same approval.`);
+        updateApproval(approval, false); notify('error', approvalErrorMessage(error, 'REJECTED'));
+      } else notify('warning', approvalErrorMessage(error, 'UNKNOWN'));
     } finally {
       submittingRef.current = false;
       if (mounted.current) { setSubmitting(false); dispatches.refresh(); fleet.refresh(); heat.refresh(); }
@@ -234,8 +225,8 @@ export default function App() {
       if (!mounted.current) return;
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && ![408, 429].includes(e.status)) {
         updateBatch(approval, false);
-        notify('error', `${message(e)}. Refresh the batch recommendation before approving again.`);
-      } else notify('warning', `Batch approval uncertain: ${message(e)}. Retry the same batch ID.`);
+        notify('error', approvalErrorMessage(e, 'REJECTED'));
+      } else notify('warning', approvalErrorMessage(e, 'UNKNOWN'));
     } finally {
       submittingRef.current = false;
       if (mounted.current) {
@@ -245,8 +236,7 @@ export default function App() {
   }
   function reportBatchOutcome(result: BatchDispatch) {
     notify(result.status === 'REJECTED' ? 'error' : result.status === 'PARTIAL' ? 'warning' : 'info',
-      result.status === 'REJECTED' ? 'Batch rejected. Request a fresh recommendation if needed.'
-        : `Batch outcome: ${result.status}. Follow admitted relocations in Relocations.`);
+      `Batch ${batchApprovalLabels[result.status].toLowerCase()}. See the batch results for each EV’s outcome.`);
   }
   const [checkingApproval, setCheckingApproval] = useState(false);
   async function checkApproval(requestId: string, close = false) {
@@ -255,13 +245,13 @@ export default function App() {
       const result = await api<DispatchApprovalResult>(`/api/dispatch/approvals/${requestId}${close ? '/close' : ''}`,
         close ? { method: 'POST' } : undefined);
       const pending = pendingApprovals.find(item => item.request_id === requestId);
-      if (pending && result.approval_status !== 'UNKNOWN') updateApproval(pending, false);
+      const status = approvalStatus(result);
+      if (pending && status !== 'UNKNOWN') updateApproval(pending, false);
       dispatches.refresh();
-      notify(result.approval_status === 'UNKNOWN' ? 'warning' : 'info',
-        result.approval_status === 'UNKNOWN' ? 'Approval is still unconfirmed. Retry the same request to continue.'
-          : `Approval ${(result.approval_status ?? result.state).toLowerCase()}. ${result.state === 'REJECTED' ? 'Request a fresh recommendation if needed.' : 'See Relocations for the journey.'}`);
+      notify(status === 'UNKNOWN' ? 'warning' : status === 'REJECTED' ? 'error' : 'info',
+        dispatchApprovalMessage(result));
     } catch (error) {
-      notify('warning', message(error));
+      notify('warning', approvalErrorMessage(error, 'UNKNOWN', true));
     } finally { setCheckingApproval(false); }
   }
   async function reconcileBatch(requestId: string, closeItem?: string) {
@@ -280,7 +270,7 @@ export default function App() {
       setOperationalTab('dispatch');
       dispatches.refresh();
     } catch (error) {
-      notify('warning', message(error));
+      notify('warning', approvalErrorMessage(error, 'UNKNOWN', true));
     } finally { setCheckingApproval(false); }
   }
 
