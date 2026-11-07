@@ -1,7 +1,10 @@
-import type { DispatchList, Fleet, HeatMap } from '../api/contracts';
+import type { DispatchList, Fleet, HeatMap, Zone } from '../api/contracts';
 import type { Resource } from '../hooks/usePolling';
 
+import type { DemandLevel } from './DemandThresholds';
+
 interface Props {
+  rentalDemandLevel: (zone: Zone) => DemandLevel;
   fleet: Resource<Fleet>;
   heat: Resource<HeatMap>;
   dispatches: Resource<DispatchList>;
@@ -27,14 +30,15 @@ function Metric({ label, value, description, tone }: {
 }
 
 /** Read-only summary. Never use these display counts to enable dispatch approval. */
-export function FleetPulse({ fleet, heat, dispatches, now }: Props) {
+export function FleetPulse({ fleet, heat, dispatches, now, rentalDemandLevel }: Props) {
   const vehicles = current(fleet, now) ? fleet.data.vehicles : null;
   const zones = current(heat, now) && heat.data.status === 'COMPLETE' ? heat.data.zones : null;
   const records = current(dispatches, now) ? dispatches.data.dispatches : null;
 
   const online = vehicles?.filter(v => !v.stale && v.connectivity === 'ONLINE').length ?? null;
   const available = vehicles?.filter(v => v.effective_availability === 'AVAILABLE').length ?? null;
-  const critical = zones?.filter(z => z.hotspot_severity === 'CRITICAL').length ?? null;
+  const critical = zones?.some(zone => rentalDemandLevel(zone) === 'Unknown') ? null :
+    zones?.filter(zone => rentalDemandLevel(zone) === 'Critical').length ?? null;
   const open = records?.filter(d => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).length ?? null;
 
   return <section className="fleet-pulse" aria-labelledby="fleet-pulse-title">
@@ -46,7 +50,7 @@ export function FleetPulse({ fleet, heat, dispatches, now }: Props) {
       <Metric label="Reporting EVs" value={online} description="Fresh telemetry"/>
       <Metric label="Available EVs" value={available} description="Eligible availability state" tone="accent"/>
       <Metric label="Open dispatches" value={open} description="Including unresolved outcomes"/>
-      <Metric label="Critical zones" value={critical} description="Demand hotspots" tone={critical ? 'warning' : undefined}/>
+      <Metric label="Critical demand zones" value={critical} description="Zones at or above the critical threshold" tone={critical ? 'warning' : undefined}/>
     </dl>
   </section>;
 }

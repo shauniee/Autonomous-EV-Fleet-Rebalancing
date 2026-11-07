@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { demandLevel } from '../src/components/DemandThresholds';
 import { FleetPulse } from '../src/components/FleetPulse';
 import { makeDispatch, makeFleet, makeHeat } from './fixtures';
 
@@ -24,6 +25,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: fleet, updatedAt }}
       heat={{ data: heat, updatedAt }}
       dispatches={{ data: { dispatches: [unresolved, completed] }, updatedAt }}
+      rentalDemandLevel={zone => demandLevel(zone, { moderate: 5, critical: 10 })}
       now={now}
     />);
 
@@ -31,7 +33,7 @@ describe('operational dashboard snapshot', () => {
     expect(metric('Reporting EVs').getByText('1')).toBeInTheDocument();
     expect(metric('Available EVs').getByText('1')).toBeInTheDocument();
     expect(metric('Open dispatches').getByText('1')).toBeInTheDocument();
-    expect(metric('Critical zones').getByText('1')).toBeInTheDocument();
+    expect(metric('Critical demand zones').getByText('6')).toBeInTheDocument();
   });
 
   it('does not turn stale, unavailable or partial service data into zero counts', () => {
@@ -44,11 +46,12 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: makeFleet(), updatedAt: old }}
       heat={{ data: heat, updatedAt: fresh }}
       dispatches={{ data: { dispatches: [] }, error: 'Connection lost', updatedAt: fresh }}
+      rentalDemandLevel={zone => demandLevel(zone, { moderate: 5, critical: 10 })}
       now={now}
     />);
     expect(metric('Reporting EVs').getByLabelText('Reporting EVs: unavailable')).toHaveTextContent('—');
     expect(metric('Available EVs').getByLabelText('Available EVs: unavailable')).toHaveTextContent('—');
-    expect(metric('Critical zones').getByLabelText('Critical zones: unavailable')).toHaveTextContent('—');
+    expect(metric('Critical demand zones').getByLabelText('Critical demand zones: unavailable')).toHaveTextContent('—');
     expect(metric('Open dispatches').getByLabelText('Open dispatches: unavailable')).toHaveTextContent('—');
     expect(screen.getAllByText('Awaiting current data')).toHaveLength(4);
   });
@@ -64,9 +67,10 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: fleet, updatedAt }}
       heat={{ data: heat, updatedAt }}
       dispatches={{ data: { dispatches: [] }, updatedAt }}
+      rentalDemandLevel={zone => demandLevel(zone, { moderate: 5, critical: 10 })}
       now={now}
     />);
-    for (const label of ['Reporting EVs', 'Available EVs', 'Open dispatches', 'Critical zones']) {
+    for (const label of ['Reporting EVs', 'Available EVs', 'Open dispatches', 'Critical demand zones']) {
       expect(metric(label).getByText('0')).toBeInTheDocument();
     }
   });

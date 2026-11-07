@@ -48,6 +48,7 @@ export interface Zone {
 export interface HeatMap {
   generated_at: string; demand_snapshot_at: string; fleet_snapshot_at: string | null;
   status: string; issues: string[]; fleet_status: string; zones: Zone[];
+  policy?: { medium_demand: number; high_demand: number };
 }
 export interface ChargerAdvice {
   vehicle_id: string; current_soc_pct: number;

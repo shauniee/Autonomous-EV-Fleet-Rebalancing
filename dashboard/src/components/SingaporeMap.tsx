@@ -7,7 +7,9 @@ import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } fro
 import { RouteDetails } from './RouteDetails';
 import { planConfirmedMotion, routeForVehicle, type MotionSample } from './confirmedMotion';
 import { liveTrafficIconKind, mapIcon, mapSymbols, simulatedTrafficIconKind } from './mapIcons';
-const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
+import type { DemandLevel } from './DemandThresholds';
+
+const colours = { Low: '#258371', Moderate: '#bc790b', Critical: '#ce5147', Unknown: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
 const reportedPositions = new WeakMap<L.Marker, L.LatLng>();
 
@@ -50,7 +52,8 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget }: {
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget, rentalDemandLevel }: {
+  rentalDemandLevel: (zone: Zone) => DemandLevel;
   zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
   focusTarget?: { dispatchId: string } | { facility: Facility } | null;
@@ -179,19 +182,20 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     if (!visible.zones) return;
     const layer = L.layerGroup().addTo(map.current);
     for (const zone of shownZones) {
+      const level = rentalDemandLevel(zone);
       // Text nodes prevent backend names from being interpreted as HTML.
       const label = document.createElement('span');
-      label.textContent = `${zone.name} · ${zone.hotspot_severity}`;
+      label.textContent = `${zone.name} · ${level} rental demand`;
       const selectedZone = selected === zone.zone_id;
-      const critical = zone.hotspot_severity === 'CRITICAL';
+      const critical = level === 'Critical';
       L.circleMarker([zone.position.latitude, zone.position.longitude], {
         radius: critical ? 26 : selectedZone ? 23 : 14,
-        color: colours[zone.hotspot_severity], fillColor: colours[zone.hotspot_severity],
+        color: colours[level], fillColor: colours[level],
         fillOpacity: selectedZone ? .58 : .5, weight: selectedZone ? 4 : 2,
       }).bindTooltip(label).on('click', () => onSelect(zone.zone_id)).addTo(layer);
     }
     return () => { layer.remove(); };
-  }, [mapVisible, zones, shownZones, selected, onSelect, visible.zones]);
+  }, [mapVisible, zones, shownZones, selected, onSelect, visible.zones, rentalDemandLevel]);
   useEffect(() => {
     const group = markers.current;
     if (!group) return;

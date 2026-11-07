@@ -32,7 +32,7 @@ function server(overrides: Record<string, unknown> = {}) {
   });
 }
 async function selectAndRecommend() {
-  fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
   await screen.findByTestId('recommendation');
 }
@@ -70,31 +70,45 @@ describe('dispatcher dashboard', () => {
     });
   });
 
-  it('renders all zones using backend severity, independently of high raw demand', async () => {
-    server(); render(<App/>);
-    expect(await screen.findByRole('button', { name: /Bishan NORMAL/ })).toBeInTheDocument();
-    expect(within(screen.getByLabelText('Select target zone')).getAllByRole('button')).toHaveLength(6);
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
-    expect(screen.getByText('Current shortage')).toBeInTheDocument();
-    expect(screen.getByText('Projected shortage')).toBeInTheDocument();
-  });
-  it('collects hotspot severity changes in Notifications without emitting a toast', async () => {
+  it('shows one Low demand badge per zone when the configured Low range includes 10 EVs', async () => {
     const heat = makeHeat();
+    for (const zone of heat.zones) zone.hotspot_severity = 'CRITICAL';
     server({ '/api/demand/heat-map': heat });
     render(<App/>);
-    await screen.findByRole('button', { name: /Bishan NORMAL/ });
+    await screen.findByRole('button', { name: /Bishan Critical/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit thresholds' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Moderate starts at' }), { target: { value: '11' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Critical starts at' }), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply thresholds' }));
+
+    const zones = within(screen.getByRole('group', { name: 'Select target zone' }));
+    expect(zones.getAllByText('Low')).toHaveLength(6);
+    expect(zones.queryByText(/^critical$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    fireEvent.click(zones.getByRole('button', { name: /CBD Low/ }));
+    expect(screen.getByText('Current shortage')).toBeInTheDocument();
+    expect(screen.getByText('Projected shortage')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Demand details' }));
+    expect(within(screen.getByRole('complementary', { name: 'Demand & supply' })).getByText('Low')).toBeVisible();
+  });
+
+  it('collects configured demand level changes in Notifications without emitting a toast', async () => {
+    const heat = makeHeat();
+    heat.zones[1].rental_demand = 3;
+    server({ '/api/demand/heat-map': heat });
+    render(<App/>);
+    await screen.findByRole('button', { name: /Bishan Low/ });
     expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
 
-    heat.zones[1].hotspot_severity = 'CRITICAL';
+    heat.zones[1].rental_demand = 10;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
     await screen.findByRole('button', { name: 'Notifications, 1 to review' });
 
-    expect(screen.queryByRole('status', { name: 'Hotspot updates' })).not.toBeInTheDocument();
     const notifications = openNotifications();
-    expect(notifications.getByText('Bishan hotspot severity changed from NORMAL to CRITICAL.')).toBeVisible();
+    expect(notifications.getByText('Bishan rental demand changed from Low to Critical.')).toBeVisible();
     fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
-    expect(openNotifications().getByText(/Bishan hotspot severity changed/)).toBeVisible();
+    expect(openNotifications().getByText(/Bishan rental demand changed/)).toBeVisible();
   });
 
   it('separates recommendation from approval and shows backend explanation', async () => {
@@ -158,7 +172,7 @@ describe('dispatcher dashboard', () => {
     const heat = makeHeat(); heat.status = 'PARTIAL'; heat.fleet_status = 'UNAVAILABLE'; heat.issues = ['FLEET_UNAVAILABLE'];
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';
     server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': new Error('Fleet down') }); render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: /CBD UNKNOWN/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     expect(await openNotifications().findByText(/FLEET_UNAVAILABLE/)).toBeVisible();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled();
@@ -250,9 +264,9 @@ describe('dispatcher dashboard', () => {
     const fetch = server(); const base = fetch.getMockImplementation()!;
     let finish!: (response: Response) => void;
     fetch.mockImplementation((input, init) => String(input).includes('recommendations') ? new Promise(resolve => { finish = resolve; }) : base(input, init));
-    render(<App/>); fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    render(<App/>); fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
-    fireEvent.click(screen.getByRole('button', { name: /Bishan NORMAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Bishan Critical/ }));
     finish(new Response(JSON.stringify(makeRecommendation())));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
     expect(screen.queryByTestId('recommendation')).not.toBeInTheDocument();
@@ -293,7 +307,7 @@ describe('dispatcher dashboard', () => {
     expect(facility).toHaveTextContent('6 / 12');
     expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps observations available but blocks new destinations when the provider is unknown', async () => {
@@ -301,7 +315,7 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
     expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled());
   });
   it('marks rented EVs and expected end times from Fleet without breaking zone selection', async () => {
@@ -321,7 +335,7 @@ describe('dispatcher dashboard', () => {
     expect(detail).toHaveTextContent('Rented');
     expect(detail).toHaveTextContent('Expected return');
     fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
 
@@ -352,7 +366,7 @@ describe('dispatcher dashboard', () => {
       '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     });
     render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs' }));
     expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 3 EVs recommended');
@@ -405,7 +419,7 @@ describe('dispatcher dashboard', () => {
     expect(card).toHaveTextContent('Charging bays availableUnknown');
     expect(screen.getByText(/LTA charging: ERROR/)).toHaveTextContent('LTA_AUTH_FAILED');
     fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
     await screen.findByTestId('batch-recommendation');
     const requests = fetch.mock.calls.filter(([path, init]) =>

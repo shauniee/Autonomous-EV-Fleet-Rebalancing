@@ -13,9 +13,9 @@ export function ServiceStatus({ name, resource }: { name: string; resource: Reso
     <small>{time(resource.updatedAt)} SGT</small>
   </span>;
 }
-export function ZoneDetails({ zone }: { zone: Zone }) {
-  return <><div className="section-title"><h2>{zone.name}</h2><Badge value={zone.hotspot_severity}/></div>
-    <p className="muted">{zone.zone_id} · Demand {zone.demand_level} · {zone.data_quality}</p>
+export function ZoneDetails({ zone, rentalDemandLevel }: { zone: Zone; rentalDemandLevel: string }) {
+  return <><div className="section-title"><h2>{zone.name}</h2><Badge value={rentalDemandLevel}/></div>
+    <p className="muted">{zone.zone_id} · {zone.data_quality}</p>
     <dl className="metrics">
       <div><dt>Rental demand</dt><dd>{number(zone.rental_demand)}</dd></div>
       <div><dt>Available EVs</dt><dd>{number(zone.available_evs)}</dd></div>

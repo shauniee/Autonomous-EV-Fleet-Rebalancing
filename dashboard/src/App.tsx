@@ -17,12 +17,19 @@ import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPa
 import { Badge, number, time } from './components/format';
 import { DispatchConfirmation, FleetPanel, RecommendationPanel, ServiceStatus, ZoneDetails } from './components/Panels';
 import { RelocationPanel } from './components/RelocationPanel';
+import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
 
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
+  const [customThresholds, setCustomThresholds] = useState(readDemandThresholds);
+  const defaultThresholds = defaultDemandThresholds(heat.data?.policy);
+  const thresholds = customThresholds ?? defaultThresholds;
+  const { moderate, critical } = thresholds;
+  const rentalDemandLevel = useCallback((zone: HeatMap['zones'][number]) =>
+    heat.error ? 'Unknown' : demandLevel(zone, { moderate, critical }), [heat.error, moderate, critical]);
   const fleet = usePolling<Fleet>('/api/fleet/dashboard/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
@@ -78,22 +85,23 @@ export default function App() {
     const item = { id: ++activityId.current, tone, message, createdAt: new Date().toISOString() };
     setActivity(current => [item, ...current].slice(0, 20));
   }, []);
-  const hotspotZones = heat.data?.zones;
-  const previousSeverity = useRef(new Map<string, HeatMap['zones'][number]['hotspot_severity']>());
+  const demandZones = heat.data?.zones;
+  const previousDemandZones = useRef(new Map<string, HeatMap['zones'][number]>());
   useEffect(() => {
-    if (!hotspotZones) return;
-    const currentSeverity = new Map<string, HeatMap['zones'][number]['hotspot_severity']>();
-    for (const zone of hotspotZones) {
-      const before = previousSeverity.current.get(zone.zone_id);
-      const after = zone.hotspot_severity;
-      currentSeverity.set(zone.zone_id, after);
-      if (before !== undefined && before !== after) {
-        notify(after === 'CRITICAL' || after === 'WARNING' ? 'warning' : 'info',
-          `${zone.name} hotspot severity changed from ${before} to ${after}.`);
+    if (!demandZones || heat.error) return;
+    const currentZones = new Map(demandZones.map(zone => [zone.zone_id, zone]));
+    for (const zone of demandZones) {
+      const previous = previousDemandZones.current.get(zone.zone_id);
+      if (!previous) continue;
+      const before = rentalDemandLevel(previous);
+      const after = rentalDemandLevel(zone);
+      if (before !== after) {
+        notify(after === 'Critical' || after === 'Moderate' ? 'warning' : 'info',
+          `${zone.name} rental demand changed from ${before} to ${after}.`);
       }
     }
-    previousSeverity.current = currentSeverity;
-  }, [hotspotZones, notify]);
+    previousDemandZones.current = currentZones;
+  }, [demandZones, heat.error, rentalDemandLevel, notify]);
   const [confirming, setConfirming] = useState(false);
   const [pendingApprovals, updateApproval] = usePendingApprovals<Approval>(pendingKey, 'recommendation_id');
   const hasPending = pendingApprovals.length + pendingBatches.length > 0;
@@ -129,7 +137,7 @@ export default function App() {
   const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
   // An unknown provider must not fall back to a zone-only destination.
   const facilityWorkflow = facilities.data?.data_source !== 'MOCK' || quantity > 1 || purpose === 'CHARGE' || !!selectedVehicle;
-  const criticalZones = zones.filter(item => item.hotspot_severity === 'CRITICAL').length;
+  const criticalZones = zones.filter(item => rentalDemandLevel(item) === 'Critical').length;
   const feedIssues = [heat, fleet, dispatches, facilities].filter(resource => resource.error).length;
   const feedsReady = [heat, fleet, dispatches, facilities].every(resource => resource.data);
   const zone = zones.find(z => z.zone_id === selected);
@@ -366,9 +374,9 @@ export default function App() {
               <div className="section-title map-title"><h2 id="map-title">Singapore fleet map</h2><span className="muted">{zones.length ? `${zones.length} operating zones` : 'Awaiting zone feed'}</span></div>
               <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data}
                 telemetryFeedHealthy={fleetFeedHealthy} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch}
-                onSelectDispatch={setSelectedDispatch} focusTarget={mapFocus}/>
+                onSelectDispatch={setSelectedDispatch} focusTarget={mapFocus} rentalDemandLevel={rentalDemandLevel}/>
               {zone && <div className="compact-map-selection">
-                <strong>{zone.name}</strong><Badge value={zone.hotspot_severity}/>
+                <strong>{zone.name}</strong><Badge value={rentalDemandLevel(zone)}/>
                 <button onClick={() => {
                   setDemandDetails(true);
                   setCompactView('dispatch');
@@ -376,7 +384,7 @@ export default function App() {
                 }}>View demand</button>
               </div>}
               <div className="map-caption">
-                <div className="legend" aria-label="Demand severity">{['NORMAL', 'WARNING', 'CRITICAL', 'UNKNOWN'].map(value => <Badge key={value} value={value}/>)}</div>
+                <div className="legend" aria-label="Rental demand level"><span>Rental demand</span>{demandLevels.map(value => <Badge key={value} value={value}/>)}</div>
                 <p className="snapshot">Demand {time(heat.data?.demand_snapshot_at)} · Fleet {time(heat.data?.fleet_snapshot_at)} SGT</p>
               </div>
             </section>
@@ -384,20 +392,21 @@ export default function App() {
               <div className="inspector-header">
                 <h2 id="inspector-title" ref={inspectorTitle} tabIndex={-1}>{demandDetails ? 'Demand & supply' : result ? 'Recommendation' : 'Dispatch'}</h2>
                 {demandDetails ? <button onClick={() => { setDemandDetails(false); inspectorTitle.current?.focus(); }}>Back to {result ? 'recommendation' : 'dispatch'}</button>
-                  : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} critical ${criticalZones === 1 ? 'zone' : 'zones'}` : 'No critical zones')}</span>}
+                  : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} ${criticalZones === 1 ? 'zone' : 'zones'} with critical demand` : 'No zones with critical demand')}</span>}
               </div>
               <div className="inspector-body" ref={inspectorBody}>
                 {!result && !demandDetails && <>
+                  <DemandThresholds applied={thresholds} defaults={defaultThresholds} onApply={setCustomThresholds}/>
                   <div className="zone-list" role="group" aria-label="Select target zone">{zones.map(z =>
                     <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}>
-                      <strong>{z.name}</strong><Badge value={z.hotspot_severity}/>
+                      <strong>{z.name}</strong><Badge value={rentalDemandLevel(z)}/>
                       <small>{z.current_shortage == null ? 'Shortage unknown' : z.current_shortage ? `${z.current_shortage} short now` : 'No current shortage'}</small>
                     </button>)}</div>
                   {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
                   {!!zones.length && !zone && <p className="empty inspector-empty">Choose a zone to see its shortage and request a relocation.</p>}
                 </>}
-                {zone && (demandDetails ? <ZoneDetails zone={zone}/> : <section className="selected-demand" aria-label="Selected zone demand">
-                  <div className="section-title"><h3>{zone.name}</h3>{result ? <Badge value={zone.hotspot_severity}/> :
+                {zone && (demandDetails ? <ZoneDetails zone={zone} rentalDemandLevel={rentalDemandLevel(zone)}/> : <section className="selected-demand" aria-label="Selected zone demand">
+                  <div className="section-title"><h3>{zone.name}</h3>{result ? <Badge value={rentalDemandLevel(zone)}/> :
                     <button className="text-button" onClick={() => { setDemandDetails(true); inspectorTitle.current?.focus(); }}>Demand details</button>}</div>
                   {result ? <p className="muted">Shortage now {number(zone.current_shortage)} · Projected {number(zone.projected_shortage)}</p> : <>
                     <dl className="demand-figures">
@@ -464,7 +473,7 @@ export default function App() {
             onClose={item => void reconcileBatch(batchResult.request_id, item)}/>}
         </> },
         { id: 'fleet', label: 'Fleet', content: <>
-          <FleetPulse fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
+          <FleetPulse rentalDemandLevel={rentalDemandLevel} fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
           <FleetPanel vehicles={vehicles} initialVehicle={twinVehicle?.vehicle_id}/>
         </> },
         { id: 'relocations', label: 'Relocations',

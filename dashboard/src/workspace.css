@@ -414,3 +414,20 @@
   .notification-trigger, .notification-heading button, .notification-group-heading button,
   .map-filter, .map-reset, .selected-demand .text-button, .request-field .form-select, .request-count input { min-height: 44px; }
 }
+
+.demand-thresholds { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.demand-threshold-heading, .demand-threshold-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.demand-threshold-heading h3 { margin: 0; font-size: 13px; }
+.demand-thresholds button { min-height: 34px; padding: 5px 9px; }
+.demand-thresholds form > p { margin: 8px 0; }
+.demand-threshold-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.demand-threshold-fields label { display: grid; gap: 5px; font-weight: 600; }
+.demand-threshold-fields input { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; font: inherit; }
+.demand-threshold-fields input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.demand-ranges { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 0; padding: 0; list-style: none; }
+.demand-ranges li { display: inline-flex; align-items: center; gap: 4px; }
+.demand-threshold-actions { margin-top: 10px; }
+.demand-threshold-error { color: var(--error-text); }
+.demand-thresholds [role=status]:not(:empty) { margin-top: 6px; }
+.badge.low { background: var(--success-bg); color: var(--success-text); }
+.badge.moderate { background: var(--warning-bg); color: var(--warning-text); }

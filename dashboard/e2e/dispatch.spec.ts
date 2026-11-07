@@ -7,13 +7,13 @@ test.beforeEach(async ({ page }) => {
     contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#e4ede6"/><path d="M0 120H256M120 0V256" stroke="#d4dfd7"/></svg>',
   }));
 });
-test('select hotspot, recommend, explicitly approve, observe real relocation and arrival', async ({ page, request }) => {
+test('select demand zone, recommend, explicitly approve, observe real relocation and arrival', async ({ page, request }) => {
   const browserErrors: string[] = [];
   page.on('pageerror', error => browserErrors.push(error.message));
   let loadedTiles = 0;
   page.on('response', response => { if (response.url().includes('tile.openstreetmap.org') && response.ok()) loadedTiles++; });
   await page.goto('/');
-  await page.getByRole('button', { name: /^CBD CRITICAL/ }).click();
+  await page.getByRole('group', { name: 'Select target zone' }).getByRole('button', { name: /^CBD / }).click();
   await page.getByRole('button', { name: 'Recommend EV', exact: true }).click();
   await expect(page.getByTestId('recommendation')).toBeVisible();
   const before = await (await request.get('/api/fleet/vehicles')).json();
