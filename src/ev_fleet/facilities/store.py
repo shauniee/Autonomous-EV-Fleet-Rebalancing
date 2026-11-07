@@ -296,7 +296,6 @@ class FacilitiesStore:
                 self.version = previous_version
                 raise
             return self._vehicle_parking(vehicle_id)
-                "pending": any(entry["status"] == "RESERVED" for entry in entries)}
 
     async def parking_observation(self, vehicle_id, request_id):
         # Reads stay responsive during persistence, but uncommitted allocation

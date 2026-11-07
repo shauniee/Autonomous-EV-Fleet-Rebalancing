@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from copy import deepcopy
-from uuid import uuid4, uuid5
+from uuid import UUID, uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings, CrdsSettings
@@ -118,6 +118,7 @@ class DispatchService:
             "recommendations": self.store.recommendations,
             "batches": self.batches,
             "batch_recommendations": self.batch_recommendations,
+            "planning_revision": self.planning_revision,
         }
 
     @staticmethod
@@ -131,30 +132,12 @@ class DispatchService:
             "events": record.events,
             "event_sequence": record.event_sequence,
             "release_outcome": record.release_outcome,
+            "recovery": record.recovery,
+            "resolution": record.resolution,
         }
 
     def record_checkpoint(self, record):
         return deepcopy(self.durable_record(record))
-            records = {key: {
-                "data": record.data,
-                "claim_request": record.claim_request,
-                "parking_request": record.parking_request,
-                "claimed": record.claimed,
-                "ack": record.ack,
-                "events": record.events,
-                "event_sequence": record.event_sequence,
-                "release_outcome": record.release_outcome,
-                "recovery": record.recovery,
-                "resolution": record.resolution,
-            } for key, record in self.store.records.items()}
-            await self.repository.save({
-                "records": records,
-                "requests": self.store.requests,
-                "recommendations": self.store.recommendations,
-                "batches": self.batches,
-                "batch_recommendations": self.batch_recommendations,
-                "planning_revision": self.planning_revision,
-            })
 
     def transition(self, record, state, reason=None):
         if (record.data["state"], record.data["failure_reason"]) != (state, reason):
@@ -847,11 +830,19 @@ class DispatchService:
     async def reconcile_once(self):
         changed = False
         for record in list(self.store.records.values()):
-            if record.lock.locked() or (record.data["state"] in TERMINAL
-                and record.data["parking_status"] != "RESERVED"):
+            if record.lock.locked():
                 continue
             try:
+                if record.resolution and record.resolution["status"] in ("REQUESTED", "CLEANUP_PENDING"):
+                    await advance_resolution(self, record)
+                    continue
+                if record.recovery and not (record.resolution and record.resolution["status"] == "ENDED"):
+                    await self.recovery.advance(record)
+                if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
+                    continue
                 async with record.lock:
+                    if record.recovery and record.recovery["status"] == "REQUESTED":
+                        continue
                     before = self.record_checkpoint(record)
                     await self.refresh(record)
                     record_changed = self.durable_record(record) != before
@@ -867,21 +858,4 @@ class DispatchService:
     async def reconcile_loop(self):
         while True:
             await self.reconcile_once()
-            for record in list(self.store.records.values()):
-                if record.lock.locked():
-                    continue
-                try:
-                    if record.resolution and record.resolution["status"] in ("REQUESTED", "CLEANUP_PENDING"):
-                        await advance_resolution(self, record)
-                        continue
-                    if record.recovery and not (record.resolution and record.resolution["status"] == "ENDED"):
-                        await self.recovery.advance(record)
-                    if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
-                        continue
-                    async with record.lock:
-                        if not record.recovery or record.recovery["status"] != "REQUESTED":
-                            await self.refresh(record)
-                    await self.persist()
-                except Exception:
-                    logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])
             await asyncio.sleep(self.settings.reconcile_interval_seconds)
