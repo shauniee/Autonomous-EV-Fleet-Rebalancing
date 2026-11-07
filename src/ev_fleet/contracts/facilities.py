@@ -105,3 +105,4 @@ class VehicleParking(Model):
     vehicle_id: str
     parking: ParkedFacility | None = None
     pending: bool = False
+    access_position_missing: bool = False

@@ -52,6 +52,8 @@ class MovingNode:
         return response.json()
 
     async def register(self):
+        first_initialization = not self.initialized
+        parking_state = None
         state = await self.request("POST", self.fleet_url + "/api/v1/vehicles", {
             "vehicle_id": self.vehicle_id, "battery_capacity_kwh": self.movement.capacity,
             "consumption_kwh_per_km": self.movement.consumption})
@@ -60,34 +62,51 @@ class MovingNode:
         if not self.initialized and (state.get("active_claim") or state.get("active_rental") or state.get("active_charging_task") or previous and (
             previous.get("active_dispatch_id") or previous["relocation_state"] != "IDLE")):
             raise RuntimeError("Vehicle has an unresolved journey; refusing to overwrite its physical state")
-        if not self.initialized and previous:
+        if first_initialization and previous:
             # Resume the actual idle position/SOC; never reconstruct a journey.
             self.movement.position = previous["position"]
             self.movement.soc_pct = previous["soc_pct"]
             self.movement.odometer_km = previous.get("odometer_km") or 0.0
             self.movement.heading_deg = previous.get("heading_deg") or 0.0
-        if not self.initialized and self.road_match_initial:
+        if first_initialization and self.facilities_url:
+            # An occupied hold is durable physical state. Recover its validated
+            # road-access position before publishing from a restarted process.
+            parking_state = await self.refresh_parking(restore_position=True)
+        if (first_initialization and self.road_match_initial and parking_state
+                and parking_state["access_position_missing"]):
+            if parking_state["pending"] or not parking_state["parking"]:
+                raise RuntimeError("Legacy parking access repair requires an idle occupied hold")
+            matched_position = await self._road_match_position()
+            repaired = VehicleParking.model_validate(await self.request(
+                "PUT",
+                f"{self.facilities_url}/api/v1/vehicles/{self.vehicle_id}/parking/access-position",
+                matched_position,
+            )).model_dump(mode="json")
+            if (repaired["vehicle_id"] != self.vehicle_id
+                    or repaired["pending"]
+                    or repaired["access_position_missing"]
+                    or not repaired["parking"]
+                    or repaired["parking"]["position"] != matched_position):
+                raise RuntimeError("Parking access repair returned an invalid position")
+            self._apply_parking_state(repaired, restore_position=True)
+            if not self.parking_verified:
+                raise RuntimeError("Repaired parking access could not be verified")
+        elif first_initialization and self.road_match_initial and not self.movement.parking:
             # In OneMap mode, place an IDLE simulated EV on a routable road
             # before its first telemetry and before any journey can be claimed.
             # This is a one-time initialisation, not an in-flight teleport.
-            match = await self.request("POST", f"{self.dispatch_url}/api/v1/road-matches",
-                                       self.movement.position)
-            if (match.get("source") not in ("ONEMAP", "SIMULATED")
-                    or not isinstance(match.get("position"), dict)):
-                raise RuntimeError("Road matching returned an invalid position")
-            self.movement.position = match["position"]
-            self.movement.origin = match["position"].copy()
+            matched_position = await self._road_match_position()
+            self.movement.position = matched_position
+            self.movement.origin = matched_position.copy()
         session = await self.request("POST", f"{self.fleet_url}/api/v1/vehicles/{self.vehicle_id}/telemetry-sessions",
                                      {"request_id": self.session_request})
         self.session = session["session_id"]
         self.sequence = 0
         self.initialized = True
-        if self.facilities_url:
+        if self.facilities_url and not first_initialization:
             await self.refresh_parking()
 
-    async def refresh_parking(self):
-        previous_verified = self.parking_verified
-        previous_charging = self.movement.charging_state
+    async def refresh_parking(self, restore_position=False):
         # Keep the last verified state while Facilities is responding. Clearing
         # it before this await lets the concurrent telemetry loop publish a
         # transient UNAVAILABLE sample on every ordinary parking poll.
@@ -99,10 +118,27 @@ class MovingNode:
         except Exception:
             self._parking_authority_current()
             raise
+        self._apply_parking_state(state, restore_position)
+        return state
+
+    async def _road_match_position(self):
+        match = await self.request("POST", f"{self.dispatch_url}/api/v1/road-matches",
+                                   self.movement.position)
+        if (match.get("source") not in ("ONEMAP", "SIMULATED")
+                or not isinstance(match.get("position"), dict)):
+            raise RuntimeError("Road matching returned an invalid position")
+        return match["position"]
+
+    def _apply_parking_state(self, state, restore_position=False):
+        previous_verified = self.parking_verified
+        previous_charging = self.movement.charging_state
         self.movement.park(None)
         if state["pending"]:
             self.parking_verified = False
         elif state["parking"]:
+            if restore_position:
+                self.movement.position = state["parking"]["position"].copy()
+                self.movement.origin = self.movement.position.copy()
             self.parking_verified = self.movement.park(state["parking"])
         else:
             self.parking_verified = True

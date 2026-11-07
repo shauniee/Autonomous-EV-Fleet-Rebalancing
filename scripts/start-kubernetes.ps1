@@ -1,4 +1,4 @@
-param([switch]$SetupMetricsServer, [switch]$AllowInsecureLocalKubeletTls, [switch]$ConnectOnly, [switch]$CheckPostgresOnly)
+param([switch]$SetupMetricsServer, [switch]$AllowInsecureLocalKubeletTls, [switch]$ConnectOnly, [switch]$CheckPostgresOnly, [switch]$FreshBoot)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -81,8 +81,9 @@ function Resolve-Python {
     throw "Python is required to validate and render the whitelisted .env integration settings."
 }
 
-function Render-EnvArtifact([hashtable]$Python, [string[]]$Mode = @()) {
+function Render-EnvArtifact([hashtable]$Python, [string[]]$Mode = @(), [switch]$FileOnly) {
     $arguments = @($Python.Prefix) + @("scripts\render_facilities_secret.py", ".env") + $Mode
+    if ($FileOnly) { $arguments += "--file-only" }
     $output = (& $Python.Executable @arguments) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0 -or -not $output) {
         throw "Unable to validate and render integration settings from .env."
@@ -220,6 +221,7 @@ if (-not ($ConnectOnly -or $CheckPostgresOnly)) { Require-Command docker }
 if ($AllowInsecureLocalKubeletTls -and -not $SetupMetricsServer) { throw 'TLS workaround requires -SetupMetricsServer.' }
 if ($ConnectOnly -and ($SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) { throw '-ConnectOnly cannot be combined with Metrics Server setup switches.' }
 if ($CheckPostgresOnly -and ($ConnectOnly -or $SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) { throw '-CheckPostgresOnly cannot be combined with other startup modes.' }
+if ($FreshBoot -and ($ConnectOnly -or $CheckPostgresOnly)) { throw '-FreshBoot cannot be combined with -ConnectOnly or -CheckPostgresOnly.' }
 
 & kubectl config use-context docker-desktop
 if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Kubernetes context 'docker-desktop' is unavailable." }
@@ -243,7 +245,7 @@ if ($ConnectOnly) {
         Wait-Rollout deployment $deployment 120
     }
 } else {
-    & (Join-Path $PSScriptRoot "setup-local.ps1")
+    & (Join-Path $PSScriptRoot "setup-local.ps1") -Recreate:$FreshBoot
     if ($LASTEXITCODE -ne 0 -or -not $?) { throw "Local Python environment setup failed." }
 
     $dockerContext = (& docker context show).Trim()
@@ -259,10 +261,10 @@ if ($ConnectOnly) {
     # Validate before expensive builds. Secret JSON stays in process memory and
     # is piped directly to kubectl later; it is never written to disk or logged.
     $python = Resolve-Python
-    $facilitiesSecret = Render-EnvArtifact $python
-    $routingSecret = Render-EnvArtifact $python @("--routing")
-    $trafficControlSecret = Render-EnvArtifact $python @("--traffic-control")
-    $trafficConfigPatch = Render-EnvArtifact $python @("--traffic-config")
+    $facilitiesSecret = Render-EnvArtifact $python -FileOnly:$FreshBoot
+    $routingSecret = Render-EnvArtifact $python @("--routing") -FileOnly:$FreshBoot
+    $trafficControlSecret = Render-EnvArtifact $python @("--traffic-control") -FileOnly:$FreshBoot
+    $trafficConfigPatch = Render-EnvArtifact $python @("--traffic-config") -FileOnly:$FreshBoot
 
     if ($SetupMetricsServer) {
         & (Join-Path $PSScriptRoot "setup-local-metrics.ps1") -AllowInsecureKubeletTls:$AllowInsecureLocalKubeletTls
@@ -327,6 +329,18 @@ if ($ConnectOnly) {
         Apply-RenderedSecret $trafficControlSecret "ev-fleet-traffic-control"
         & kubectl -n ev-fleet patch configmap ev-fleet-config --type merge --patch-file $trafficPatchFile
         if ($LASTEXITCODE -ne 0) { throw "Unable to apply the traffic provider configuration." }
+
+        if ($FreshBoot) {
+            # The optional finite rental Job is not part of the base deployment.
+            # Once complete, remove its terminal Pod so fresh boot leaves only
+            # Pods created from the newly built application images.
+            & kubectl -n ev-fleet delete job customer-rental-simulation --ignore-not-found --wait=true
+            if ($LASTEXITCODE -ne 0) { throw "Unable to remove the completed customer rental Job during fresh boot." }
+            foreach ($workload in @("statefulset/postgres", "deployment/redis")) {
+                & kubectl -n ev-fleet rollout restart $workload
+                if ($LASTEXITCODE -ne 0) { throw "Unable to restart $workload during fresh boot." }
+            }
+        }
 
         # ConfigMap/Secret environment values are read only when a container
         # starts. Restart every consumer after the validated settings exist.

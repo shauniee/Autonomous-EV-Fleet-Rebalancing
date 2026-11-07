@@ -1,7 +1,8 @@
 """Render whitelisted integration settings for local Kubernetes.
 
 Pipe directly to kubectl; do not save or log the output. Values are read literally,
-never executed or shell-expanded. Exported environment values override the file.
+never executed or shell-expanded. Exported environment values override the file
+unless the caller explicitly requests file-only rendering.
 """
 import json
 import os
@@ -21,7 +22,7 @@ TRAFFIC_DEFAULTS = {"TRAFFIC_SOURCE": "DISABLED", "LTA_DATAMALL_ACCOUNT_KEY": ""
                     "TRAFFIC_SIMULATION_CONTROL_KEY": ""}
 
 
-def settings(path, defaults=DEFAULTS):
+def settings(path, defaults=DEFAULTS, use_environment=True):
     values = dict(defaults)
     if path.exists():
         for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -42,7 +43,8 @@ def settings(path, defaults=DEFAULTS):
             else:
                 value = value.split(" #", 1)[0].rstrip()
             values[key] = value
-    values.update({key: os.environ[key] for key in defaults if key in os.environ})
+    if use_environment:
+        values.update({key: os.environ[key] for key in defaults if key in os.environ})
     if "FACILITIES_SOURCE" in values and values["FACILITIES_SOURCE"] not in ("MOCK", "LTA_DATAMALL"):
         raise ValueError("FACILITIES_SOURCE must be MOCK or LTA_DATAMALL")
     if values.get("TRAFFIC_SOURCE", "DISABLED") not in ("DISABLED", "LTA_DATAMALL"):
@@ -65,14 +67,16 @@ if __name__ == "__main__":
     routing = "--routing" in arguments
     traffic_control = "--traffic-control" in arguments
     traffic_config = "--traffic-config" in arguments
+    file_only = "--file-only" in arguments
     modes = sum((routing, traffic_control, traffic_config))
     if modes > 1:
         raise SystemExit("Choose only one render mode")
     arguments = [argument for argument in arguments
-                 if argument not in ("--check", "--routing", "--traffic-control", "--traffic-config")]
+                 if argument not in ("--check", "--routing", "--traffic-control", "--traffic-config", "--file-only")]
     defaults = TRAFFIC_DEFAULTS if (traffic_control or traffic_config) else ROUTING_DEFAULTS if routing else DEFAULTS
     try:
-        values = settings(Path(arguments[0] if arguments else ".env"), defaults)
+        values = settings(Path(arguments[0] if arguments else ".env"), defaults,
+                          use_environment=not file_only)
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
     if routing and values["ROUTING_PROVIDER"] == "ONEMAP" and not values["ONEMAP_ACCESS_TOKEN"].strip():

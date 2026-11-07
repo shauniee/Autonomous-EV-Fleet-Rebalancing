@@ -47,6 +47,23 @@ Keep the PowerShell window open when it created new port-forward sessions. Press
 `Ctrl+C` to close only those tunnels. PostgreSQL data remains on the
 `postgres-data-postgres-0` persistent-volume claim.
 
+For a complete local fresh boot that discards generated runtime state while
+preserving PostgreSQL data, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -FreshBoot
+```
+
+Fresh boot recreates `.venv`, reads whitelisted integration settings directly
+from the saved `.env` instead of inherited PowerShell overrides, rebuilds every
+application image, and replaces every project Pod. It preserves the PostgreSQL
+PVC and records. It does not delete the namespace, prune old images, or recreate
+the Docker Desktop Kubernetes cluster. The normal active-workflow safety checks
+still apply. A completed optional customer-rental Job and its terminal Pod are
+removed as generated runtime state. Processes running from this project's exact
+`.venv` path, such as VS Code Python tooling, are stopped before recreation;
+unrelated Python processes are not touched.
+
 To reconnect to an existing deployment without rebuilding or restarting it:
 
 ```powershell
@@ -65,7 +82,8 @@ For the complete procedure and troubleshooting, see
 ## Local Python environment
 
 `scripts/setup-local.ps1` is called automatically during a full Windows Kubernetes
-startup. It can also be run directly:
+startup. It installs the runtime and local test dependencies and can also be run
+directly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1

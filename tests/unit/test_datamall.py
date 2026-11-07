@@ -244,7 +244,8 @@ def test_live_reads_do_not_wait_for_slow_feed_persistence(clock):
             snapshot = await asyncio.wait_for(store.view(), timeout=.1)
             parking = await asyncio.wait_for(store.vehicle_parking("ev-1"), timeout=.1)
             assert snapshot.facilities[0].facility_id == sites[0].facility_id
-            assert parking == {"vehicle_id": "ev-1", "parking": None, "pending": False}
+            assert parking == {"vehicle_id": "ev-1", "parking": None, "pending": False,
+                               "access_position_missing": False}
         finally:
             repository.release_save.set()
             await update

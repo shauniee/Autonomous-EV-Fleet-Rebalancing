@@ -36,14 +36,14 @@ describe('operational dashboard snapshot', () => {
 
   it('does not turn stale, unavailable or partial service data into zero counts', () => {
     const now = Date.now();
-    const old = new Date(now - 30000).toISOString();
+    const old = new Date(now - 300000).toISOString();
     const fresh = new Date(now).toISOString();
     const heat = makeHeat();
     heat.status = 'PARTIAL';
     render(<FleetPulse
       fleet={{ data: makeFleet(), updatedAt: old }}
       heat={{ data: heat, updatedAt: fresh }}
-      dispatches={{ data: { dispatches: [] }, error: 'Connection lost', updatedAt: fresh }}
+      dispatches={{ data: { dispatches: [] }, error: 'Connection lost', updatedAt: old }}
       now={now}
     />);
     expect(metric('Reporting EVs').getByLabelText('Reporting EVs: unavailable')).toHaveTextContent('—');
@@ -51,6 +51,49 @@ describe('operational dashboard snapshot', () => {
     expect(metric('Critical zones').getByLabelText('Critical zones: unavailable')).toHaveTextContent('—');
     expect(metric('Open dispatches').getByLabelText('Open dispatches: unavailable')).toHaveTextContent('—');
     expect(screen.getAllByText('Awaiting current data')).toHaveLength(4);
+  });
+
+  it('keeps recent confirmed counts visible during a transient poll error', () => {
+    const now = Date.now();
+    const updatedAt = new Date(now - 299999).toISOString();
+
+    render(<FleetPulse
+      fleet={{ data: makeFleet(), error: 'Connection interrupted', updatedAt }}
+      heat={{ data: makeHeat(), error: 'Connection interrupted', updatedAt }}
+      dispatches={{ data: { dispatches: [makeDispatch()] }, error: 'Connection interrupted', updatedAt }}
+      now={now}
+    />);
+
+    expect(metric('Reporting EVs').getByText('1')).toBeInTheDocument();
+    expect(metric('Available EVs').getByText('1')).toBeInTheDocument();
+    expect(metric('Open dispatches').getByText('1')).toBeInTheDocument();
+    expect(metric('Critical zones').getByText('1')).toBeInTheDocument();
+    expect(screen.getAllByText('Last confirmed observation')).toHaveLength(4);
+  });
+
+  it('replaces retained counts as soon as a newer valid observation arrives', () => {
+    const now = Date.now();
+    const old = new Date(now - 120000).toISOString();
+    const fresh = new Date(now).toISOString();
+    const initialFleet = makeFleet();
+    const updatedFleet = makeFleet();
+    updatedFleet.vehicles = [];
+
+    const view = render(<FleetPulse
+      fleet={{ data: initialFleet, error: 'Connection interrupted', updatedAt: old }}
+      heat={{ data: makeHeat(), updatedAt: fresh }}
+      dispatches={{ data: { dispatches: [] }, updatedAt: fresh }}
+      now={now}
+    />);
+    expect(metric('Reporting EVs').getByText('1')).toBeInTheDocument();
+
+    view.rerender(<FleetPulse
+      fleet={{ data: updatedFleet, updatedAt: fresh }}
+      heat={{ data: makeHeat(), updatedAt: fresh }}
+      dispatches={{ data: { dispatches: [] }, updatedAt: fresh }}
+      now={now}
+    />);
+    expect(metric('Reporting EVs').getByText('0')).toBeInTheDocument();
   });
 
   it('shows real zeros for fresh empty service snapshots', () => {

@@ -4,6 +4,7 @@ type Hpa = { current_cpu_pct: number | null; target_cpu_pct: number | null;
   current_replicas: number | null; desired_replicas: number | null; max_replicas: number | null };
 type Sample = { timestamp: string; hpa: Hpa | null; attempted: number; success: number;
   errors: number; p95_latency_ms: number | null;
+  pods: { ready: number; total: number } | null;
   usage: { cpu_millicores: number; memory_mib: number } | null };
 type Experiment = { id: string; preset: string; state: string; started_at: string;
   duration_seconds: number; simulated_evs: number; telemetry_hz: number; requests_per_second: number;
@@ -136,10 +137,14 @@ export function AnalyticsPanel() {
     const seconds = (Date.parse(sample.timestamp) - Date.parse(previous.timestamp)) / 1000;
     return seconds > 0 ? Math.max(0, (sample.attempted - previous.attempted) / seconds) : null;
   });
+  const hpaCpuMax = Math.ceil(Math.max(100,
+    ...samples.map(sample => sample.hpa?.current_cpu_pct ?? 0)) / 50) * 50;
+  const observedPodMax = Math.max(3, infra?.hpa?.max_replicas ?? 3,
+    ...samples.map(sample => sample.pods?.total ?? 0));
   const scalingEvents = samples.slice(1).flatMap((sample, i) => {
     const previous = samples[i];
-    const before = previous.hpa?.current_replicas;
-    const after = sample.hpa?.current_replicas;
+    const before = previous.pods?.total;
+    const after = sample.pods?.total;
     return before != null && after != null && before !== after
       ? [{time:sample.timestamp, before, after}] : [];
   });
@@ -161,8 +166,8 @@ export function AnalyticsPanel() {
       <div className="analytics-stat"><small>HPA CPU / target</small>
         <strong>{fmt(infra?.hpa?.current_cpu_pct, '%')} / {fmt(infra?.hpa?.target_cpu_pct, '%')}</strong>
         <small>Relative to requested CPU, not host CPU</small></div>
-      <div className="analytics-stat"><small>Replicas (current → desired)</small>
-        <strong>{fmt(infra?.hpa?.current_replicas)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
+      <div className="analytics-stat"><small>Pods (observed → HPA desired)</small>
+        <strong>{fmt(infra?.pods?.total)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
         <small>Ready Pods: {fmt(infra?.pods?.ready)}</small></div>
       <div className="analytics-stat"><small>Dashboard Pod CPU / memory</small>
         <strong>{fmt(infra?.usage?.cpu_millicores,'m')} / {fmt(infra?.usage?.memory_mib,' MiB')}</strong>
@@ -199,11 +204,10 @@ export function AnalyticsPanel() {
       <span>Storage: {snapshot?.storage === 'local-persistent-volume' ? 'Persistent volume' : 'Ephemeral'}</span>
     </div>
     <div className="analytics-charts">
-      <Graph title="HPA CPU (%)" samples={samples} maxValue={100}
+      <Graph title="HPA CPU (%)" samples={samples} maxValue={hpaCpuMax}
         measure={s => s.hpa?.current_cpu_pct} target={infra?.hpa?.target_cpu_pct}/>
-      <Graph title="Replicas (current)" samples={samples}
-        maxValue={Math.max(3,infra?.hpa?.max_replicas ?? 3)}
-        measure={s => s.hpa?.current_replicas}/>
+      <Graph title="Dashboard Pods (observed)" samples={samples}
+        maxValue={observedPodMax} measure={s => s.pods?.total}/>
       <Graph title="Synthetic HTTP requests / second" samples={samples}
         maxValue={220} measure={(_,i) => observedRps[i]}/>
       <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
@@ -212,14 +216,14 @@ export function AnalyticsPanel() {
     <h3>Observed scaling events</h3>
     {scalingEvents.length ? <div className="analytics-events">
       {scalingEvents.map((event, i) => <p key={i}>
-        {sgt(event.time)} · Dashboard replicas {event.before} → {event.after}
+        {sgt(event.time)} · Dashboard Pods {event.before} → {event.after}
       </p>)}
     </div> : <p className="description">
-      No measured replica-count change during this experiment. HPA may remain at one replica
-      even when HTTP load is generated.
+      No observed Pod-count change during this experiment. HPA scaling depends on measured CPU
+      and may occur after a short experiment ends.
     </p>}
     <h3>Recorded experiments</h3>
-    <p className="description">CSV contains timestamped CPU and HPA observations, replica counts,
+    <p className="description">CSV contains timestamped CPU and HPA observations, observed Pod counts,
       throughput, errors and latency. Missing Kubernetes measurements are left blank.
       Experiments persist through restarts when the analytics volume is retained.</p>
     <div className="table-wrap"><table><thead><tr>

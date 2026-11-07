@@ -82,8 +82,16 @@ def _summary(run: dict) -> dict:
     samples = run.get("samples", [])
     cpus = [s["hpa"]["current_cpu_pct"] for s in samples
             if isinstance(s.get("hpa"), dict) and s["hpa"].get("current_cpu_pct") is not None]
-    replicas = [s["hpa"]["current_replicas"] for s in samples
-                if isinstance(s.get("hpa"), dict) and s["hpa"].get("current_replicas") is not None]
+    replicas = []
+    for sample in samples:
+        pods = sample.get("pods")
+        hpa = sample.get("hpa")
+        observed = pods.get("total") if isinstance(pods, dict) else None
+        # Older persisted records may predate Pod-count observations.
+        if observed is None and isinstance(hpa, dict):
+            observed = hpa.get("current_replicas")
+        if observed is not None:
+            replicas.append(observed)
     result["peak_hpa_cpu_pct"] = max(cpus, default=None)
     result["peak_replicas"] = max(replicas, default=None)
     end = (datetime.fromisoformat(run["finished_at"]) if run.get("finished_at")
@@ -343,7 +351,7 @@ async def export_csv(run_id: str):
     writer.writerow(["run_id", "preset", "simulated_evs", "telemetry_hz",
                      "target_rps", "timestamp_utc", "hpa_cpu_pct", "hpa_target_pct",
                      "hpa_current_replicas", "hpa_desired_replicas",
-                     "ready_pods", "pod_cpu_m", "pod_memory_mib",
+                     "observed_pods", "ready_pods", "pod_cpu_m", "pod_memory_mib",
                      "requests_attempted", "requests_success", "requests_failed",
                      "p95_latency_ms"])
     for sample in run.get("samples", []):
@@ -352,7 +360,7 @@ async def export_csv(run_id: str):
                          run["telemetry_hz"], run["requests_per_second"],
                          sample["timestamp"], hpa.get("current_cpu_pct"),
                          hpa.get("target_cpu_pct"), hpa.get("current_replicas"),
-                         hpa.get("desired_replicas"), pods.get("ready"),
+                         hpa.get("desired_replicas"), pods.get("total"), pods.get("ready"),
                          usage.get("cpu_millicores"), usage.get("memory_mib"),
                          sample.get("attempted"), sample.get("success"),
                          sample.get("errors"), sample.get("p95_latency_ms")])

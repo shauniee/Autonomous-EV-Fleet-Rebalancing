@@ -5,6 +5,7 @@ from fastapi import HTTPException, Response
 from ev_fleet.common.dashboard_cache import DashboardCache
 
 from ev_fleet.common.logging import base_app
+from ev_fleet.contracts.common import Position
 from ev_fleet.contracts.facilities import FacilitiesSnapshot, Facility, ParkingHoldRequest, ParkingHold, VehicleParking
 from ev_fleet.demand.store import SINGAPORE_ZONES
 from .store import FacilitiesStore
@@ -77,6 +78,11 @@ def create_app(store=None, cache=None):
     @app.get("/api/v1/vehicles/{vehicle_id}/parking", response_model=VehicleParking)
     async def vehicle_parking(vehicle_id: str):
         return await state.vehicle_parking(vehicle_id)
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/parking/access-position",
+             response_model=VehicleParking)
+    async def repair_vehicle_parking_access(vehicle_id: str, position: Position):
+        return await state.repair_vehicle_parking_access(vehicle_id, position)
 
     @app.post("/api/v1/holds/{dispatch_id}/complete", response_model=ParkingHold)
     async def complete(dispatch_id: str):

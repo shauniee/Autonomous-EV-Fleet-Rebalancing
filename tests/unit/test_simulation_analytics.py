@@ -105,8 +105,8 @@ def test_records_export_and_run_rate_stable_after_finish(monkeypatch, tmp_path):
         "latencies_ms": [10, 20, 30], "samples": [{
             "timestamp": end.isoformat(),
             "hpa": {"current_cpu_pct": None, "target_cpu_pct": 60,
-                    "current_replicas": 2, "desired_replicas": 2},
-            "pods": {"ready": 2, "total": 2},
+                    "current_replicas": 1, "desired_replicas": 3},
+            "pods": {"ready": 3, "total": 3},
             "usage": None, "attempted": 100, "success": 98, "errors": 2,
             "p95_latency_ms": 30,
         }],
@@ -115,12 +115,12 @@ def test_records_export_and_run_rate_stable_after_finish(monkeypatch, tmp_path):
     result = analytics._run_snapshot(run)
     assert result["rps_observed"] == 10
     assert result["p95_latency_ms"] == 30
-    assert analytics._summary(run)["peak_replicas"] == 2
+    assert analytics._summary(run)["peak_replicas"] == 3
     output = asyncio.run(analytics.export_csv(run["id"]))
     body = output.body.decode("utf-8")
     assert "run_id,preset,simulated_evs" in body
     assert "abcdef123456,HIGH,50" in body
-    assert "60,2,2,2," in body
+    assert "60,1,3,3,3," in body
     with pytest.raises(HTTPException) as error:
         analytics._load("../../etc/passwd")
     assert error.value.status_code == 404

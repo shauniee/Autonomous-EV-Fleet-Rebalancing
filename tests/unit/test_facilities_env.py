@@ -1,3 +1,7 @@
+import json
+import subprocess
+import sys
+
 import pytest
 
 from scripts.render_facilities_secret import TRAFFIC_DEFAULTS, settings
@@ -18,6 +22,29 @@ def test_env_loader_accepts_exports_comments_and_environment_overrides(tmp_path,
     path.write_text("export FACILITIES_SOURCE='LTA_DATAMALL' # comment\nLTA_DATAMALL_ACCOUNT_KEY=old\n")
     monkeypatch.setenv("LTA_DATAMALL_ACCOUNT_KEY", "fixture-key")
     assert settings(path)["LTA_DATAMALL_ACCOUNT_KEY"] == "fixture-key"
+
+
+def test_env_loader_file_only_ignores_environment_overrides(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("ROUTING_PROVIDER=ONEMAP\nONEMAP_ACCESS_TOKEN=file-token\n")
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", "environment-token")
+
+    assert settings(path, {"ROUTING_PROVIDER": "SIMULATED", "ONEMAP_ACCESS_TOKEN": ""},
+                    use_environment=False)["ONEMAP_ACCESS_TOKEN"] == "file-token"
+
+
+def test_routing_cli_file_only_uses_saved_env_value(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("ROUTING_PROVIDER=ONEMAP\nONEMAP_ACCESS_TOKEN=file-token\n")
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", "environment-token")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/render_facilities_secret.py", "--routing", "--file-only", str(path)],
+        check=True, capture_output=True, text=True,
+    )
+    rendered = json.loads(result.stdout)
+    assert rendered["stringData"]["ONEMAP_ACCESS_TOKEN"] == "file-token"
+    assert "environment-token" not in result.stdout
 
 
 @pytest.mark.parametrize("line", ["FACILITIES_SOURCE=TYPO", "LTA_PARKING_REFRESH_SECONDS=1",
