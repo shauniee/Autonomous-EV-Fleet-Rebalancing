@@ -12,6 +12,8 @@ FACILITIES_SOURCE=LTA_DATAMALL
 LTA_DATAMALL_ACCOUNT_KEY=your-account-key
 ```
 
+To enable live road traffic as well, set `TRAFFIC_SOURCE=LTA_DATAMALL`.
+
 With Docker Desktop Kubernetes using **kubeadm**, run from the repository root:
 
 ```bash
