@@ -46,7 +46,10 @@ def stop_evidence(service, local, observations):
     if dispatch.state == "SUCCEEDED" or local["release_outcome"] == "ARRIVED":
         return None, "Arrival is already recorded. Reconcile to confirm release."
     physical = checkpoint.physical
-    if not (checkpoint.command == command or unstarted_checkpoint(local, vehicle, checkpoint)):
+    if checkpoint.command is None:
+        if not unstarted_checkpoint(local, vehicle, checkpoint, allow_completed_charge=True):
+            return None, "The saved checkpoint does not prove this relocation never started."
+    elif checkpoint.command != command:
         return None, "The saved checkpoint does not match this relocation."
     if (physical.relocation_state == "ARRIVED" or physical.charging_state == "CHARGING"
             or (physical.distance_travelled_km or 0) < dispatch.distance_travelled_km
@@ -72,9 +75,11 @@ async def assess_resolution(service, dispatch_id, *, details=False):
     evidence, blocker = (None, None) if active else stop_evidence(service, local, observations)
     revision = (hashlib.sha256(SimulatorStopRequest(request_id=UUID(int=0), **evidence)
         .model_dump_json().encode()).hexdigest() if evidence else None)
-    physical = observations["saved"].checkpoint.physical if evidence else None
+    checkpoint = observations["saved"].checkpoint if evidence else None
+    physical = checkpoint.physical if checkpoint else None
     result = RelocationResolutionAssessment(assessment_revision=revision, can_end=bool(evidence),
         stop_position=physical.position if physical else None, stop_soc_pct=physical.soc_pct if physical else None,
+        unstarted=bool(checkpoint and checkpoint.command is None),
         blocker=blocker, operation=operation_view(operation) if operation else None)
     return (result, local, evidence) if details else result
 

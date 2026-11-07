@@ -166,7 +166,7 @@ export interface RelocationEndRequest {
   request_id: string; expected_assessment_revision: string; reason: string;
 }
 export interface RelocationResolution {
-  assessment_revision: string | null; can_end: boolean; blocker: string | null;
+  assessment_revision: string | null; can_end: boolean; unstarted?: boolean; blocker: string | null;
   stop_position: Position | null; stop_soc_pct: number | null;
   operation: {
     request_id: string; reason: string;
