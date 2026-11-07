@@ -19,7 +19,7 @@ from tests.unit.test_idle_simulator_recovery import CheckpointRepository
 from tests.unit.test_persistence import MemoryRepository
 
 
-@pytest.mark.parametrize("stopped", ["expired_mid_route", "failed_live"])
+@pytest.mark.parametrize("stopped", ["expired_mid_route", "failed_live", "unstarted_after_charge"])
 def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkeypatch, stopped):
     monkeypatch.setenv("CRDS_MODE", "DISABLED")
     client_type = httpx.AsyncClient
@@ -53,34 +53,53 @@ def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkey
             await fleet.simulator_recovery.checkpoint("ev-1", SimulatorCheckpointRequest(
                 request_id=uuid4(), session_id=lease.session_id, generation=1,
                 expected_checkpoint_revision=0, checkpoint=idle, publish_telemetry=True))
+            unstarted = stopped == "unstarted_after_charge"
+            if unstarted:
+                # Seed the previously persisted idle state of an EV that finished charging.
+                physical = TelemetryUpdate.model_validate({
+                    **physical.model_dump(), "charging_state": "COMPLETE",
+                    "parked_facility_id": "origin-charger", "charging_power_kw": 7.4,
+                })
+                idle = idle.model_copy(update={"physical": physical, "completed_command_id": uuid4()})
+                fleet_record = fleet.record("ev-1")
+                fleet_record["telemetry"] = physical
+                fleet_record["simulator_checkpoint"]["data"] = idle.model_dump(mode="json")
             batch = await cluster.client.post("http://rebalancing.test/api/v1/batch-recommendations",
                 json={"target_zone_id": "cbd", "quantity": 1})
             approved = await service.approve_batch(BatchApproval(request_id=uuid4(),
                 batch_recommendation_id=batch.json()["batch_recommendation_id"]))
             dispatch_id = approved["items"][0]["dispatch_id"]
             record = service.store.get(dispatch_id)
-            command = (await service.commands("ev-1"))["commands"][0]
+            moving = idle
+            if not unstarted:
+                command = (await service.commands("ev-1"))["commands"][0]
 
-            movement = Movement.from_checkpoint(idle, config)
-            assert movement.accept(command)
-            movement.start()
-            movement.advance(12, 30)
-            if stopped == "failed_live":
-                # Inject a stopped execution state at a valid route location.
-                movement.state, movement.speed_kph, movement.reason = "FAILED", 0, "SIMULATED_FAILURE"
-            saved = movement.snapshot()
-            moving = SimulatorCheckpoint(vehicle_id="ev-1", fleet_instance_id=fleet.instance_id,
-                simulation=config, physical=TelemetryUpdate.model_validate({
-                    **physical.model_dump(mode="json"), **saved.pop("physical"), "sequence": 1}), **saved)
-            await fleet.simulator_recovery.checkpoint("ev-1", SimulatorCheckpointRequest(
-                request_id=uuid4(), session_id=lease.session_id, generation=1,
-                expected_checkpoint_revision=1, checkpoint=moving, publish_telemetry=True))
+                movement = Movement.from_checkpoint(idle, config)
+                assert movement.accept(command)
+                movement.start()
+                movement.advance(12, 30)
+                if stopped == "failed_live":
+                    # Inject a stopped execution state at a valid route location.
+                    movement.state, movement.speed_kph, movement.reason = "FAILED", 0, "SIMULATED_FAILURE"
+                saved = movement.snapshot()
+                moving = SimulatorCheckpoint(vehicle_id="ev-1", fleet_instance_id=fleet.instance_id,
+                    simulation=config, physical=TelemetryUpdate.model_validate({
+                        **physical.model_dump(mode="json"), **saved.pop("physical"), "sequence": 1}), **saved)
+                await fleet.simulator_recovery.checkpoint("ev-1", SimulatorCheckpointRequest(
+                    request_id=uuid4(), session_id=lease.session_id, generation=1,
+                    expected_checkpoint_revision=1, checkpoint=moving, publish_telemetry=True))
             path = f"http://dispatch.test/api/v1/dispatches/{dispatch_id}/resolution"
-            if stopped == "expired_mid_route":
+            if stopped != "failed_live":
                 assert not (await cluster.client.get(path)).json()["can_end"]
                 clock.advance(31)
             assessment = (await cluster.client.get(path)).json()
             assert assessment["can_end"], assessment
+            assert assessment["unstarted"] is unstarted
+            if unstarted:
+                assert record.data["delivery_attempts"] == 0
+                recovery = (await cluster.client.get(path.removesuffix("/resolution") + "/recovery")).json()
+                assert not recovery["can_resume"]
+                assert recovery["blockers"][0]["detail"] == "CHECKPOINT_COMMAND_MISMATCH"
             request = {"request_id": str(uuid4()), "reason": "Recover the remaining fleet",
                        "expected_assessment_revision": assessment["assessment_revision"]}
             stale = await cluster.client.post(path, json=request | {"expected_assessment_revision": "stale"})
@@ -117,6 +136,11 @@ def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkey
                 await fleet.simulator_recovery.checkpoint("ev-1", SimulatorCheckpointRequest(
                     request_id=uuid4(), session_id=lease.session_id, generation=1,
                     expected_checkpoint_revision=after.checkpoint_revision, checkpoint=moving))
+            if unstarted:
+                assert after.checkpoint.physical.charging_state == "COMPLETE"
+                assert after.checkpoint.physical.parked_facility_id == "origin-charger"
+                assert (await fleet.get("ev-1"))["effective_availability"] == "UNAVAILABLE"
+                return
             owner = (await fleet.get("ev-1"))["simulator_recovery"]
             idle_session = await fleet.simulator_recovery.session("ev-1", SimulatorIdleRestoreRequest(
                 request_id=uuid4(), expected_fleet_instance_id=fleet.instance_id,

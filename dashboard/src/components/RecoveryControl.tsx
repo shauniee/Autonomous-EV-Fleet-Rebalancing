@@ -76,13 +76,16 @@ export function RecoveryControl({ dispatchId, notify, showResolution }: { dispat
     RECOVERED: 'Relocation resumed',
     BLOCKED: 'Could not resume',
   }[operation.status]) : 'Resume relocation';
+  const checkpointMismatch = data?.blockers.some(blocker => blocker.detail === 'CHECKPOINT_COMMAND_MISMATCH');
   const recoveryIssue = assessment.error ? 'Could not check whether the relocation can resume.'
     : !active && data?.blockers.length ? (
       data.blockers.some(blocker => ['FACILITY_UNAVAILABLE', 'PARKING_HOLD_RELEASED'].includes(blocker.code))
         ? 'The destination is unavailable.'
         : data.blockers.some(blocker => blocker.code === 'EXECUTION_FAILED')
           ? 'This failed move cannot be resumed.'
-          : 'The information needed to resume is unavailable or out of date.'
+          : checkpointMismatch
+            ? 'The saved checkpoint does not match this relocation.'
+            : 'The information needed to resume is unavailable or out of date.'
     ) : !operation && data?.status === 'BLOCKED' ? 'This relocation cannot resume right now.' : null;
   return <section className="relocation-controls" aria-label="Resume relocation">
     <p role="status"><strong>{recoveryStatus}</strong></p>

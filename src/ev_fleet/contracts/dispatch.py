@@ -123,6 +123,18 @@ class Dispatch(Model):
 ApprovalStatus = Literal["APPROVED", "REJECTED", "UNKNOWN"]
 
 
+class ApprovalDecision(Model):
+    status: ApprovalStatus
+    reason_code: str
+    vehicle_id: str | None = None
+    facility_id: str | None = None
+    related_reasons: list[str] = Field(default_factory=list)
+    arrival_soc_pct: float | None = None
+    reserve_pct: float | None = None
+    gain_vehicle_minutes: float | None = None
+    minimum_gain_vehicle_minutes: float | None = None
+
+
 class DispatchApprovalResult(Dispatch):
     approval_status: ApprovalStatus
 
@@ -147,6 +159,7 @@ class BatchDispatchItem(Model):
     state: str
     error: str | None = None
     approval_status: ApprovalStatus | None = None
+    approval_decision: ApprovalDecision | None = None
 
 
 class BatchDispatch(Model):

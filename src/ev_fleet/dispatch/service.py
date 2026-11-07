@@ -12,10 +12,12 @@ from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
-from ev_fleet.contracts.dispatch import DispatchApproval
+from ev_fleet.contracts.dispatch import ApprovalDecision, DispatchApproval
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
+from .approval_evidence import (ApprovalCheckError, approval_evidence, record_approval,
+                                revalidation_rejection)
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
 from .recovery import RecoveryCoordinator
@@ -202,6 +204,9 @@ class DispatchService:
             f"{self.settings.rebalancing_url}/api/v1/recommendations/{record.data['recommendation_id']}", model=Recommendation)
         if str(recommendation.recommendation_id) != record.data["recommendation_id"]:
             raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
+        record_approval(record, "UNKNOWN", "APPROVAL_IN_PROGRESS", ApprovalDecision(
+            status="UNKNOWN", reason_code="APPROVAL_IN_PROGRESS",
+            vehicle_id=recommendation.selected_vehicle_id, facility_id=recommendation.parking_facility_id))
         if recommendation.expires_at <= self.clock.now():
             raise HTTPException(409, "RECOMMENDATION_EXPIRED")
         if recommendation.crds is not None and (
@@ -235,10 +240,18 @@ class DispatchService:
             parking = await request_json(self.client, "GET",
                 f"{self.settings.facilities_url}/api/v1/facilities/{recommendation.parking_facility_id}",
                 model=Facility)
-            if (parking.zone_id != target.zone_id or parking.status != "OPEN"
-                    or parking.parking_available <= 0 or not parking.is_fresh(self.clock.now())
-                    or parking.position != recommendation.target_position):
-                raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
+            destination_issue = None
+            if parking.zone_id != target.zone_id or parking.position != recommendation.target_position:
+                destination_issue = "PARKING_DESTINATION_CHANGED"
+            elif parking.status != "OPEN":
+                destination_issue = "PARKING_CLOSED" if parking.status == "CLOSED" else "FACILITY_DATA_STALE"
+            elif not parking.is_fresh(self.clock.now()):
+                destination_issue = "FACILITY_DATA_STALE"
+            elif parking.parking_available <= 0:
+                destination_issue = "PARKING_FULL"
+            if destination_issue:
+                raise ApprovalCheckError(409, "PARKING_DESTINATION_CHANGED", ApprovalDecision(
+                    status="REJECTED", reason_code=destination_issue))
             destination = parking.position
             assessed_target["position"] = parking.position.model_dump(mode="json")
             assessed_target["charging"] = {
@@ -249,7 +262,8 @@ class DispatchService:
                                     self.settings.arrival_tolerance_km,
                                     facility=parking is not None) if origin else None
         if route is None or route.source != "ONEMAP":
-            raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
+            raise ApprovalCheckError(409, "ONEMAP_ROUTE_REQUIRED", ApprovalDecision(
+                status="REJECTED", reason_code="NO_TELEMETRY" if origin is None else "ONEMAP_ROUTE_REQUIRED"))
         if route and self.traffic_enabled:
             # No full Speed Bands JSON or map sampling on the Dispatch path.
             # A valid configured OSRM alternate is considered before rejection.
@@ -279,8 +293,11 @@ class DispatchService:
             energy = route.distance_km * vehicle.consumption_kwh_per_km * max(policy.energy_margin_factor, self.settings.energy_margin_factor)
             arrival = vehicle.telemetry.soc_pct - 100 * energy / vehicle.battery_capacity_kwh
             assessment.update(distance_km=route.distance_km, energy_required_kwh=energy, predicted_arrival_soc_pct=arrival)
-            if arrival < max(policy.min_reserve_pct, self.settings.min_reserve_pct):
-                raise HTTPException(409, "ROUTE_BELOW_OPERATIONAL_RESERVE")
+            reserve = max(policy.min_reserve_pct, self.settings.min_reserve_pct)
+            if arrival < reserve:
+                raise ApprovalCheckError(409, "ROUTE_BELOW_OPERATIONAL_RESERVE", ApprovalDecision(
+                    status="REJECTED", reason_code="ROUTE_BELOW_OPERATIONAL_RESERVE",
+                    arrival_soc_pct=arrival, reserve_pct=reserve))
         if not assessment["eligible"]:
             raise HTTPException(409, "VEHICLE_NOT_ELIGIBLE:" + ",".join(assessment["exclusion_reasons"]))
         if parking:
@@ -325,7 +342,10 @@ class DispatchService:
             else:
                 raise HTTPException(409, "CRDS_PLANNING_CHANGED")
             if not revalidated.allowed:
-                raise HTTPException(409, "CRDS_BENEFIT_CHANGED:" + revalidated.metadata.reason_code)
+                evidence = revalidation_rejection(
+                    revalidated.metadata, vehicle.vehicle_id, recommendation.parking_facility_id)
+                raise ApprovalCheckError(409, "CRDS_BENEFIT_CHANGED:" + revalidated.metadata.reason_code,
+                                         evidence)
             if recommendation.expires_at <= self.clock.now():
                 raise HTTPException(409, "RECOMMENDATION_EXPIRED")
             assessment["crds"] = revalidated.metadata.model_dump(mode="json")
@@ -352,6 +372,7 @@ class DispatchService:
                 vehicle.telemetry.parked_facility_id if vehicle.telemetry else None
             ),
         }
+        assessment["approval_decision"] = approval_evidence(record)
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
                            revalidated_metrics=assessment)
         # Store the exact request BEFORE the remote mutation. Never silently refresh its version.
@@ -374,6 +395,15 @@ class DispatchService:
         receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
         self.check_receipt(record, receipt)
         record.claimed = True
+        metrics = record.data.get("revalidated_metrics") or {}
+        crds = metrics.get("crds") or {}
+        reason = "CRDS_APPROVAL_CONFIRMED" if crds else "APPROVAL_CONFIRMED"
+        record_approval(record, "APPROVED", reason, ApprovalDecision(
+            status="APPROVED", reason_code=reason,
+            arrival_soc_pct=metrics.get("predicted_arrival_soc_pct"),
+            reserve_pct=record.claim_request["min_reserve_pct"],
+            gain_vehicle_minutes=crds.get("worst_case_gain_vehicle_minutes"),
+            minimum_gain_vehicle_minutes=crds.get("parameters", {}).get("minimum_gain_vehicle_minutes")))
         if record.claim_tick is None:
             elapsed = max(0, (self.clock.now() - receipt.acquired_at).total_seconds())
             record.claim_tick = self.clock.monotonic() - elapsed
@@ -490,11 +520,14 @@ class DispatchService:
                     if not record.claim_request and str(exc.detail).startswith("ONEMAP_"):
                         # No remote mutation has occurred. Reject explicitly;
                         # never retry expired tokens/rate limits in reconciliation.
-                        self.transition(record, "REJECTED", str(exc.detail))
+                        reason = str(exc.detail)
+                        record_approval(record, "REJECTED", reason,
+                                        exc.decision if isinstance(exc, ApprovalCheckError) else None)
+                        self.transition(record, "REJECTED", reason)
                         return record.view()
-                    await self.handle_approval_error(record, exc)
+                    decision = await self.handle_approval_error(record, exc)
                     if record.data["state"] == "REJECTED" and exc.status_code in (404, 409, 422):
-                        raise HTTPException(409, exc.detail) from exc
+                        raise ApprovalCheckError(409, exc.detail, decision) from exc
                 return record.view()
         finally:
             await self.persist()
@@ -508,9 +541,12 @@ class DispatchService:
         if record.data["claim_held"] is not claim_held:
             record.data["claim_held"] = claim_held
             self.planning_revision += 1
+        decision = record_approval(record, state, reason,
+                                   exc.decision if isinstance(exc, ApprovalCheckError) else None)
         self.transition(record, state, reason)
         if not uncertain:
             await self.sync_parking(record)
+        return decision
 
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
@@ -732,6 +768,7 @@ class DispatchService:
                         or record.ack or record.events):
                     raise HTTPException(409, "APPROVAL_MAY_HAVE_ACQUIRED_RESOURCES")
                 if record.data["state"] not in TERMINAL:
+                    record_approval(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
                     self.transition(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
                 await self.persist()
                 return self.approval_view(request_id)
@@ -746,6 +783,7 @@ class DispatchService:
             if child:
                 item.update(dispatch_id=key, state=child.data["state"], error=child.data["failure_reason"])
                 item["approval_status"] = self.approval_status(child)
+                item["approval_decision"] = approval_evidence(child) or None
             else:
                 item["approval_status"] = "REJECTED" if item["state"] == "REJECTED" else "UNKNOWN"
             items.append(item)

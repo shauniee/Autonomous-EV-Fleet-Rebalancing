@@ -239,8 +239,22 @@ class RelocationResolutionAssessment(Model):
     stop_position: Position | None = None
     stop_soc_pct: float | None = Field(default=None, ge=0, le=100)
     can_end: bool = False
+    unstarted: bool = False
     blocker: str | None = None
     operation: RelocationResolutionOperation | None = None
+
+def idle_before_command(
+    checkpoint: SimulatorCheckpoint, command_id: UUID, origin: Position, telemetry: TelemetryUpdate | None,
+) -> bool:
+    physical = checkpoint.physical
+    return (
+        checkpoint.command is None and not checkpoint.acknowledged
+        and checkpoint.acknowledgement is None and checkpoint.pending_event is None
+        and checkpoint.completed_command_id != command_id
+        and physical.relocation_state == "IDLE" and physical.active_dispatch_id is None
+        and physical.speed_kph == 0 and physical.position == origin and physical == telemetry
+    )
+
 
 def stop_checkpoint_evidence(checkpoint: SimulatorCheckpoint) -> str:
     """Ignore periodic timestamps and sequences, but bind the actual stop state."""

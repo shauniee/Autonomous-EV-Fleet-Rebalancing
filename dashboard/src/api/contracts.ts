@@ -110,6 +110,23 @@ export interface CrdsRelocationExclusion {
     | 'RELOCATION_OWNERSHIP_UNCONFIRMED' | 'VEHICLE_MISSING';
   dispatch_ids: string[];
 }
+export interface CrdsVehicleDecision {
+  outcome: 'RECOMMENDED' | 'EXCLUDED' | 'NOT_SELECTED' | 'INCOMPLETE';
+  reason: string;
+  facility_id?: string;
+  related_reasons: string[];
+  dispatch_ids: string[];
+  arrival_soc_pct?: number;
+  reserve_pct?: number;
+  gain_vehicle_minutes?: number;
+  origin_shortage_increase?: number;
+}
+export interface CrdsDecisionEvidence {
+  version: 1;
+  assessment_reasons: string[];
+  batch_stop_reasons: string[];
+  vehicles: Record<string, CrdsVehicleDecision>;
+}
 export interface CrdsMetadata {
   decision: 'MOVE' | 'HOLD' | 'DEFER'; reason_code: string; approval_allowed: boolean;
   worst_case_gain_vehicle_minutes: number | null; worst_case_future_id: string | null;
@@ -119,6 +136,7 @@ export interface CrdsMetadata {
   source_references: Record<string, unknown> & {
     relocation_exclusions?: CrdsRelocationExclusion[];
     excluded_facility_ids?: string[];
+    decision_evidence?: CrdsDecisionEvidence;
   };
   parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number };
 }
@@ -148,7 +166,7 @@ export interface RelocationEndRequest {
   request_id: string; expected_assessment_revision: string; reason: string;
 }
 export interface RelocationResolution {
-  assessment_revision: string | null; can_end: boolean; blocker: string | null;
+  assessment_revision: string | null; can_end: boolean; unstarted?: boolean; blocker: string | null;
   stop_position: Position | null; stop_soc_pct: number | null;
   operation: {
     request_id: string; reason: string;
@@ -166,6 +184,7 @@ export interface Dispatch {
   claim_held: boolean | null;
   revalidated_metrics: {
     distance_km?: number;
+    approval_decision?: ApprovalDecision;
     origin?: { position: Position | null; zone_id: string | null; facility_id: string | null };
   } | null;
 }
@@ -210,9 +229,21 @@ export interface BatchRecommendation {
 }
 export interface BatchApproval { request_id: string; batch_recommendation_id: string }
 export type ApprovalStatus = "APPROVED" | "REJECTED" | "UNKNOWN";
+export interface ApprovalDecision {
+  status: ApprovalStatus;
+  reason_code: string;
+  vehicle_id?: string;
+  facility_id?: string;
+  related_reasons?: string[];
+  arrival_soc_pct?: number;
+  reserve_pct?: number;
+  gain_vehicle_minutes?: number;
+  minimum_gain_vehicle_minutes?: number;
+}
 export type DispatchApprovalResult = Dispatch & { approval_status?: ApprovalStatus };
 export interface BatchDispatchItem {
   approval_status?: ApprovalStatus;
+  approval_decision?: ApprovalDecision | null;
   recommendation_id: string; vehicle_id: string; facility_id: string;
   dispatch_id: string | null; state: string; error: string | null;
 }

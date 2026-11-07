@@ -1,21 +1,18 @@
 import { useEffect, useRef } from 'react';
 import type { BatchDispatch, BatchRecommendation } from '../api/contracts';
 import { number } from './format';
+import { approvalDetails, approvalLabels, batchApprovalLabels, journeyIssue, journeyLabel } from './approvalMessages';
 import { OperationalTabs } from './OperationalTabs';
 import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
 
 export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation; onRelocation?: (id: string) => void }) {
   return <div className="recommendation" data-testid="batch-recommendation">
     <h3>{batch.recommended_count} of {batch.requested_count} EVs recommended</h3>
-    <p className="recommendation-reason">{batch.explanation}</p>
-    {batch.crds && <CrdsSummary result={batch.crds}/>}
+    {!batch.crds && <p className="recommendation-reason">{batch.explanation}</p>}
+    {batch.crds && <CrdsSummary result={batch.crds} batchStop={batch.unfulfilled_reason ?? null}/>}
     {batch.traffic_status && <p className="muted">Traffic feed: <strong>{batch.traffic_status}</strong> · Preliminary straight-corridor estimates only. Actual route is validated on approval.</p>}
-    {batch.unfulfilled_count > 0 && <p className="warning" role="status">
-      {batch.unfulfilled_count} requested EV(s) remain unfulfilled. {batch.crds
-        ? batch.unfulfilled_reason === 'NO_USEFUL_MOVE' ? 'Additional moves do not provide enough modeled fleet-wide benefit.'
-          : batch.unfulfilled_reason === 'CAPACITY_OR_STOCK_LIMIT' ? 'Remaining parking, charging or donor stock limits this batch.'
-          : 'A complete supported assignment is not available. Review the assessment details.'
-        : 'Eligible vehicles and parking spaces could not be matched.'}</p>}
+    {!batch.crds && batch.unfulfilled_count > 0 && <p className="warning" role="status">
+      Eligible vehicles and parking spaces could not be matched.</p>}
     <OperationalTabs label="Recommendation details" tabs={[
       { id: 'assignments', label: 'Assignments', content: batch.assignments.length ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Proposed assignments"><table aria-label="Batch vehicle-to-parking assignments">
       <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>{batch.crds ? 'Step minimum gain' : 'Score'}</th></tr></thead>
@@ -25,7 +22,7 @@ export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation
         <td>{number(item.distance_km / 30 * 60, ' min')}</td>
         <td>{item.traffic_assessment?.estimated_duration_seconds != null ?
           <>{number(item.traffic_assessment.estimated_duration_seconds / 60, ' min')}
-            {item.traffic_assessment.blocked ? ' · BLOCKED' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
+            {item.traffic_assessment.blocked ? ' · Route blocked' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
           </> : 'Unknown'}</td>
         <td>{item.crds_gain ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(item.score)}</td>
       </tr>)}</tbody>
@@ -63,15 +60,35 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
 export function BatchResult({ result, onRelocation, onClose, busy }: {
   result: BatchDispatch; onRelocation?: (id: string) => void; onClose?: (recommendationId: string) => void; busy?: boolean;
 }) {
+  const unfilled = result.requested_count - result.recommended_count;
   return <section className="panel" aria-label="Batch approval outcomes">
-    <div className="section-title"><h2>Batch approval outcome</h2><strong>{result.status}</strong></div>
-    <p>{result.items.length} attempted assignments out of {result.requested_count} requested. See Relocations for confirmed execution and arrivals.</p>
-    <div className="table-scroll"><table><thead><tr><th>EV</th><th>Facility</th><th>Approval</th><th>Relocation</th><th>Details</th></tr></thead>
-      <tbody>{result.items.map(item => <tr key={item.recommendation_id}>
-        <td>{item.vehicle_id}</td><td>{item.facility_id}</td><td>{item.approval_status ?? '—'}</td><td>{item.dispatch_id ? item.state : '—'}</td><td>{item.error || '—'}{item.dispatch_id && onRelocation && <> <button onClick={() => onRelocation(item.dispatch_id!)}>View relocation / recovery</button></>}
-          {!item.dispatch_id && item.approval_status === 'UNKNOWN' && onClose &&
-            <button disabled={busy} onClick={() => onClose(item.recommendation_id)}>Close unstarted approval</button>}</td>
-      </tr>)}</tbody>
-    </table></div>
+    <div className="section-title"><h2>Batch approval outcome</h2><strong>{batchApprovalLabels[result.status]}</strong></div>
+    <p>Approval results for {result.items.length} of {result.requested_count} requested EVs.
+      {unfilled > 0 && <> The recommendation left {unfilled} {unfilled === 1 ? 'assignment' : 'assignments'} unfilled.</>}
+    </p>
+    <div className="table-scroll" tabIndex={0} role="region" aria-label="Approval outcomes by EV">
+      <table className="batch-approval-table"><thead><tr><th>EV and site</th><th>Approval</th><th>Relocation</th></tr></thead>
+        <tbody>{result.items.map(item => {
+          const status = item.approval_status ?? item.approval_decision?.status
+            ?? (result.status === 'APPROVED' ? 'APPROVED' : item.state === 'REJECTED' ? 'REJECTED' : 'UNKNOWN');
+          const dispatchId = item.dispatch_id;
+          const issue = status === 'APPROVED' ? journeyIssue(item.state, item.error) : '';
+          return <tr key={item.recommendation_id}>
+            <td><strong>{item.vehicle_id}</strong><div className="muted">{item.facility_id}</div></td>
+            <td><strong>{approvalLabels[status]}</strong>
+              <div>{approvalDetails(status, item.approval_decision, status === 'APPROVED' ? null : item.error)}</div>
+              {!dispatchId && status === 'UNKNOWN' && onClose &&
+                <button disabled={busy} onClick={() => onClose(item.recommendation_id)}>Close unstarted approval</button>}
+            </td>
+            <td>{status === 'APPROVED' ? <>
+              <strong>{journeyLabel(item.state)}</strong>
+              {issue && <div>{issue}</div>}
+            </> : status === 'REJECTED' ? 'Did not start' : 'Awaiting approval confirmation'}
+              {dispatchId && onRelocation && <div><button onClick={() => onRelocation(dispatchId)}>View relocation</button></div>}
+            </td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div>
   </section>;
 }

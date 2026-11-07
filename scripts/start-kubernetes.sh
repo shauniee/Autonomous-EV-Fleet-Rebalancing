@@ -18,6 +18,14 @@ if [[ "$mode" != "--connect-only" ]]; then
   done
   python3 scripts/render_facilities_secret.py --check .env
   python3 scripts/render_facilities_secret.py --routing --check .env
+  traffic_settings=$(python3 scripts/render_facilities_secret.py --traffic-config .env | python3 -c '
+import json
+import sys
+
+settings = json.load(sys.stdin)["data"]
+print(settings["TRAFFIC_SOURCE"], settings["TRAFFIC_SIMULATION_ENABLED"])
+')
+  read -r traffic_source traffic_simulation_enabled <<< "$traffic_settings"
   kubectl --context docker-desktop wait --for=condition=Ready node/docker-desktop --timeout=120s
   architecture=$(docker --context desktop-linux info --format '{{.Architecture}}')
   case "$architecture" in arm64|aarch64) platform=linux/arm64 ;; x86_64|amd64) platform=linux/amd64 ;; *) echo "Unsupported Docker architecture: $architecture" >&2; exit 1 ;; esac
@@ -30,9 +38,14 @@ if [[ "$mode" != "--connect-only" ]]; then
   kubectl --context docker-desktop wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
   python3 scripts/render_facilities_secret.py .env | kubectl --context docker-desktop apply -f -
   python3 scripts/render_facilities_secret.py --routing .env | kubectl --context docker-desktop apply -f -
+  python3 scripts/render_facilities_secret.py --traffic-control .env | kubectl --context docker-desktop apply -f -
+  # Apply the traffic settings with the new pod templates so consumers start
+  # with the configured provider on their first rollout.
   # Unique image tags ensure every changed service, including telemetry owners,
   # loads this build. The checked-in manifests remain unchanged.
   kubectl kustomize k8s | sed \
+    -e "s|^  TRAFFIC_SOURCE:.*$|  TRAFFIC_SOURCE: \"$traffic_source\"|" \
+    -e "s|^  TRAFFIC_SIMULATION_ENABLED:.*$|  TRAFFIC_SIMULATION_ENABLED: \"$traffic_simulation_enabled\"|" \
     -e "s|csc3104/ev-fleet-backend:k8s-local|csc3104/ev-fleet-backend:$tag|g" \
     -e "s|csc3104/ev-fleet-dashboard:k8s-local|csc3104/ev-fleet-dashboard:$tag|g" \
     -e "s|csc3104/ev-fleet-simulation-console:k8s-local|csc3104/ev-fleet-simulation-console:$tag|g" | kubectl --context docker-desktop apply -f -

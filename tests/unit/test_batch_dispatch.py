@@ -156,6 +156,10 @@ def test_batch_conflicting_vehicle_becomes_partial_and_releases_parking(clock):
             assert result["status"] == "PARTIAL"
             assert sum(row["state"] == "REJECTED" for row in result["items"]) == 1
             assert sum(row["state"] == "PENDING" for row in result["items"]) == 1
+            rejected = next(row for row in result["items"] if row["state"] == "REJECTED")
+            evidence = rejected["approval_decision"]
+            assert evidence["status"] == "REJECTED" and evidence["vehicle_id"] == second
+            assert "RENTED" in evidence["reason_code"]
             assert result == await cluster.dispatch.approve_batch(approval)
             holds = list(cluster.facilities.holds.values())
             assert sum(h["status"] == "RESERVED" for h in holds) == 1

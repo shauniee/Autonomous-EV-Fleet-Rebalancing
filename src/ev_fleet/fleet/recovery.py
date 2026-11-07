@@ -14,7 +14,7 @@ from ev_fleet.common.settings import SimulatorRecoverySettings
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.recovery import (
     RecoveryAssessment, SimulatorCheckpoint, SimulatorCheckpointReceipt, SimulatorSession,
-    SimulatorCheckpointSnapshot, SimulatorConfiguration, SimulatorStopRequest, stop_checkpoint_evidence,
+    SimulatorCheckpointSnapshot, SimulatorConfiguration, SimulatorStopRequest, idle_before_command, stop_checkpoint_evidence,
 )
 from ev_fleet.contracts.facilities import ParkingObservation
 from ev_fleet.contracts.dispatch import DispatchList, VehicleClaim
@@ -383,16 +383,22 @@ class SimulatorRecovery:
                     or checkpoint.simulation is None or physical.relocation_state == "ARRIVED"
                     or physical.charging_state == "CHARGING"):
                 raise HTTPException(409, "STOP_CHECKPOINT_CHANGED")
-            if checkpoint.command is not None:
-                if (checkpoint.command.dispatch_id != body.dispatch_id
-                        or checkpoint.command.command_id != body.command_id):
+            command = checkpoint.command
+            if command is None:
+                origin = VehicleClaim.model_validate(claim).origin
+                if (physical.charging_state not in ("NOT_CHARGING", "COMPLETE")
+                        or not idle_before_command(checkpoint, body.command_id, origin, record["telemetry"])):
+                    raise HTTPException(409, "STOP_UNSTARTED_CHECKPOINT_REQUIRED")
+            else:
+                if command.dispatch_id != body.dispatch_id or command.command_id != body.command_id:
                     raise HTTPException(409, "STOP_COMMAND_CHANGED")
-            if (checkpoint.command is None or checkpoint.accepted is False) and physical.position.model_dump() != claim["origin"]:
-                raise HTTPException(409, "STOP_ORIGIN_CHANGED")
+                if checkpoint.accepted is False and physical.position.model_dump() != claim["origin"]:
+                    raise HTTPException(409, "STOP_ORIGIN_CHANGED")
             stopped = physical.relocation_state == "FAILED" or checkpoint.accepted is False
             if not stopped and owner["expires_at"] > store.clock.now():
                 raise HTTPException(409, "SIMULATOR_OWNER_STILL_ACTIVE")
-            self.validate_checkpoint(vehicle_id, record, checkpoint)
+            # A stop can preserve a completed charge already saved before the claim.
+            self.validate_checkpoint(vehicle_id, record, checkpoint, closing_unstarted=command is None)
 
             staged = deepcopy(record)
             now = store.clock.now()
@@ -457,7 +463,7 @@ class SimulatorRecovery:
         await self.commit(vehicle_id, staged)
         return receipt
 
-    def validate_checkpoint(self, vehicle_id, record, checkpoint):
+    def validate_checkpoint(self, vehicle_id, record, checkpoint, *, closing_unstarted=False):
         store, physical, command = self.store, checkpoint.physical, checkpoint.command
         if checkpoint.vehicle_id != vehicle_id or str(checkpoint.fleet_instance_id) != store.instance_id:
             raise HTTPException(409, "SIMULATOR_CHECKPOINT_IDENTITY_MISMATCH")
@@ -483,7 +489,8 @@ class SimulatorRecovery:
                         or physical.position != baseline.position
                         or physical.soc_pct != baseline.soc_pct
                         or physical.odometer_km != baseline.odometer_km
-                        or physical.speed_kph != 0 or physical.charging_state != "NOT_CHARGING"):
+                        or physical.speed_kph != 0
+                        or physical.charging_state != "NOT_CHARGING" and not closing_unstarted):
                     raise HTTPException(409, "SIMULATOR_IDLE_CLAIM_CHANGED")
         else:
             entry = record["claims"].get(str(command.dispatch_id))

@@ -12,9 +12,11 @@ from fastapi import HTTPException
 
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.travel import distance_km
-from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsMetadata, CrdsMove,
+from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsInputs, CrdsMetadata, CrdsMove,
                                    CrdsMoveOutcome, CrdsRouteEstimate, CrdsRouteRequest)
 from .crds import apply_move, shortage_by_zone
+from .crds_evidence import (DecisionEvidence, VehicleDecision, availability_reason, publish_evidence,
+                            ranked_decisions, route_failure_reason)
 from .crds_execution import evaluate_candidates
 from .crds_futures import MODEL_VERSION, build_futures, parameters_for
 from .crds_inputs import collect_inputs
@@ -25,7 +27,7 @@ from .traffic import assess_traffic
 
 @dataclass
 class CrdsPlan:
-    inputs: object
+    inputs: CrdsInputs
     evaluation: CrdsEvaluation
     futures: list
     moves: list
@@ -67,41 +69,102 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "simulation_time_scale": settings.simulation_time_scale})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
                      [], [], {}, {}, metadata, start + settings.deadline_seconds)
-    if inputs.issues:
-        metadata.reason_code = ",".join(inputs.issues)
-        empty.evaluation.reason_code = metadata.reason_code
+    vehicles = {v.vehicle_id: VehicleDecision(outcome="INCOMPLETE", reason="ASSESSMENT_INCOMPLETE")
+                for v in inputs.fleet.vehicles if not vehicle_id or v.vehicle_id == vehicle_id}
+    for identifier, reason in inputs.telemetry_exclusions.items():
+        if not vehicle_id or identifier == vehicle_id:
+            vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason=reason)
+    for row in inputs.relocation_exclusions:
+        if not vehicle_id or row.vehicle_id == vehicle_id:
+            prior = vehicles.get(row.vehicle_id)
+            reason = prior.reason if prior and row.reason == "TELEMETRY_UNAVAILABLE" else row.reason
+            vehicles[row.vehicle_id] = VehicleDecision(
+                outcome="EXCLUDED", reason=reason, dispatch_ids=row.dispatch_ids)
+    if vehicle_id and vehicle_id not in vehicles:
+        vehicles[vehicle_id] = VehicleDecision(outcome="EXCLUDED", reason="VEHICLE_MISSING")
+
+    def defer(reason, evidence_reason=None):
+        metadata.reason_code = reason
+        empty.evaluation.reason_code = reason
+        publish_evidence(metadata, vehicles, reasons=[evidence_reason] if evidence_reason else ())
         return empty
+
+    if inputs.issues:
+        return defer(",".join(inputs.issues))
     try:
         futures = build_futures(inputs, target_zone_id, settings, expand_age=expand_age,
             age_budget_seconds=settings.deadline_seconds, min_reserve_pct=policy.min_reserve_pct)
     except ValueError as exc:
-        metadata.reason_code = str(exc)
-        return empty
+        return defer(str(exc), "INCOMPLETE_INPUTS")
     metadata.scenario_count = len(futures)
-    reserved = {d.vehicle_id for d in inputs.planning.dispatches}
+    reserved = {d.vehicle_id: d.dispatch_id for d in inputs.planning.dispatches}
     assessments, sites, candidates = {}, {}, []
+    target_sites = [
+        site for site in inputs.facilities.facilities
+        if site.zone_id == target_zone_id and (not facility_id or site.facility_id == facility_id)
+    ]
+    has_withheld_site = any(
+        site.zone_id == target_zone_id and (not facility_id or site.facility_id == facility_id)
+        for site in inputs.withheld_facilities
+    )
     for vehicle in sorted(inputs.fleet.vehicles, key=lambda v: v.vehicle_id):
-        if ((vehicle_id and vehicle.vehicle_id != vehicle_id) or vehicle.vehicle_id in reserved
-                or vehicle.effective_availability != "AVAILABLE"):
+        identifier = vehicle.vehicle_id
+        if identifier not in vehicles:
+            continue
+        if identifier in reserved:
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED", reason="BUSY", dispatch_ids=[reserved[identifier]])
+            continue
+        if vehicle.effective_availability != "AVAILABLE":
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED", reason=availability_reason(vehicle))
             continue
         choices = []
-        for site in inputs.facilities.facilities:
-            if (site.zone_id != target_zone_id or site.status != "OPEN" or site.parking_available < 1
-                    or not site.is_fresh(inputs.evaluated_at) or (facility_id and site.facility_id != facility_id)):
+        blockers = {"DESTINATION_HOLD_UNCONFIRMED"} if has_withheld_site else set()
+        reserve_evidence = None
+        for site in target_sites:
+            if site.status != "OPEN":
+                blockers.add("PARKING_CLOSED")
+                continue
+            if not site.is_fresh(inputs.evaluated_at):
+                blockers.add("FACILITY_DATA_STALE")
+                continue
+            if site.parking_available < 1:
+                blockers.add("PARKING_FULL")
                 continue
             assessed_target = target.model_dump(mode="json")
             assessed_target.update(position=site.position.model_dump(mode="json"), charging={
                 "observed_at": inputs.evaluated_at.isoformat(), "available_slots": site.charging_available})
             assessment = assess(vehicle.model_dump(mode="json"), assessed_target, policy, inputs.evaluated_at)
             if not assessment["eligible"]:
+                blockers.update(assessment["exclusion_reasons"])
+                if assessment["exclusion_reasons"] == ["BELOW_OPERATIONAL_RESERVE"]:
+                    arrival = assessment["predicted_arrival_soc_pct"]
+                    if reserve_evidence is None or arrival > reserve_evidence[0]:
+                        reserve_evidence = (arrival, site.facility_id)
                 continue
             needs_charge = assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
-            if (needs_charge and site.charging_available < 1) or (site.facility_type == "CHARGING" and not needs_charge):
+            if needs_charge and site.charging_available < 1:
+                blockers.add("CHARGING_FULL")
+                continue
+            if site.facility_type == "CHARGING" and not needs_charge:
+                blockers.add("CHARGING_ONLY_DESTINATION")
                 continue
             choices.append((assessment["distance_km"], site.facility_id, site, assessment))
         if choices:
             _, _, site, assessment = min(choices, key=lambda x: (x[0], x[1]))
             candidates.append((vehicle, site, assessment))
+        elif blockers == {"BELOW_OPERATIONAL_RESERVE"} and reserve_evidence:
+            arrival, site_id = reserve_evidence
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED", reason="BELOW_OPERATIONAL_RESERVE", facility_id=site_id,
+                arrival_soc_pct=arrival, reserve_pct=policy.min_reserve_pct)
+        else:
+            reasons = sorted(blockers)
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED",
+                reason=reasons[0] if len(reasons) == 1 else "NO_SUITABLE_DESTINATION",
+                related_reasons=reasons if len(reasons) > 1 else [])
     semaphore = asyncio.Semaphore(4)
 
     async def prepare(candidate):
@@ -129,16 +192,20 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             evaluation = assess_traffic([p.model_dump() for p in route.geometry],
                 route.distance_km, route.duration_seconds, traffic, inputs.evaluated_at)
             if evaluation["blocked"]:
-                return None
+                return VehicleDecision(outcome="EXCLUDED", reason="ROAD_ROUTE_BLOCKED",
+                                       facility_id=site.facility_id)
             energy = route.distance_km * vehicle.consumption_kwh_per_km * policy.energy_margin_factor
             arrival_soc = vehicle.telemetry.soc_pct - energy / vehicle.battery_capacity_kwh * 100
             if arrival_soc < policy.min_reserve_pct:
-                return None
+                return VehicleDecision(outcome="EXCLUDED", reason="ROUTE_BELOW_OPERATIONAL_RESERVE",
+                                       facility_id=site.facility_id, arrival_soc_pct=arrival_soc,
+                                       reserve_pct=policy.min_reserve_pct)
             need_charge = arrival_soc < CHARGE_ON_ARRIVAL_BELOW_PCT
             if need_charge and (site.charging_available < 1 or site.charging_power_kw is None):
                 raise ValueError("CHARGING_AVAILABILITY_UNKNOWN")
             if site.facility_type == "CHARGING" and not need_charge:
-                return None
+                return VehicleDecision(outcome="EXCLUDED", reason="CHARGING_ONLY_DESTINATION",
+                                       facility_id=site.facility_id)
             availability_delay = (max(0, CHARGING_TARGET_SOC_PCT - arrival_soc) / 100 *
                                   vehicle.battery_capacity_kwh / site.charging_power_kw * 60 /
                                   settings.simulation_time_scale) if need_charge else 0
@@ -163,15 +230,27 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             return CrdsMove(vehicle_id=vehicle.vehicle_id, facility_id=site.facility_id,
                             origin_zone_id=origin, target_zone_id=target_zone_id, outcomes=outcomes), assessment, site
 
+    async def prepare_with_evidence(candidate):
+        vehicle, site, _ = candidate
+        try:
+            prepared = await prepare(candidate)
+        except (httpx.HTTPError, ValueError) as exc:
+            vehicles[vehicle.vehicle_id] = VehicleDecision(
+                outcome="INCOMPLETE", reason=route_failure_reason(exc), facility_id=site.facility_id)
+            raise
+        if isinstance(prepared, VehicleDecision):
+            vehicles[vehicle.vehicle_id] = prepared
+            return None
+        return prepared
+
     remaining = settings.deadline_seconds - (clock.monotonic() - start)
     if remaining <= 0:
-        metadata.reason_code = "DECISION_DEADLINE"
-        return empty
+        return defer("DECISION_DEADLINE")
     try:
-        prepared = await asyncio.wait_for(asyncio.gather(*(prepare(c) for c in candidates)), remaining)
+        prepared = await asyncio.wait_for(asyncio.gather(*(prepare_with_evidence(c) for c in candidates)), remaining)
     except (asyncio.TimeoutError, httpx.HTTPError, ValueError) as exc:
-        metadata.reason_code = "ROUTE_EVIDENCE_UNAVAILABLE" if not isinstance(exc, ValueError) else str(exc)
-        return empty
+        legacy_reason = str(exc) if isinstance(exc, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
+        return defer(legacy_reason, route_failure_reason(exc))
     moves = []
     for item in prepared:
         if item is not None:
@@ -200,6 +279,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         metadata.shortage_changes_by_zone = winner.shortage_changes_by_zone
         metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
         metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
+    vehicles.update(ranked_decisions(result, params.minimum_gain_vehicle_minutes, inputs.vehicle_zones))
+    publish_evidence(metadata, vehicles)
     return CrdsPlan(inputs, result, futures, moves, assessments, sites, metadata, start + settings.deadline_seconds)
 
 
@@ -215,22 +296,56 @@ async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=1
     children = []
     executions = [plan.metadata.execution]
     stop_reason = "REQUESTED_QUANTITY_REACHED"
+    stop_details: list[str] = []
+    step_decisions: dict[str, VehicleDecision] = {}
+    constrained: dict[str, VehicleDecision] = {}
+    original_evidence = DecisionEvidence.model_validate(
+        plan.metadata.source_references["decision_evidence"])
+    selected: dict[str, VehicleDecision] = {}
+
+    def defer_batch(metadata, reason):
+        metadata.decision, metadata.reason_code, metadata.approval_allowed = "DEFER", reason, False
+        metadata.execution = execution_summary(executions, settings.execution_mode)
+        vehicles = {
+            identifier: row if row.outcome == "EXCLUDED" else VehicleDecision(
+                outcome="INCOMPLETE", reason="ASSESSMENT_INCOMPLETE", facility_id=row.facility_id)
+            for identifier, row in original_evidence.vehicles.items()
+        }
+        publish_evidence(metadata, vehicles, batch_stop=[reason])
+        return [], metadata, reason
+
     while len(children) < quantity:
-        eligible = [m for m in remaining if parking[m.facility_id] > 0 and
-                    (plan.assessments[m.vehicle_id]["predicted_arrival_soc_pct"] >= CHARGE_ON_ARRIVAL_BELOW_PCT
-                     or chargers[m.facility_id] > 0) and
-                    (m.origin_zone_id is None or
-                     all(min(f.zones[m.origin_zone_id].usable_stock) >= 1 for f in futures))]
+        eligible = []
+        constrained = {}
+        for move in remaining:
+            site_id = move.facility_id
+            assessment = plan.assessments[move.vehicle_id]
+            if parking[site_id] <= 0:
+                reason = "BATCH_PARKING_LIMIT"
+            elif (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
+                  and chargers[site_id] <= 0):
+                reason = "BATCH_CHARGING_LIMIT"
+            elif (move.origin_zone_id is not None and
+                  any(min(f.zones[move.origin_zone_id].usable_stock) < 1 for f in futures)):
+                reason = "BATCH_ORIGIN_STOCK_LIMIT"
+            else:
+                eligible.append(move)
+                continue
+            constrained[move.vehicle_id] = VehicleDecision(
+                outcome="NOT_SELECTED", reason=reason, facility_id=site_id)
         result, execution = await evaluate_candidates(client, settings, plan.metadata.epoch_id,
             futures, eligible, params, timeout_seconds=plan.deadline - clock.monotonic())
         executions.append(execution)
         if result.decision == "DEFER":
             metadata = plan.metadata.model_copy(deep=True)
-            metadata.decision, metadata.reason_code, metadata.approval_allowed = "DEFER", result.reason_code, False
-            metadata.execution = execution_summary(executions, settings.execution_mode)
-            return [], metadata, result.reason_code
+            return defer_batch(metadata, result.reason_code)
+        step_decisions = ranked_decisions(result, params.minimum_gain_vehicle_minutes, plan.inputs.vehicle_zones)
         if result.decision != "MOVE":
             stop_reason = "CAPACITY_OR_STOCK_LIMIT" if not eligible and remaining else result.reason_code
+            if stop_reason == "CAPACITY_OR_STOCK_LIMIT":
+                stop_details = sorted({row.reason for row in constrained.values()})
+            else:
+                stop_details = [stop_reason if eligible else "NO_MORE_ELIGIBLE_EVS"]
             break
         gain = result.ranked_candidates[0]
         move = next(m for m in eligible if (m.vehicle_id, m.facility_id) == (gain.vehicle_id, gain.facility_id))
@@ -242,6 +357,8 @@ async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=1
         metadata.shortage_changes_by_zone = gain.shortage_changes_by_zone
         metadata.arrival_minutes_min = min(o.arrival_minutes for o in move.outcomes.values())
         metadata.arrival_minutes_max = max(o.arrival_minutes for o in move.outcomes.values())
+        selected[move.vehicle_id] = step_decisions[move.vehicle_id]
+        publish_evidence(metadata, {move.vehicle_id: selected[move.vehicle_id]})
         metadata.source_references["virtual_prefix"] = [c.evaluation.selected_vehicle_id for c in children]
         children.append(CrdsPlan(plan.inputs, result, futures, eligible, plan.assessments, plan.sites, metadata, plan.deadline))
         need_charge = plan.assessments[move.vehicle_id]["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
@@ -256,8 +373,7 @@ async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=1
         selected_ids = {c.evaluation.selected_vehicle_id for c in children}
         if any(v.vehicle_id in selected_ids and (clock.now() - v.telemetry.observed_at).total_seconds() >= stale_seconds
                for v in plan.inputs.fleet.vehicles):
-            metadata.decision, metadata.reason_code, metadata.approval_allowed = "DEFER", "STALE_AFTER_BATCH_PLANNING", False
-            return [], metadata, metadata.reason_code
+            return defer_batch(metadata, "STALE_AFTER_BATCH_PLANNING")
         effects = []
         for original, final in zip(plan.futures, futures):
             before, after = shortage_by_zone(original, params), shortage_by_zone(final, params)
@@ -272,6 +388,13 @@ async def plan_batch(plan, quantity, client, settings, clock, *, stale_seconds=1
         metadata.decision = "MOVE"
     else:
         metadata.decision, metadata.reason_code, metadata.approval_allowed = "HOLD", stop_reason, False
+    if not stop_details:
+        step_decisions = {
+            identifier: row.model_copy(update={"reason": "REQUESTED_QUANTITY_REACHED"})
+            for identifier, row in step_decisions.items() if identifier not in selected
+        }
+    publish_evidence(metadata, original_evidence.vehicles | step_decisions | constrained | selected,
+                     batch_stop=stop_details)
     return children, metadata, stop_reason
 
 
@@ -297,7 +420,7 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
                        f"{plan.metadata.scenario_count} declared futures.")
     else:
         explanation = ("Wait: no assessed move has sufficient fleet-wide benefit." if plan.metadata.decision == "HOLD"
-                       else "Assessment incomplete: " + plan.metadata.reason_code + ". Request fresh information.")
+                       else "The relocation assessment could not be completed.")
     return {"recommendation_id": str(uuid4()), "created_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=policy.recommendation_ttl_seconds)).isoformat(),
         "policy_version": "crds-v1", "policy_settings": policy.model_dump(exclude={"fleet_url", "demand_url", "facilities_url"}),

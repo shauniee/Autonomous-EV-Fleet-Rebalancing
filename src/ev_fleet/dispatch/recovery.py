@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from ev_fleet.contracts.dispatch import Dispatch, VehicleClaim
 from ev_fleet.contracts.facilities import Facility, ParkingHold
 from ev_fleet.contracts.recovery import (RecoveryAssessment, RecoveryBlocker, RecoveryEvidence,
-    SimulatorCheckpoint, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorSession)
+    SimulatorCheckpoint, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorSession, idle_before_command)
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState, TelemetryUpdate
 from ev_fleet.simulator.movement import Movement
 from ev_fleet.rebalancing.traffic import assess_traffic
@@ -110,7 +110,7 @@ def same_local(left, right):
     return left == right
 
 
-def unstarted_checkpoint(local, vehicle, checkpoint):
+def unstarted_checkpoint(local, vehicle, checkpoint, *, allow_completed_charge=False):
     """An idle checkpoint can precede a claim that was never delivered."""
     dispatch, claim = Dispatch.model_validate(local["dispatch"]), vehicle.active_claim
     physical = checkpoint.physical
@@ -119,16 +119,13 @@ def unstarted_checkpoint(local, vehicle, checkpoint):
         and claim.command_id == dispatch.command.command_id
         and checkpoint.vehicle_id == vehicle.vehicle_id
         and checkpoint.fleet_instance_id == claim.fleet_instance_id
-        and checkpoint.command is None and not checkpoint.acknowledged
-        and checkpoint.acknowledgement is None and checkpoint.pending_event is None
-        and checkpoint.completed_command_id != dispatch.command.command_id
         and dispatch.state not in ("FAILED", "SUCCEEDED", "REJECTED")
         and dispatch.delivery_attempts == 0 and dispatch.acknowledged_at is None
         and dispatch.distance_travelled_km == 0 and local["ack"] is None
         and local["event_sequence"] == -1 and local["release_outcome"] is None
-        and physical.relocation_state == "IDLE" and physical.active_dispatch_id is None
-        and physical.charging_state == "NOT_CHARGING" and physical.speed_kph == 0
-        and physical.position == claim.origin and physical == vehicle.telemetry)
+        and (physical.charging_state == "NOT_CHARGING"
+             or allow_completed_charge and physical.charging_state == "COMPLETE")
+        and idle_before_command(checkpoint, dispatch.command.command_id, claim.origin, vehicle.telemetry))
 
 
 def candidate_checkpoint(local, fleet, vehicle, saved):
