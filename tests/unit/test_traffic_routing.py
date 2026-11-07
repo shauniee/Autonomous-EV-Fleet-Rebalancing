@@ -196,6 +196,47 @@ def test_traffic_aware_matching_changes_ranking_without_holding_bays(clock):
     asyncio.run(scenario())
 
 
+def test_batch_traffic_scoring_has_a_bounded_candidate_budget(clock, monkeypatch):
+    from ev_fleet.rebalancing import batch
+
+    assessments = []
+
+    def bounded_assessment(geometry, distance_km, duration_seconds, traffic, now):
+        assessments.append(geometry)
+        if len(assessments) > 8:
+            raise AssertionError("traffic scoring exceeded the global shortlist budget")
+        return {"status": "FRESH", "blocked": False,
+                "estimated_duration_seconds": duration_seconds,
+                "risk": 0}
+
+    monkeypatch.setattr(batch, "assess_traffic", bounded_assessment)
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            for index in range(10):
+                vehicle_id = f"ev-{index}"
+                await cluster.vehicle(vehicle_id)
+            fleet = await cluster.fleet.snapshot()
+            zone = await cluster.demand.get("bishan")
+            base = BY_ID["mock-bishan-01"]
+            facilities = [base.model_copy(update={
+                "facility_id": f"site-{index}",
+                "position": base.position.model_copy(update={
+                    "longitude": base.position.longitude + index / 100000,
+                }),
+            }) for index in range(100)]
+
+            selected = rank_pairs(
+                fleet, zone, facilities, Settings(), clock.now(), 1,
+                traffic={"source": "LTA_DATAMALL", "status": "FRESH"})
+
+            assert len(selected) == 1
+            assert selected[0]["traffic_scored"] is True
+            assert len(assessments) <= 8
+
+    asyncio.run(scenario())
+
+
 def test_synthetic_comparison_covers_four_conditions_and_avoids_known_roadblock():
     from experiments.traffic.evaluate import evaluate
     results = evaluate()

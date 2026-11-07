@@ -6,6 +6,7 @@ import pytest
 import httpx
 from redis.exceptions import RedisError
 
+import ev_fleet.rebalancing.shared_traffic as shared_traffic
 from ev_fleet.rebalancing.traffic import FEEDS, TrafficMonitor
 from ev_fleet.rebalancing.shared_traffic import (
     TrafficCachePublisher, RedisTrafficReader, META_KEY, _decode_rows,
@@ -246,4 +247,20 @@ def test_route_spatial_index_and_display_are_reused_by_digest():
         await writer.success("speeds", [SPEED], clock[0])
         await reader.refresh()
         assert reader.cached_snapshot()["_speed_index"] is before
+    asyncio.run(scenario())
+
+
+def test_speed_cache_is_published_with_route_ready_views():
+    async def scenario():
+        redis = FakeRedis()
+        writer = TrafficCachePublisher(redis)
+
+        digest = await writer.success("speeds", [SPEED], START)
+        payload = shared_traffic._decode_speed_snapshot(
+            redis.blobs[shared_traffic.data_key("speeds", digest)], digest)
+
+        assert payload["rows"] == [SPEED]
+        assert payload["index"]
+        assert payload["display"] == [SPEED]
+
     asyncio.run(scenario())

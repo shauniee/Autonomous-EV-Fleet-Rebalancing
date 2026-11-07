@@ -360,7 +360,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                   "assignments": assignments,
                   "explanation": f"Proposed {len(assignments)} of {body.quantity} EV-to-parking assignments (capacity-limited greedy heuristic).",
                   "assumptions": [f"Facility source: {snapshot.data_source}", "Only simulated allocations are reserved",
-                                  "Traffic ranking uses approximate direct corridors; road route rechecked at approval",
+                                  "Traffic ranking evaluates a bounded baseline shortlist using approximate direct corridors; road route rechecked at approval",
                                   "No road routing or guaranteed real parking"]}
         await batch_store.put({**result, "recommendation_id": identifier}, ttl)
         return result

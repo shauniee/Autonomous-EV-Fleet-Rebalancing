@@ -243,14 +243,16 @@ class FacilitiesStore:
             raise HTTPException(404, "PARKING_HOLD_NOT_FOUND")
         return deepcopy(entry["receipt"])
 
-    async def vehicle_parking(self, vehicle_id):
+    def _vehicle_parking(self, vehicle_id):
         entries = [entry for entry in self.holds.values()
                    if entry["receipt"]["vehicle_id"] == vehicle_id]
         occupied = next((entry for entry in entries if entry["status"] == "OCCUPIED"), None)
         parking = None
+        access_position_missing = False
         if occupied:
             site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
             if site:
+                access_position_missing = occupied["request"].access_position is None
                 parking = {"facility_id": site.facility_id, "name": site.name,
                     "position": occupied["request"].access_position or site.position,
                     "zone_id": site.zone_id, "source": site.source,
@@ -258,6 +260,42 @@ class FacilitiesStore:
                     "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
                     "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
         return {"vehicle_id": vehicle_id, "parking": parking,
+                "pending": any(entry["status"] == "RESERVED" for entry in entries),
+                "access_position_missing": access_position_missing}
+
+    async def vehicle_parking(self, vehicle_id):
+        return self._vehicle_parking(vehicle_id)
+
+    async def repair_vehicle_parking_access(self, vehicle_id, position):
+        async with self.lock:
+            occupied = next((entry for entry in self.holds.values()
+                             if entry["receipt"]["vehicle_id"] == vehicle_id
+                             and entry["status"] == "OCCUPIED"), None)
+            if occupied is None:
+                raise HTTPException(409, "PARKING_NOT_OCCUPIED")
+            site = occupied.get("facility") or self.catalogue.get(occupied["facility_id"])
+            if site is None:
+                raise HTTPException(409, "PARKING_FACILITY_UNAVAILABLE")
+            existing = occupied["request"].access_position
+            if existing is not None:
+                if existing == position:
+                    return self._vehicle_parking(vehicle_id)
+                raise HTTPException(409, "PARKING_ACCESS_ALREADY_CONFIRMED")
+            if distance_km(position.model_dump(), site.position.model_dump()) > MAX_FACILITY_ROAD_ACCESS_KM:
+                raise HTTPException(409, "PARKING_ROAD_ACCESS_TOO_FAR")
+
+            previous_request = occupied["request"]
+            previous_version = self.version
+            occupied["request"] = previous_request.model_copy(
+                update={"access_position": position})
+            self.version += 1
+            try:
+                await self.persist()
+            except Exception:
+                occupied["request"] = previous_request
+                self.version = previous_version
+                raise
+            return self._vehicle_parking(vehicle_id)
                 "pending": any(entry["status"] == "RESERVED" for entry in entries)}
 
     async def parking_observation(self, vehicle_id, request_id):

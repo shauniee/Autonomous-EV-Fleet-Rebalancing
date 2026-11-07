@@ -36,6 +36,22 @@ become ready. This prevents mixed old/new backend API versions without requiring
 manual `kubectl rollout restart` commands. Because all backends and simulator
 Pods use the shared backend image, each deploy updates all of them.
 
+To recreate the local Python environment, reload whitelisted settings strictly
+from the saved `.env`, rebuild all application images, and replace every project
+Pod, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -FreshBoot
+```
+
+Fresh boot retains the `ev-fleet` namespace, PostgreSQL PVC and database records.
+It does not prune old images or recreate Docker Desktop's Kubernetes cluster.
+The same fail-closed active-rental, relocation and charging checks run before any
+workload replacement. A completed optional customer-rental Job and its terminal
+Pod are removed as generated runtime state. Processes running from this project's
+exact `.venv` path are stopped before recreation; unrelated Python processes are
+not touched.
+
 To **only connect** to an existing deployment, run:
 
 ```powershell

@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import os
-from uuid import UUID, uuid4, uuid5
+from copy import deepcopy
+from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings, CrdsSettings
@@ -41,6 +42,7 @@ class DispatchService:
         self.batches = {}
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
+        self.persisted_snapshot = None
         self.routing = RoutingSettings.from_env()
         self.planning_instance_id = uuid4()
         self.planning_revision = 0
@@ -76,6 +78,7 @@ class DispatchService:
             if record.data["acknowledged_at"] and record.data["state"] not in TERMINAL:
                 record.progress_tick = tick
             self.store.records[key] = record
+        self.persisted_snapshot = deepcopy(payload)
 
     async def close(self):
         # Do not retry an ambiguous write during shutdown: reconciliation must
@@ -88,6 +91,50 @@ class DispatchService:
 
     async def persist(self):
         async with self.persist_lock:
+            await self.save_snapshot(self.current_snapshot())
+
+    async def persist_if_changed(self):
+        async with self.persist_lock:
+            if not getattr(self.repository, "ready", True):
+                raise RuntimeError("PERSISTENCE_STATE_UNCERTAIN")
+            current = self.current_snapshot()
+            if current == self.persisted_snapshot:
+                return False
+            await self.save_snapshot(current)
+            return True
+
+    async def save_snapshot(self, snapshot):
+        if not getattr(self.repository, "ready", True):
+            raise RuntimeError("PERSISTENCE_STATE_UNCERTAIN")
+        frozen = deepcopy(snapshot)
+        await self.repository.save(frozen)
+        self.persisted_snapshot = frozen
+
+    def current_snapshot(self):
+        return {
+            "records": {key: self.durable_record(record)
+                        for key, record in self.store.records.items()},
+            "requests": self.store.requests,
+            "recommendations": self.store.recommendations,
+            "batches": self.batches,
+            "batch_recommendations": self.batch_recommendations,
+        }
+
+    @staticmethod
+    def durable_record(record):
+        return {
+            "data": record.data,
+            "claim_request": record.claim_request,
+            "parking_request": record.parking_request,
+            "claimed": record.claimed,
+            "ack": record.ack,
+            "events": record.events,
+            "event_sequence": record.event_sequence,
+            "release_outcome": record.release_outcome,
+        }
+
+    def record_checkpoint(self, record):
+        return deepcopy(self.durable_record(record))
             records = {key: {
                 "data": record.data,
                 "claim_request": record.claim_request,
@@ -572,7 +619,7 @@ class DispatchService:
         async with record.lock:
             await self.refresh(record)
             result = record.view()
-        await self.persist()
+        await self.persist_if_changed()
         return result
 
     async def commands(self, vehicle_id):
@@ -593,7 +640,7 @@ class DispatchService:
                     return {"commands": [record.view()["command"]]}
             return {"commands": []}
         finally:
-            await self.persist()
+            await self.persist_if_changed()
 
     def check_command(self, record, body):
         if stop_pending(record):
@@ -797,8 +844,29 @@ class DispatchService:
             raise HTTPException(404, "BATCH_NOT_FOUND")
         return self.batch_view(data)
 
+    async def reconcile_once(self):
+        changed = False
+        for record in list(self.store.records.values()):
+            if record.lock.locked() or (record.data["state"] in TERMINAL
+                and record.data["parking_status"] != "RESERVED"):
+                continue
+            try:
+                async with record.lock:
+                    before = self.record_checkpoint(record)
+                    await self.refresh(record)
+                    record_changed = self.durable_record(record) != before
+                changed = changed or record_changed
+            except Exception:
+                logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])
+        if changed:
+            try:
+                await self.persist_if_changed()
+            except Exception:
+                logging.exception("dispatch reconciliation persistence failed")
+
     async def reconcile_loop(self):
         while True:
+            await self.reconcile_once()
             for record in list(self.store.records.values()):
                 if record.lock.locked():
                     continue

@@ -59,7 +59,7 @@ def _encode_rows(rows):
     return hashlib.sha256(raw).hexdigest(), zlib.compress(raw, level=3)
 
 
-def _decode_rows(blob, digest):
+def _decode_json(blob, digest):
     if not isinstance(blob, bytes) or len(blob) > MAX_COMPRESSED_BYTES:
         raise ValueError("TRAFFIC_CACHE_BLOB_INVALID")
     try:
@@ -72,16 +72,60 @@ def _decode_rows(blob, digest):
         raise ValueError("TRAFFIC_CACHE_BLOB_INVALID")
     if hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("TRAFFIC_CACHE_HASH_MISMATCH")
-    rows = json.loads(raw)
+    return json.loads(raw)
+
+
+def _decode_rows(blob, digest):
+    rows = _decode_json(blob, digest)
     if not isinstance(rows, list) or len(rows) > MAX_RECORDS or any(
             not isinstance(row, dict) for row in rows):
         raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
     return rows
 
 
-def _decode_index_and_sample(blob, digest):
-    rows = _decode_rows(blob, digest)
-    return rows, build_speed_index(rows), _dashboard_speeds(rows)
+def _encode_speed_snapshot(rows):
+    index = build_speed_index(rows)
+    payload = {
+        "rows": rows,
+        "index": [[tile[0], tile[1], positions]
+                  for tile, positions in index.items()],
+        "display": _dashboard_speeds(rows),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True,
+                     allow_nan=False).encode("utf-8")
+    if len(raw) > MAX_ENCODED_BYTES:
+        raise ValueError("TRAFFIC_PAYLOAD_TOO_LARGE")
+    return hashlib.sha256(raw).hexdigest(), zlib.compress(raw, level=3)
+
+
+def _decode_speed_snapshot(blob, digest):
+    payload = _decode_json(blob, digest)
+    if not isinstance(payload, dict):
+        raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
+    rows, encoded_index, display = (payload.get("rows"), payload.get("index"),
+                                    payload.get("display"))
+    if (not isinstance(rows, list) or len(rows) > MAX_RECORDS
+            or any(not isinstance(row, dict) for row in rows)
+            or not isinstance(encoded_index, list)
+            or len(encoded_index) > 2 * len(rows)
+            or not isinstance(display, list)
+            or len(display) > len(rows)
+            or any(not isinstance(row, dict) for row in display)):
+        raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
+    index = {}
+    references = 0
+    for item in encoded_index:
+        if (not isinstance(item, list) or len(item) != 3
+                or not isinstance(item[0], int) or not isinstance(item[1], int)
+                or not isinstance(item[2], list)
+                or any(not isinstance(position, int) or position < 0
+                       or position >= len(rows) for position in item[2])):
+            raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
+        references += len(item[2])
+        if references > 2 * len(rows):
+            raise ValueError("TRAFFIC_CACHE_SCHEMA_INVALID")
+        index[(item[0], item[1])] = item[2]
+    return {"rows": rows, "index": index, "display": display}
 
 
 class TrafficCachePublisher:
@@ -95,7 +139,8 @@ class TrafficCachePublisher:
             raise ValueError("UNKNOWN_TRAFFIC_FEED")
         # Compression of the full v4 feed is CPU-heavy; do not block the
         # collector's other independent feed coroutines.
-        digest, encoded = await asyncio.to_thread(_encode_rows, rows)
+        encoder = _encode_speed_snapshot if name == "speeds" else _encode_rows
+        digest, encoded = await asyncio.to_thread(encoder, rows)
         if len(encoded) > MAX_COMPRESSED_BYTES:
             raise ValueError("TRAFFIC_PAYLOAD_TOO_LARGE")
         max_age = FEEDS[name][2]
@@ -171,11 +216,12 @@ class RedisTrafficReader:
                         display = prior.get("display")
                     else:
                         blob = await self.redis.get(data_key(name, digest))
-                        # Decompression and indexing of ~144k links must never
-                        # monopolise the health-checked API event loop.
                         if name == "speeds":
-                            rows, spatial, display = await asyncio.to_thread(
-                                _decode_index_and_sample, blob, digest)
+                            snapshot = await asyncio.to_thread(
+                                _decode_speed_snapshot, blob, digest)
+                            rows = snapshot["rows"]
+                            spatial = snapshot["index"]
+                            display = snapshot["display"]
                         else:
                             rows = await asyncio.to_thread(_decode_rows, blob, digest)
                             spatial = display = None

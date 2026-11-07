@@ -1,6 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    // Tests also exercise the sibling simulation-console UI. Keep a single
+    // React instance when source files live outside the dashboard package.
+    dedupe: ['react', 'react-dom'],
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['tests/setup.ts'],

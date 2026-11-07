@@ -482,6 +482,112 @@ def test_moving_ev_registers_at_road_before_first_fleet_telemetry(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_restart_restores_persisted_occupied_parking_before_telemetry():
+    from ev_fleet.simulator.commands import MovingNode
+
+    async def scenario():
+        async with Cluster(Clock()) as cluster:
+            vehicle_id = "ev-restart-parked"
+            site = BY_ID["mock-punggol-01"]
+            parking_position = site.position.model_dump()
+            restarted_position = {
+                **parking_position,
+                "latitude": parking_position["latitude"] + .001,
+            }
+            assert distance_km(restarted_position, parking_position) > .05
+            await cluster.vehicle(vehicle_id, soc=72)
+            await cluster.telemetry(vehicle_id, soc=72, position=restarted_position)
+            dispatch_id = uuid4()
+            await cluster.facilities.reserve(site.facility_id, ParkingHoldRequest(
+                dispatch_id=dispatch_id,
+                vehicle_id=vehicle_id,
+                expected_zone_id=site.zone_id,
+                expected_position=parking_position,
+                access_position=parking_position,
+                requires_charging=False,
+            ))
+            await cluster.facilities.change(dispatch_id, "OCCUPIED")
+
+            node = MovingNode(
+                "http://fleet.test",
+                "http://dispatch.test",
+                vehicle_id,
+                restarted_position,
+                72,
+                client=cluster.client,
+                facilities_url="http://facilities.test",
+                road_match_initial=False,
+            )
+            await node.send_telemetry()
+
+            state = await cluster.fleet.get(vehicle_id)
+            assert node.movement.position == parking_position
+            assert state["telemetry"]["position"] == parking_position
+            assert state["telemetry"]["availability"] == "AVAILABLE"
+            assert state["telemetry"]["parked_facility_id"] == site.facility_id
+
+    asyncio.run(scenario())
+
+
+def test_restart_repairs_legacy_occupied_parking_access_once_before_telemetry(monkeypatch):
+    from ev_fleet.dispatch import routing
+    from ev_fleet.simulator.commands import MovingNode
+
+    async def scenario():
+        async with Cluster(Clock()) as cluster:
+            vehicle_id = "ev-legacy-parked"
+            site = BY_ID["mock-punggol-01"]
+            centre = site.position.model_dump()
+            road_access = {
+                **centre,
+                "latitude": centre["latitude"] + .00055,
+            }
+            assert .05 < distance_km(centre, road_access) < .15
+            await cluster.vehicle(vehicle_id, soc=72)
+            await cluster.telemetry(vehicle_id, soc=72, position=centre)
+            dispatch_id = uuid4()
+            await cluster.facilities.reserve(site.facility_id, ParkingHoldRequest(
+                dispatch_id=dispatch_id,
+                vehicle_id=vehicle_id,
+                expected_zone_id=site.zone_id,
+                expected_position=centre,
+                requires_charging=False,
+            ))
+            await cluster.facilities.change(dispatch_id, "OCCUPIED")
+            cluster.dispatch.routing = RoutingSettings(
+                provider="ONEMAP", access_token="test-token")
+            route_calls = []
+
+            async def fake_route(_client, _settings, origin, target):
+                route_calls.append((origin, target))
+                return road_route(road_access, target)
+
+            monkeypatch.setattr(routing, "_onemap_route", fake_route)
+            first = MovingNode(
+                "http://fleet.test", "http://dispatch.test", vehicle_id,
+                centre, 72, client=cluster.client,
+                facilities_url="http://facilities.test")
+            await first.send_telemetry()
+
+            repaired = await cluster.facilities.vehicle_parking(vehicle_id)
+            fleet_state = await cluster.fleet.get(vehicle_id)
+            assert repaired["access_position_missing"] is False
+            assert repaired["parking"]["position"].model_dump() == road_access
+            assert first.movement.position == road_access
+            assert fleet_state["telemetry"]["position"] == road_access
+            assert len(route_calls) == 1
+
+            restarted = MovingNode(
+                "http://fleet.test", "http://dispatch.test", vehicle_id,
+                centre, 72, client=cluster.client,
+                facilities_url="http://facilities.test")
+            await restarted.send_telemetry()
+            assert restarted.movement.position == road_access
+            assert len(route_calls) == 1
+
+    asyncio.run(scenario())
+
+
 def test_reject_route_start_that_would_create_an_offroad_connector():
     origin = {"latitude": 1.35, "longitude": 103.85}
     road_start = {"latitude": 1.35113, "longitude": 103.85}

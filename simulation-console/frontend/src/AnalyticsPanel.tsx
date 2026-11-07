@@ -4,6 +4,7 @@ type Hpa = { current_cpu_pct: number | null; target_cpu_pct: number | null;
   current_replicas: number | null; desired_replicas: number | null; max_replicas: number | null };
 type Sample = { timestamp: string; hpa: Hpa | null; attempted: number; success: number;
   errors: number; p95_latency_ms: number | null;
+  pods: { ready: number; total: number } | null;
   usage: { cpu_millicores: number; memory_mib: number } | null };
 type Experiment = { id: string; preset: string; state: string; started_at: string;
   duration_seconds: number; simulated_evs: number; telemetry_hz: number; requests_per_second: number;
@@ -142,10 +143,14 @@ export function AnalyticsPanel() {
     const seconds = (Date.parse(sample.timestamp) - Date.parse(previous.timestamp)) / 1000;
     return seconds > 0 ? Math.max(0, (sample.attempted - previous.attempted) / seconds) : null;
   });
+  const hpaCpuMax = Math.ceil(Math.max(100,
+    ...samples.map(sample => sample.hpa?.current_cpu_pct ?? 0)) / 50) * 50;
+  const observedPodMax = Math.max(3, infra?.hpa?.max_replicas ?? 3,
+    ...samples.map(sample => sample.pods?.total ?? 0));
   const scalingEvents = samples.slice(1).flatMap((sample, i) => {
     const previous = samples[i];
-    const before = previous.hpa?.current_replicas;
-    const after = sample.hpa?.current_replicas;
+    const before = previous.pods?.total;
+    const after = sample.pods?.total;
     return before != null && after != null && before !== after
       ? [{time:sample.timestamp, before, after}] : [];
   });
@@ -164,48 +169,35 @@ export function AnalyticsPanel() {
       Partial metrics: {Object.entries(infra.errors).map(([name, cause]) =>
         name + ': ' + cause + '. ').join('')}
     </p>}
-    <div className="analytics-layout" hidden={view !== 'workload'}>
-      <div className="analytics-load">
-        <h3>Workload controls</h3>
-        <label>Duration <select value={duration} onChange={e => setDuration(Number(e.target.value))}
-          disabled={busy || running}>
-          {[30,60,90,120].map(n=><option key={n} value={n}>{n} seconds</option>)}
-        </select></label>
-        <div className="analytics-presets">
-          {presets.map(p => <button type="button" key={p.id} onClick={() => void control('start',p.id)}
-            disabled={busy || running || !snapshot?.load_enabled}>
-            <strong>{p.title}</strong><small>{p.evs} EV-equivalents · {p.hz} Hz</small>
-            <small>{p.rps} HTTP req/s</small>
-          </button>)}
-        </div>
-        <button type="button" disabled={busy || !running}
-          onClick={() => void control('stop')}>Stop experiment</button>
-        {snapshot && !snapshot.load_enabled && <p className="warning">Load generation is disabled.</p>}
-        {message && <p role="status" className="success">{message}</p>}
-      </div>
-      <div>
-        <h3>Current measurements</h3>
-        <div className="analytics-metrics">
-          <div className="analytics-stat"><small>HPA CPU / target</small>
-            <strong>{fmt(infra?.hpa?.current_cpu_pct, '%')} / {fmt(infra?.hpa?.target_cpu_pct, '%')}</strong>
-            <small>Relative to requested CPU, not host CPU</small></div>
-          <div className="analytics-stat"><small>Replicas (current → desired)</small>
-            <strong>{fmt(infra?.hpa?.current_replicas)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
-            <small>Ready Pods: {fmt(infra?.pods?.ready)}</small></div>
-          <div className="analytics-stat"><small>Dashboard Pod CPU / memory</small>
-            <strong>{fmt(infra?.usage?.cpu_millicores,'m')} / {fmt(infra?.usage?.memory_mib,' MiB')}</strong>
-            <small>Measured across dashboard containers</small></div>
-          <div className="analytics-stat"><small>Synthetic HTTP throughput</small>
-            <strong>{fmt(experiment?.rps_observed,' req/s')}</strong>
-            <small>{experiment ? experiment.attempted + ' requests, ' + experiment.errors + ' errors' :
-              'No experiment yet'}</small></div>
-        </div>
-        <div className="analytics-meta">
-          <span>Observed: {sgt(infra?.observed_at)}</span>
-          <span>Experiment: {experiment ? experiment.preset + ' · ' + experiment.state : 'None'}</span>
-          <span>p95 latency: {fmt(experiment?.p95_latency_ms,' ms')}</span>
-          <span>Storage: {snapshot?.storage === 'local-persistent-volume' ? 'Persistent volume' : 'Ephemeral'}</span>
-        </div>
+    <div className="analytics-metrics">
+      <div className="analytics-stat"><small>HPA CPU / target</small>
+        <strong>{fmt(infra?.hpa?.current_cpu_pct, '%')} / {fmt(infra?.hpa?.target_cpu_pct, '%')}</strong>
+        <small>Relative to requested CPU, not host CPU</small></div>
+      <div className="analytics-stat"><small>Pods (observed → HPA desired)</small>
+        <strong>{fmt(infra?.pods?.total)} → {fmt(infra?.hpa?.desired_replicas)}</strong>
+        <small>Ready Pods: {fmt(infra?.pods?.ready)}</small></div>
+      <div className="analytics-stat"><small>Dashboard Pod CPU / memory</small>
+        <strong>{fmt(infra?.usage?.cpu_millicores,'m')} / {fmt(infra?.usage?.memory_mib,' MiB')}</strong>
+        <small>Measured across dashboard containers</small></div>
+      <div className="analytics-stat"><small>Synthetic HTTP throughput</small>
+        <strong>{fmt(experiment?.rps_observed,' req/s')}</strong>
+        <small>{experiment ? experiment.attempted + ' requests, ' + experiment.errors + ' errors' :
+          'No experiment yet'}</small></div>
+    </div>
+    <div className="analytics-load">
+      <h3>Workload controls</h3>
+      <p className="description">Fixed local presets. A maximum of 120 seconds per test,
+        bounded concurrency, and no custom request targets.</p>
+      <label>Duration <select value={duration} onChange={e => setDuration(Number(e.target.value))}
+        disabled={busy || running}>
+        {[30,60,90,120].map(n=><option key={n} value={n}>{n} seconds</option>)}
+      </select></label>
+      <div className="analytics-presets">
+        {presets.map(p => <button type="button" key={p.id} onClick={() => void control('start',p.id)}
+          disabled={busy || running || !snapshot?.load_enabled}>
+          <strong>{p.title}</strong><small>{p.evs} EV-equivalents · {p.hz} Hz</small>
+          <small>{p.rps} HTTP req/s</small>
+        </button>)}
       </div>
     </div>
     <div hidden={view !== 'charts'}>
@@ -230,27 +222,36 @@ export function AnalyticsPanel() {
         even when HTTP load is generated.
       </p>}
     </div>
-    <div hidden={view !== 'history'}>
-      <h3>Recorded experiments</h3>
-      <p className="description">CSV contains timestamped CPU and HPA observations, replica counts,
-        throughput, errors and latency. Missing Kubernetes measurements are left blank.
-        Experiments persist through restarts when the analytics volume is retained.</p>
-      <div className="table-wrap"><table><thead><tr>
-        <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Mean req/s</th><th>Peak CPU</th><th>Peak Pods</th><th>Requests</th><th>Errors</th><th>Export</th>
-      </tr></thead><tbody>
-        {records.map(r=><tr key={r.id}><td>{sgt(r.started_at)}</td><td>{r.preset}</td>
-          <td>{r.state}</td><td>{fmt(r.mean_rps)}</td><td>{fmt(r.peak_hpa_cpu_pct, '%')}</td><td>{fmt(r.peak_replicas)}</td><td>{r.attempted}</td><td>{r.errors}</td>
-          <td><a href={'/api/probe/v1/analytics/runs/' + r.id + '/csv'}>CSV</a></td></tr>)}
-      </tbody></table></div>
-      {!records.length && <p className="description">No experiments recorded yet.</p>}
+    <div className="analytics-charts">
+      <Graph title="HPA CPU (%)" samples={samples} maxValue={hpaCpuMax}
+        measure={s => s.hpa?.current_cpu_pct} target={infra?.hpa?.target_cpu_pct}/>
+      <Graph title="Dashboard Pods (observed)" samples={samples}
+        maxValue={observedPodMax} measure={s => s.pods?.total}/>
+      <Graph title="Synthetic HTTP requests / second" samples={samples}
+        maxValue={220} measure={(_,i) => observedRps[i]}/>
+      <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
+        maxValue={100} measure={s=>s.usage?.cpu_millicores}/>
     </div>
-    <details className="help">
-      <summary>About workload presets and measurements</summary>
-      <p className="description">Real Kubernetes metrics and HPA decisions accompany synthetic
-        dashboard HTTP load. Preset EV counts and update rates represent an equivalent workload.
-        The console sends no Fleet telemetry, rental or Dispatch commands during these experiments.
-        Scaling is not guaranteed. Runs use fixed local presets with bounded concurrency and
-        a maximum duration of 120 seconds.</p>
-    </details>
+    <h3>Observed scaling events</h3>
+    {scalingEvents.length ? <div className="analytics-events">
+      {scalingEvents.map((event, i) => <p key={i}>
+        {sgt(event.time)} · Dashboard Pods {event.before} → {event.after}
+      </p>)}
+    </div> : <p className="description">
+      No observed Pod-count change during this experiment. HPA scaling depends on measured CPU
+      and may occur after a short experiment ends.
+    </p>}
+    <h3>Recorded experiments</h3>
+    <p className="description">CSV contains timestamped CPU and HPA observations, observed Pod counts,
+      throughput, errors and latency. Missing Kubernetes measurements are left blank.
+      Experiments persist through restarts when the analytics volume is retained.</p>
+    <div className="table-wrap"><table><thead><tr>
+      <th>Started (SGT)</th><th>Preset</th><th>State</th><th>Mean req/s</th><th>Peak CPU</th><th>Peak Pods</th><th>Requests</th><th>Errors</th><th>Export</th>
+    </tr></thead><tbody>
+      {records.map(r=><tr key={r.id}><td>{sgt(r.started_at)}</td><td>{r.preset}</td>
+        <td>{r.state}</td><td>{fmt(r.mean_rps)}</td><td>{fmt(r.peak_hpa_cpu_pct, '%')}</td><td>{fmt(r.peak_replicas)}</td><td>{r.attempted}</td><td>{r.errors}</td>
+        <td><a href={'/api/probe/v1/analytics/runs/' + r.id + '/csv'}>CSV</a></td></tr>)}
+    </tbody></table></div>
+    {!records.length && <p className="description">No experiments recorded yet.</p>}
   </section>;
 }

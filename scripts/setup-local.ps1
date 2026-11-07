@@ -1,4 +1,4 @@
-param([switch]$Force)
+param([switch]$Force, [switch]$Recreate)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -37,7 +37,31 @@ function Test-Python([string]$Executable) {
     }
 }
 
+function Test-SystemPythonCandidate([string]$Candidate) {
+    if (-not $Candidate) { return $false }
+    $candidatePath = [IO.Path]::GetFullPath($Candidate)
+    $venvPrefix = [IO.Path]::GetFullPath($venvPath).TrimEnd('\') + '\'
+    if ($candidatePath.StartsWith($venvPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    if ($candidatePath.IndexOf('\WindowsApps\', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return $false
+    }
+    return Test-Python $candidatePath
+}
+
 function Resolve-SystemPython {
+    # Prefer a conventional installation. Microsoft Store aliases can launch
+    # once yet leave a venv tied to an app path that later becomes inaccessible.
+    # Check every PATH match because an activated .venv can legitimately be the
+    # first entry while a stable system installation remains available later.
+    foreach ($python in @(Get-Command python -All -ErrorAction SilentlyContinue)) {
+        $isApplication = $python.CommandType -eq [Management.Automation.CommandTypes]::Application
+        if ($isApplication -and (Test-SystemPythonCandidate $python.Source)) {
+            return $python.Source
+        }
+    }
+
     $launcher = Get-Command py -ErrorAction SilentlyContinue
     if ($launcher) {
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -52,7 +76,7 @@ function Resolve-SystemPython {
         try {
             if ($process.Start() -and $process.WaitForExit(10000)) {
                 $candidate = $process.StandardOutput.ReadToEnd().Trim()
-                if ($process.ExitCode -eq 0 -and $candidate -and (Test-Python $candidate)) {
+                if ($process.ExitCode -eq 0 -and (Test-SystemPythonCandidate $candidate)) {
                     return $candidate
                 }
             } elseif (-not $process.HasExited) {
@@ -63,25 +87,62 @@ function Resolve-SystemPython {
         }
     }
 
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python -and (Test-Python $python.Source)) { return $python.Source }
-    throw "No usable Python 3 interpreter was found. Install Python and ensure 'py -3' works."
+    throw "No stable Python 3 interpreter was found outside .venv and WindowsApps. Install Python from python.org and ensure 'python' or 'py -3' resolves to it."
+}
+
+function Stop-VenvProcesses {
+    $venvPrefix = [IO.Path]::GetFullPath($venvPath).TrimEnd('\') + '\'
+    $usingVenv = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith(
+                $venvPrefix, [StringComparison]::OrdinalIgnoreCase)
+        } catch {
+            $false
+        }
+    })
+    foreach ($process in $usingVenv) {
+        Write-Warning "Stopping $($process.Name) process $($process.Id) because it is using the project virtual environment."
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-VenvDirectory {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        Stop-VenvProcesses
+        try {
+            Remove-Item -LiteralPath $venvPath -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -eq 5) { throw }
+            Write-Warning "Virtual environment removal attempt $attempt failed; retrying after filesystem handles settle."
+            Start-Sleep -Milliseconds (250 * $attempt)
+        }
+    }
 }
 
 function Remove-BrokenVenv {
     if (-not (Test-Path -LiteralPath $venvPath)) { return }
+    $expectedVenvPath = [IO.Path]::GetFullPath((Join-Path $projectRoot ".venv")).TrimEnd('\')
+    $actualVenvPath = [IO.Path]::GetFullPath($venvPath).TrimEnd('\')
+    if (-not $actualVenvPath.Equals($expectedVenvPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove unexpected virtual environment path: $actualVenvPath"
+    }
     $item = Get-Item -LiteralPath $venvPath -Force
-    Write-Warning "Removing the unusable project virtual environment at $venvPath."
+    Write-Warning "Removing the project virtual environment at $venvPath."
     if ($item.LinkType) {
         Remove-Item -LiteralPath $venvPath -Force
     } else {
-        Remove-Item -LiteralPath $venvPath -Recurse -Force
+        Remove-VenvDirectory
     }
 }
 
 Set-Location $projectRoot
 $systemPython = Resolve-SystemPython
 $created = $false
+if ($Recreate) {
+    Remove-BrokenVenv
+}
 if (-not (Test-Python $venvPython)) {
     Remove-BrokenVenv
     Write-Host "Creating project virtual environment..." -ForegroundColor Cyan
@@ -97,7 +158,7 @@ if (Test-Path -LiteralPath $requirements) {
     $installArguments = @("-m", "pip", "install", "-r", $requirements)
 } elseif (Test-Path -LiteralPath $pyproject) {
     $dependencySource = $pyproject
-    $installArguments = @("-m", "pip", "install", "-e", $projectRoot)
+    $installArguments = @("-m", "pip", "install", "-e", "${projectRoot}[test]")
 } else {
     throw "Neither requirements.txt nor pyproject.toml exists at the project root."
 }
@@ -110,6 +171,11 @@ $installedHash = if (Test-Path -LiteralPath $markerPath) {
 }
 if ($Force -or $created -or $installedHash -ne $expectedHash) {
     Write-Host "Installing runtime dependencies from $([IO.Path]::GetFileName($dependencySource))..." -ForegroundColor Cyan
+    if ($dependencySource -eq $pyproject) {
+        # Python 3.10 can seed a venv with pip 21, which cannot perform this
+        # repository's PEP 660 editable pyproject install.
+        Invoke-Checked $venvPython @("-m", "pip", "install", "--upgrade", "pip>=23", "setuptools>=68") "Unable to prepare pip for the editable project install."
+    }
     Invoke-Checked $venvPython $installArguments "Unable to install the project dependencies."
     [IO.File]::WriteAllText($markerPath, $expectedHash + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }
