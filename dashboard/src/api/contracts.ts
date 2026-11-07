@@ -162,10 +162,13 @@ export interface Dispatch {
   distance_travelled_km: number; arrival_soc_pct: number | null; failure_reason: string | null;
   parking_facility_id?: string | null; parking_status?: string | null;
   recovery?: RecoveryOperation | null;
-  claim_held: boolean | null; revalidated_metrics: { distance_km?: number } | null;
+  claim_held: boolean | null;
+  revalidated_metrics: {
+    distance_km?: number;
+    origin?: { position: Position | null; zone_id: string | null; facility_id: string | null };
+  } | null;
 }
 export interface DispatchList { dispatches: Dispatch[] }
-export interface Claim { origin: Position }
 export interface Approval { request_id: string; recommendation_id: string }
 
 // Simulated facilities become capacity-aware for approved bulk dispatch.

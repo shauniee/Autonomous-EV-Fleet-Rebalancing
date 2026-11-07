@@ -180,6 +180,45 @@ describe('dispatcher dashboard', () => {
     expect(card).toHaveTextContent('Move confirmed');
     expect(card).toHaveTextContent(/Claim held\s*Yes/);
   });
+  it('paginates relocations and combines search with request time and outcome filters', async () => {
+    const dispatches = Array.from({ length: 8 }, (_, index) => ({
+      ...makeDispatch(),
+      dispatch_id: `dispatch-${index}`,
+      vehicle_id: `ev-0${index}`,
+      created_at: index === 0 ? '2026-11-06T17:00:00Z' : '2026-11-07T06:00:00Z',
+      state: index === 0 ? 'SUCCEEDED' : 'IN_PROGRESS',
+      claim_held: index !== 0,
+      revalidated_metrics: {
+        origin: { position: null, zone_id: index === 0 ? 'jurong-east' : 'bishan', facility_id: null },
+      },
+    }));
+    server({ '/api/dispatch/dispatches': { dispatches } });
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
+    await screen.findByText('Showing 1–6 of 8');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Showing 7–8 of 8')).toBeVisible();
+
+    const search = screen.getByRole('searchbox', { name: 'Search relocations' });
+    fireEvent.change(search, { target: { value: 'EV-00 Jurong East CBD' } });
+    expect(screen.getByText('Showing 1–1 of 1')).toBeVisible();
+    expect(screen.getByTestId('dispatch-dispatch-0')).toHaveTextContent('Jurong East');
+
+    fireEvent.change(screen.getByLabelText('Request date (SGT)'), { target: { value: '2026-11-07' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Time' }));
+    const timeFilter = screen.getByLabelText('Request time (SGT)');
+    fireEvent.change(timeFilter, { target: { value: '12' } });
+    expect(screen.getByText(/No relocations match/)).toBeVisible();
+    fireEvent.change(timeFilter, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Outcome' }));
+    fireEvent.change(screen.getByLabelText('Relocation outcome'), { target: { value: 'SUCCEEDED' } });
+    expect(screen.getByTestId('dispatch-dispatch-0')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search and filters' }));
+    expect(search).toHaveValue('');
+    expect(screen.getByText('Showing 1–6 of 8')).toBeVisible();
+  });
+
   it('blocks expired recommendation approval', async () => {
     const rec = makeRecommendation(); rec.expires_at = new Date(0).toISOString();
     server({ '/api/rebalancing/recommendations': rec }); render(<App/>); await selectAndRecommend();

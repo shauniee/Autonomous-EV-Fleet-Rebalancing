@@ -315,6 +315,13 @@ class DispatchService:
             target_zone_id=target.zone_id, target_position=destination, issued_at=self.clock.now(),
             min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
             energy_margin_factor=claim.energy_margin_factor, route=route)
+        assessment["origin"] = {
+            "position": origin,
+            "zone_id": vehicle.current_zone_id,
+            "facility_id": (
+                vehicle.telemetry.parked_facility_id if vehicle.telemetry else None
+            ),
+        }
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
                            revalidated_metrics=assessment)
         # Store the exact request BEFORE the remote mutation. Never silently refresh its version.

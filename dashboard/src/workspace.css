@@ -267,8 +267,64 @@
 .fleet-workspace tr[data-selected=true] { background: var(--accent-soft); }
 .fleet-workspace td small, .vehicle-detail dd small { display: block; }
 .vehicle-diagnostics { grid-column: 1 / -1; }
+.relocation-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  align-items: start;
+  gap: 12px 24px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+.relocation-tools .operational-tablist {
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.relocation-tools .operational-tablist button { padding-inline: 12px; }
+.relocation-field {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  max-width: 20rem;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.relocation-search { max-width: none; }
+.relocation-field input, .relocation-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+.relocation-field input::placeholder { color: var(--muted); font-weight: 400; }
+.relocation-results, .relocation-results nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.relocation-results { margin-block: 12px; }
+.relocation-results nav { margin-inline-start: auto; }
 .relocation-group-title { grid-column: 1 / -1; margin: 10px 0 0; }
-.relocation-group-title small { font-size: 12px; }
+.relocation-date { display: block; font-size: 12px; }
+.relocation-route { display: grid; gap: 4px; margin-block: 8px; font-size: 13px; }
+.relocation-route div { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: 8px; }
+.relocation-route dt { color: var(--muted); }
+.relocation-route dd { margin: 0; font-weight: 600; }
+@media (max-width: 760px) {
+  .relocation-tools { grid-template-columns: minmax(0, 1fr); }
+  .relocation-results nav { margin-inline-start: 0; }
+}
 .dispatch-grid.relocation-groups {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   align-items: start;

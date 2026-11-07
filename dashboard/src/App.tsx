@@ -15,7 +15,8 @@ import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
 import { Badge, number, time } from './components/format';
-import { DispatchConfirmation, FleetPanel, RecommendationPanel, RelocationPanel, ServiceStatus, ZoneDetails } from './components/Panels';
+import { DispatchConfirmation, FleetPanel, RecommendationPanel, ServiceStatus, ZoneDetails } from './components/Panels';
+import { RelocationPanel } from './components/RelocationPanel';
 
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
@@ -30,6 +31,7 @@ export default function App() {
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const [operationalTab, setOperationalTab] = useState('dispatch');
+  const [relocationFocus, setRelocationFocus] = useState<{ id: string; revision: number }>();
   const [compactView, setCompactView] = useState<'dispatch' | 'map'>('dispatch');
   const [demandDetails, setDemandDetails] = useState(false);
   const [mapFocus, setMapFocus] = useState<{ dispatchId: string } | { facility: Facility } | null>(null);
@@ -39,11 +41,7 @@ export default function App() {
     (d.state === 'UNKNOWN' || d.recovery?.status === 'BLOCKED' || d.recovery?.status === 'REQUESTED' || d.recovery?.status === 'RESTORING')) ?? [];
   function openRelocation(id: string) {
     setOperationalTab('relocations');
-    requestAnimationFrame(() => {
-      const card = document.getElementById(`relocation-${id}`);
-      card?.focus({ preventScroll: true });
-      card?.scrollIntoView({ block: 'nearest' });
-    });
+    setRelocationFocus(previous => ({ id, revision: (previous?.revision ?? 0) + 1 }));
   }
   function openPlanningRelocation(id: string) {
     openRelocation(id);
@@ -473,7 +471,8 @@ export default function App() {
           summary: dispatches.updatedAt && !dispatches.error && now - Date.parse(dispatches.updatedAt) < 10000
             ? `${dispatches.data?.dispatches.filter(d => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).length ?? 0} unfinished`
             : 'unavailable',
-          content: <RelocationPanel notify={notify} approvalBusy={submitting || checkingApproval}
+          content: <RelocationPanel key={relocationFocus?.revision} focusId={relocationFocus?.id}
+            zones={zones} facilities={sites} notify={notify} approvalBusy={submitting || checkingApproval}
             onCloseApproval={id => void checkApproval(id, true)}
             onRetryApproval={d => {
               if (d.recommendation_id) void approve({ request_id: d.request_id, recommendation_id: d.recommendation_id });
