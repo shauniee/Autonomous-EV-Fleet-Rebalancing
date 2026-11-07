@@ -82,11 +82,16 @@ class RentalMovement(Movement):
             raise ValueError("cannot accept relocation while customer rental is active")
         return super().accept(command)
 
-    def advance(self, elapsed_seconds, speed_kph):
-        if not math.isfinite(elapsed_seconds) or not math.isfinite(speed_kph) or elapsed_seconds < 0 or speed_kph <= 0:
+    def advance(self, elapsed_seconds: float, speed_kph: float, *,
+                traffic_speed_cap_kph: float | None = None) -> None:
+        if (not math.isfinite(elapsed_seconds) or not math.isfinite(speed_kph)
+                or elapsed_seconds < 0 or speed_kph <= 0):
             raise ValueError("invalid simulation step")
         if self.rental is None:
-            return super().advance(elapsed_seconds, speed_kph)
+            return super().advance(
+                elapsed_seconds, speed_kph,
+                traffic_speed_cap_kph=traffic_speed_cap_kph)
+        # Synthetic rentals retain nominal speed; road caps apply to relocations.
         trip = self.rental
         if trip["arrived"]:
             return

@@ -16,15 +16,17 @@ export function RentalOutlook({ vehicles, zones }: { vehicles: Vehicle[]; zones:
     <div className="section-title"><h2>Customer rental return outlook</h2>
       <span className="muted">{rentals.length} currently rented · {candidates.length} potential returns within 30 min</span></div>
     <p className="muted">Expected destinations and times are estimates from the synthetic rental simulator, not confirmed parking or usable supply. Rental EVs are excluded from dispatch until Fleet confirms an actual return.</p>
+    <h3>Active rentals</h3>
+    {rentals.length > 0 ? <div className="table-scroll"><table aria-label="Active rental returns">
+      <thead><tr><th>EV</th><th>Expected return zone</th><th>Estimated return (SGT)</th></tr></thead>
+      <tbody>{rentals.map(v => <tr key={v.vehicle_id}><td>{v.vehicle_id}</td><td>{v.active_rental?.expected_return_zone_id ?? 'Unknown'}</td><td>{time(v.active_rental?.expected_end_at)}</td></tr>)}</tbody>
+    </table></div> : <p className="empty">No active rentals in the available Fleet snapshot.</p>}
+    <h3>Zone outlook</h3>
     <div className="table-scroll"><table><thead><tr><th>Zone</th><th>Backend projected shortage</th><th>Potential customer returns</th><th>Illustrative gap if all return</th></tr></thead>
       <tbody>{zones.map(z => {
         const inbound = candidates.filter(v => v.active_rental?.expected_return_zone_id === z.zone_id).length;
         return <tr key={z.zone_id}><td>{z.name}</td><td>{z.projected_shortage ?? 'Unknown'}</td>
           <td>{inbound}</td><td>{z.projected_shortage == null ? 'Unknown' : Math.max(0, z.projected_shortage - inbound)}</td></tr>;
       })}</tbody></table></div>
-    {rentals.length > 0 && <details><summary>Estimated rental returns</summary>
-      <ul>{rentals.map(v => <li key={v.vehicle_id}>{v.vehicle_id} → {v.active_rental?.expected_return_zone_id ?? 'Unknown destination'} · expected {time(v.active_rental?.expected_end_at)}</li>)}</ul>
-    </details>}
-    <p className="muted">This panel does not alter recommendations, forecast demand, battery eligibility, charging allocation or dispatcher approval.</p>
   </section>;
 }

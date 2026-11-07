@@ -17,6 +17,11 @@ type Infra = { observed_at: string; hpa: Hpa | null;
   errors: Record<string, string> };
 type Snapshot = { infrastructure: Infra; experiment: Experiment | null;
   load_enabled: boolean; storage: string };
+const analyticsViews = [
+  { id: 'workload', label: 'Workload' },
+  { id: 'charts', label: 'Charts' },
+  { id: 'history', label: 'Runs' },
+] as const;
 const presets = [
   { id: 'NORMAL', title: 'Normal', evs: 10, hz: 0.2, rps: 2 },
   { id: 'HIGH', title: 'High', evs: 50, hz: 1, rps: 50 },
@@ -67,6 +72,7 @@ function Graph({title, samples, measure, maxValue, target}: {
   </div>;
 }
 export function AnalyticsPanel() {
+  const [view, setView] = useState<typeof analyticsViews[number]['id']>('workload');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [records, setRecords] = useState<Recorded[]>([]);
   const [duration, setDuration] = useState(60);
@@ -150,13 +156,14 @@ export function AnalyticsPanel() {
   });
   return <section className="analytics-section" aria-labelledby="analytics-title">
     <div className="analytics-heading">
-      <div><p className="eyebrow">SIMULATION · OBSERVABILITY</p>
-        <h2 id="analytics-title">Performance analytics</h2></div>
+      <h2 id="analytics-title">Performance analytics</h2>
       <span className="analytics-pill">{running ? 'Experiment running' : 'Infrastructure monitor'}</span>
     </div>
-    <p className="description">Real Kubernetes metrics and HPA decisions alongside controlled synthetic
-      dashboard HTTP load. Preset EV counts and update rates represent an equivalent workload only:
-      no Fleet telemetry, rental or Dispatch commands are sent. Scaling is not guaranteed.</p>
+    <div className="view-options" role="group" aria-label="Analytics view">
+      {analyticsViews.map(({ id, label }) => (
+        <button type="button" key={id} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>
+      ))}
+    </div>
     {error && <p className="warning" role="alert">{error}. Measurements cannot be verified.</p>}
     {infra && Object.keys(infra.errors).length > 0 && <p className="warning" role="status">
       Partial metrics: {Object.entries(infra.errors).map(([name, cause]) =>
@@ -192,16 +199,28 @@ export function AnalyticsPanel() {
           <small>{p.rps} HTTP req/s</small>
         </button>)}
       </div>
-      <button className="analytics-stop" type="button" disabled={busy || !running}
-        onClick={() => void control('stop')}>Stop experiment</button>
-      {snapshot && !snapshot.load_enabled && <p className="warning">Load generation is disabled.</p>}
-      {message && <p role="status" className="success">{message}</p>}
     </div>
-    <div className="analytics-meta">
-      <span>Observed: {sgt(infra?.observed_at)}</span>
-      <span>Experiment: {experiment ? experiment.preset + ' · ' + experiment.state : 'None'}</span>
-      <span>p95 latency: {fmt(experiment?.p95_latency_ms,' ms')}</span>
-      <span>Storage: {snapshot?.storage === 'local-persistent-volume' ? 'Persistent volume' : 'Ephemeral'}</span>
+    <div hidden={view !== 'charts'}>
+      <div className="analytics-charts">
+        <Graph title="HPA CPU (%)" samples={samples} maxValue={100}
+          measure={s => s.hpa?.current_cpu_pct} target={infra?.hpa?.target_cpu_pct}/>
+        <Graph title="Replicas (current)" samples={samples}
+          maxValue={Math.max(3,infra?.hpa?.max_replicas ?? 3)}
+          measure={s => s.hpa?.current_replicas}/>
+        <Graph title="Synthetic HTTP requests / second" samples={samples}
+          maxValue={220} measure={(_,i) => observedRps[i]}/>
+        <Graph title="Dashboard Pod CPU (millicores)" samples={samples}
+          maxValue={100} measure={s=>s.usage?.cpu_millicores}/>
+      </div>
+      <h3>Observed scaling events</h3>
+      {scalingEvents.length ? <div className="analytics-events">
+        {scalingEvents.map((event, i) => <p key={i}>
+          {sgt(event.time)} · Dashboard replicas {event.before} → {event.after}
+        </p>)}
+      </div> : <p className="description">
+        No measured replica-count change during this experiment. HPA may remain at one replica
+        even when HTTP load is generated.
+      </p>}
     </div>
     <div className="analytics-charts">
       <Graph title="HPA CPU (%)" samples={samples} maxValue={hpaCpuMax}

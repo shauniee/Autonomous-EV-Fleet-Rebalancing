@@ -14,19 +14,21 @@ export function DemandForm({
   zones: Zone[];
   available: boolean;
 }) {
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
-  const [result, setResult] = useState<{
+  const [results, setResults] = useState<{
+    zoneId: string;
     message: string;
     success: boolean;
-  } | null>(null);
-  const zone = zones.find((item) => item.zone_id === selected);
+  }[]>([]);
+  const [validation, setValidation] = useState('');
+  const selectedZones = zones.filter((item) => selected.includes(item.zone_id));
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!available || !zone || sending.current) return;
+    if (!available || !selectedZones.length || sending.current) return;
     const desired = Number(value);
     if (
       !value.trim() ||
@@ -34,49 +36,55 @@ export function DemandForm({
       desired < 0 ||
       desired > 10000
     ) {
-      setResult({
-        message: 'Enter a whole number from 0 to 10000.',
-        success: false,
-      });
+      setValidation('Enter a whole number from 0 to 10000.');
       return;
     }
     sending.current = true;
     setBusy(true);
-    setResult(null);
+    setResults([]);
+    setValidation('');
+    // Snapshot the selection; polling must not change an in-progress submission.
     try {
-      const response = await fetch(
-        `/api/probe/v1/zones/${zone.zone_id}/demand`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ desired_available_vehicles: desired }),
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-      const data = await response.json();
-      if (!response.ok) {
-        const message =
-          typeof data.detail?.message === 'string'
-            ? data.detail.message
-            : 'The demand input was rejected.';
-        setResult({
-          success: false,
-          message: data.detail?.outcome_uncertain
-            ? `${message} It may have applied. Check current demand before submitting again.`
-            : message,
-        });
-        return;
+      for (const zone of selectedZones) {
+        let result: { message: string; success: boolean };
+        try {
+          const response = await fetch(
+            `/api/probe/v1/zones/${encodeURIComponent(zone.zone_id)}/demand`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ desired_available_vehicles: desired }),
+              signal: AbortSignal.timeout(8000),
+            },
+          );
+          const data = await response.json();
+          if (!response.ok) {
+            const message =
+              typeof data.detail?.message === 'string'
+                ? data.detail.message
+                : 'The demand input was rejected.';
+            result = {
+              success: false,
+              message: data.detail?.outcome_uncertain
+                ? `${message} It may have applied. Check current demand before submitting again.`
+                : message,
+            };
+          } else {
+            result = {
+              success: true,
+              message: `Applied desired supply of ${desired} to ${zone.name}. Updated observations appear on the next poll.`,
+            };
+          }
+        } catch {
+          result = {
+            success: false,
+            message:
+              'Submission outcome uncertain. It may have applied. Check current demand before submitting again.',
+          };
+        }
+        // Independent writes: keep successes and never retry uncertain results.
+        setResults((previous) => [...previous, { ...result, zoneId: zone.zone_id }]);
       }
-      setResult({
-        success: true,
-        message: `Applied desired supply of ${desired} to ${zone.name}. Updated observations appear on the next poll.`,
-      });
-    } catch {
-      setResult({
-        success: false,
-        message:
-          'Submission outcome uncertain. It may have applied. Check current demand before submitting again.',
-      });
     } finally {
       sending.current = false;
       setBusy(false);
@@ -87,73 +95,85 @@ export function DemandForm({
     <section>
       <h2>Set zone demand</h2>
       <p className="description">
-        Demand is desired available vehicles, not API traffic or real rentals.
-        This input does not create vehicles or approve relocations.
+        Set a target for available vehicles in each selected zone.
       </p>
-      <form className="demand-form" onSubmit={submit}>
-        <label>
-          Zone
-          <select
-            required
-            value={selected}
-            disabled={busy || !available}
-            onChange={(event) => {
-              setSelected(event.target.value);
-              setResult(null);
-            }}
-          >
-            <option value="">Select a zone</option>
+      <form className="demand-layout" onSubmit={submit}>
+        <fieldset className="demand-zones" disabled={busy || !available}>
+          <legend>Zones ({selectedZones.length} selected)</legend>
+          <div className="demand-selection-actions">
+            <button type="button" onClick={() => {
+              setSelected(zones.map((item) => item.zone_id));
+              setResults([]);
+            }}>Select all</button>
+            <button type="button" onClick={() => {
+              setSelected([]);
+              setResults([]);
+            }}>Clear selection</button>
+          </div>
+          <div className="zone-picker">
             {zones.map((item) => (
-              <option key={item.zone_id} value={item.zone_id}>
-                {item.name}
-              </option>
+              <label key={item.zone_id}>
+                <input type="checkbox" checked={selected.includes(item.zone_id)}
+                  onChange={(event) => {
+                    setSelected((previous) => event.target.checked
+                      ? [...previous, item.zone_id]
+                      : previous.filter((id) => id !== item.zone_id));
+                    setResults([]);
+                  }} />
+                <span>{item.name}<small>Current desired supply: {item.demand?.desired_available_vehicles ?? 'Unknown'}</small></span>
+              </label>
             ))}
-          </select>
-        </label>
-        <p>
-          Current desired supply:{' '}
-          <strong>
-            {zone?.demand?.desired_available_vehicles ?? 'Unknown'}
-          </strong>
-        </p>
-        <label>
-          Desired available vehicles
-          <input
-            type="number"
-            min="0"
-            max="10000"
-            step="1"
-            required
-            value={value}
-            disabled={busy || !available}
-            onChange={(event) => {
-              setValue(event.target.value);
-              setResult(null);
-            }}
-          />
-        </label>
-        <button type="submit" disabled={busy || !available || !zone}>
-          {busy ? 'Applying…' : 'Apply demand'}
-        </button>
+            {!zones.length && <p>No zones observed.</p>}
+          </div>
+        </fieldset>
+        <div className="demand-settings">
+          <label>
+            Desired available vehicles
+            <input
+              type="number"
+              min="0"
+              max="10000"
+              step="1"
+              required
+              value={value}
+              disabled={busy || !available}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setResults([]);
+                setValidation('');
+              }}
+            />
+          </label>
+          <button className="primary-action" type="submit" disabled={busy || !available || !selectedZones.length}>
+            {busy ? `Applying… (${results.length}/${selectedZones.length})` : `Apply demand to ${selectedZones.length} selected zone${selectedZones.length === 1 ? '' : 's'}`}
+          </button>
+          <p className="description">Updates apply independently. Successful changes remain applied if another zone fails.</p>
+          {!available && (
+            <p className="warning">
+              Fresh zone observations are required before submitting demand.
+            </p>
+          )}
+          {validation && <p className="warning" role="alert">{validation}</p>}
+          <div className="demand-results" aria-live="polite" aria-busy={busy}
+            tabIndex={results.length ? 0 : undefined}>
+            {results.map((result) => (
+              <p key={result.zoneId} className={result.success ? 'success' : 'warning'}>
+                <strong>{zones.find((item) => item.zone_id === result.zoneId)?.name ?? result.zoneId}: </strong>
+                {result.message}
+              </p>
+            ))}
+          </div>
+          <details className="help">
+            <summary>How demand updates work</summary>
+            <p className="description">
+              This input sets a supply target without generating API traffic, creating vehicles,
+              starting rentals, or approving relocations. A new timestamp is sent only when you apply. Demand can expire, and the
+              app’s demand simulator may replace it after its manual hold. Inputs are
+              never reapplied automatically.
+            </p>
+          </details>
+        </div>
       </form>
-      {!available && (
-        <p className="warning">
-          Fresh zone observations are required before submitting demand.
-        </p>
-      )}
-      {result && (
-        <p
-          className={result.success ? 'success' : 'warning'}
-          role={result.success ? 'status' : 'alert'}
-        >
-          {result.message}
-        </p>
-      )}
-      <p className="description">
-        A new timestamp is sent only when you apply. Demand can expire, and the
-        app’s demand simulator may replace it after its manual hold. Inputs are
-        never reapplied automatically.
-      </p>
     </section>
   );
 }

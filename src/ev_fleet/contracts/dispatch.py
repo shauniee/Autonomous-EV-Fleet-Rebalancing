@@ -88,6 +88,15 @@ class DispatchEvent(Model):
     reason: str | None = Field(default=None, max_length=200)
 
 
+class RecoveryOperation(Model):
+    request_id: UUID
+    status: Literal["REQUESTED", "RESTORING", "RECOVERED", "BLOCKED"]
+    reason_code: str | None = None
+    generation: int | None = None
+    confirmed_paused: bool = False
+    intent_fingerprint: str | None = None
+
+
 class Dispatch(Model):
     dispatch_id: UUID
     request_id: UUID
@@ -108,6 +117,14 @@ class Dispatch(Model):
     revalidated_metrics: dict | None = None
     parking_facility_id: str | None = None
     parking_status: Literal["RESERVED", "OCCUPIED", "RELEASED"] | None = None
+    recovery: RecoveryOperation | None = None
+
+
+ApprovalStatus = Literal["APPROVED", "REJECTED", "UNKNOWN"]
+
+
+class DispatchApprovalResult(Dispatch):
+    approval_status: ApprovalStatus
 
 
 class DispatchList(Model):
@@ -129,6 +146,7 @@ class BatchDispatchItem(Model):
     dispatch_id: UUID | None = None
     state: str
     error: str | None = None
+    approval_status: ApprovalStatus | None = None
 
 
 class BatchDispatch(Model):

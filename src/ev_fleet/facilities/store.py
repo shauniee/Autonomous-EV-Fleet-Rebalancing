@@ -1,12 +1,17 @@
 """Single-replica facilities observations with durable simulated allocations."""
 import asyncio
+import hashlib
+import json
+import re
 from uuid import uuid4
 from copy import deepcopy
 from fastapi import HTTPException
 from ev_fleet.contracts.facilities import Facility
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.common.clock import Clock
-from ev_fleet.contracts.facilities import FacilitiesSnapshot, FacilityFeed
+from ev_fleet.contracts.facilities import (
+    FacilitiesSnapshot, FacilityFeed, ParkingObservation, VehicleParking,
+)
 from .catalog import CATALOGUE
 from .datamall import FacilitiesSettings
 from ev_fleet.common.parking import CHARGING_TARGET_SOC_PCT, DEFAULT_CHARGING_POWER_KW, MAX_FACILITY_ROAD_ACCESS_KM
@@ -17,6 +22,7 @@ class FacilitiesStore:
     def __init__(self, repository=None, settings=None, clock=None):
         self.lock = asyncio.Lock()
         self.holds = {}
+        self.aliases = {}  # Rebuilt from retained holds and each fresh catalogue.
         self.instance_id = str(uuid4())
         self.version = 0
         self.repository = repository or SnapshotRepository.from_env("facilities")
@@ -60,9 +66,44 @@ class FacilitiesStore:
             self.catalogue = {key: site for key, site in self.catalogue.items()
                               if site.facility_type != kind}
             self.catalogue.update({site.facility_id: site for site in sites})
+            self.rebuild_aliases()
             self.feeds[name] = FacilityFeed(name=name, status="FRESH", last_success_at=observed_at)
             self.version += 1
             await self.persist()
+
+    def rebuild_aliases(self):
+        """Resolve coordinate-derived charger IDs only for existing allocations.
+
+        Keep the reserved identity/arrival endpoint. A unique fresh observation
+        may update availability when name/address/postcode agree within 10 m.
+        Never merge unrelated sites or manufacture observations from a hold.
+        """
+        aliases = {}
+        def normalized(value):
+            return " ".join(value.casefold().split())
+        for entry in self.holds.values():
+            identity = entry["facility_id"]
+            if identity in self.catalogue or entry["status"] not in ("RESERVED", "OCCUPIED"):
+                continue
+            original = entry.get("facility")
+            if original is None:
+                continue
+            original = Facility.model_validate(original)
+            match = re.fullmatch(r"lta-charging-(\d{6})-[-\d.]+-[-\d.]+", identity)
+            if match is None or original.source != "LTA_DATAMALL" or not (original.address or "").strip():
+                continue
+            matches = [site for site in self.catalogue.values()
+                if site.source == original.source and site.facility_type == original.facility_type == "CHARGING"
+                and site.zone_id == original.zone_id
+                and site.connector_types == original.connector_types
+                and site.charging_bays == original.charging_bays
+                and site.facility_id.startswith(f"lta-charging-{match[1]}-")
+                and normalized(site.name) == normalized(original.name)
+                and normalized(site.address or "") == normalized(original.address)
+                and distance_km(site.position.model_dump(), original.position.model_dump()) <= .01]
+            if len(matches) == 1:
+                aliases[identity] = matches[0].facility_id
+        self.aliases = aliases
 
     async def feed_failed(self, name, code):
         async with self.lock:
@@ -92,7 +133,8 @@ class FacilitiesStore:
                         if zone_id is None or site.zone_id == zone_id], feeds=self.feed_views())
 
     def effective(self, facility):
-        claims = [h for h in self.holds.values() if h["facility_id"] == facility.facility_id
+        claims = [h for h in self.holds.values()
+                  if self.aliases.get(h["facility_id"], h["facility_id"]) == facility.facility_id
                   and h["status"] in ("RESERVED", "OCCUPIED")]
         parking_available = max(0, facility.parking_available - len(claims))
         charging_available = max(0, min(parking_available, facility.charging_available
@@ -112,9 +154,16 @@ class FacilitiesStore:
 
     async def get(self, facility_id):
         site = self.catalogue.get(facility_id)
-        if not site:
+        if site is not None:
+            return self.effective(site)
+        site = self.catalogue.get(self.aliases.get(facility_id))
+        retained = next((entry.get("facility") for entry in self.holds.values()
+            if entry["facility_id"] == facility_id and entry["status"] in ("RESERVED", "OCCUPIED")), None)
+        if site is None or retained is None:
             raise HTTPException(404, "FACILITY_NOT_FOUND")
-        return self.effective(site)
+        retained = Facility.model_validate(retained)
+        return self.effective(site).model_copy(update={
+            "facility_id": facility_id, "position": retained.position})
 
     async def reserve(self, facility_id, body):
         async with self.lock:
@@ -247,3 +296,23 @@ class FacilitiesStore:
                 self.version = previous_version
                 raise
             return self._vehicle_parking(vehicle_id)
+                "pending": any(entry["status"] == "RESERVED" for entry in entries)}
+
+    async def parking_observation(self, vehicle_id, request_id):
+        # Reads stay responsive during persistence, but uncommitted allocation
+        # changes cannot authorize charging. This method has no yielding I/O.
+        if self.lock.locked() or not self.repository.ready:
+            raise HTTPException(503, "PARKING_OBSERVATION_UNAVAILABLE")
+        parking = VehicleParking.model_validate(
+            await self.vehicle_parking(vehicle_id))
+        holds = sorted((key, entry["status"]) for key, entry in self.holds.items()
+                       if entry["receipt"]["vehicle_id"] == vehicle_id
+                       and entry["status"] in ("RESERVED", "OCCUPIED"))
+        material = {"instance_id": self.instance_id, "holds": holds,
+                    "parking": parking.model_dump(mode="json")}
+        allocation_id = hashlib.sha256(json.dumps(
+            material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return ParkingObservation(
+            request_id=request_id, instance_id=self.instance_id,
+            revision=self.version, observed_at=self.clock.now(),
+            allocation_id=allocation_id, parking=parking)

@@ -1,14 +1,23 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
+import type { Zone } from '../src/api/contracts';
 import { makeDispatch, makeFleet, makeHeat, makeRecommendation } from './fixtures';
-vi.mock('../src/components/SingaporeMap', () => ({ SingaporeMap: () => <div>Map canvas</div> }));
+vi.mock('../src/components/SingaporeMap', () => ({
+  SingaporeMap: ({ zones, onSelect }: { zones: Zone[]; onSelect: (id: string) => void }) => <div>
+    {zones.map(zone => <button key={zone.zone_id} onClick={() => onSelect(zone.zone_id)}>Map marker for {zone.name}</button>)}
+  </div>,
+}));
 
 function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/dispatch/dispatches/dispatch-1/recovery': {
+      dispatch_id: 'dispatch-1', status: 'BLOCKED', reason_code: 'CHECKPOINT_UNAVAILABLE', can_resume: false,
+      operation: null, blockers: [], evidence: { checkpoint_source: 'NONE', checkpoint_at: null },
+    },
     '/api/rebalancing/traffic/conditions': { source: 'DISABLED', status: 'DISABLED',
       generated_at: new Date().toISOString(), feeds: {}, speeds: [], incidents: [], roadworks: [] },
     '/api/rebalancing/charging-advice': { generated_at: new Date().toISOString(), trigger_soc_pct: 25,
@@ -17,25 +26,91 @@ function server(overrides: Record<string, unknown> = {}) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
     if (path === '/api/dispatch/dispatches' && init?.method === 'POST') return new Response(JSON.stringify(makeDispatch()));
-    const body = responses[path];
+    const body = responses[path === '/api/fleet/dashboard/vehicles' ? '/api/fleet/vehicles' : path];
     if (body instanceof Error) throw body;
     return new Response(JSON.stringify(body ?? { origin: { latitude: 1.35, longitude: 103.85 } }));
   });
 }
 async function selectAndRecommend() {
-  fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
   await screen.findByTestId('recommendation');
 }
+function openNotifications() {
+  fireEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
+  return within(screen.getByRole('region', { name: 'Notifications' }));
+}
 describe('dispatcher dashboard', () => {
-  it('renders all zones using backend severity, independently of high raw demand', async () => {
-    server(); render(<App/>);
-    expect(await screen.findByRole('button', { name: /Bishan NORMAL/ })).toBeInTheDocument();
-    expect(within(screen.getByLabelText('Select target zone')).getAllByRole('button')).toHaveLength(6);
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+  it('requires explicit confirmation to end a relocation and sends the reviewed revision', async () => {
+    const path = '/api/dispatch/dispatches/dispatch-1/resolution';
+    const fetch = server({
+      '/api/dispatch/dispatches': { dispatches: [{ ...makeDispatch(), state: 'FAILED' }] },
+      [path]: { assessment_revision: 'reviewed-state', can_end: true, blocker: null, operation: null,
+        stop_position: { latitude: 1.32, longitude: 103.85 }, stop_soc_pct: 64 },
+    });
+    const stops = () => fetch.mock.calls.filter(([url, init]) => url === path && init?.method === 'POST');
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
+    const end = await screen.findByRole('button', { name: 'End relocation' });
+    await waitFor(() => expect(end).toBeEnabled());
+    fireEvent.click(end);
+    const review = within(screen.getByRole('dialog', { name: 'End relocation' }));
+    expect(review.getByText(/Battery 64.0%/)).toBeVisible();
+    fireEvent.click(review.getByRole('button', { name: 'Leave open' }));
+    expect(stops()).toHaveLength(0);
+    fireEvent.click(end);
+    const confirm = within(screen.getByRole('dialog', { name: 'End relocation' }));
+    const button = confirm.getByRole('button', { name: 'Confirm end relocation' });
+    expect(button).toBeDisabled();
+    fireEvent.change(confirm.getByRole('textbox'), { target: { value: 'Execution stopped' } });
+    fireEvent.click(button);
+    expect(stops()).toHaveLength(1);
+    expect(JSON.parse(String(stops()[0][1]?.body))).toMatchObject({
+      expected_assessment_revision: 'reviewed-state', reason: 'Execution stopped', request_id: expect.any(String),
+    });
+  });
+
+  it('shows one Low demand badge per zone when the configured Low range includes 10 EVs', async () => {
+    const heat = makeHeat();
+    for (const zone of heat.zones) zone.hotspot_severity = 'CRITICAL';
+    server({ '/api/demand/heat-map': heat });
+    render(<App/>);
+    await screen.findByRole('button', { name: /Bishan Critical/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit thresholds' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Moderate starts at' }), { target: { value: '11' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Critical starts at' }), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply thresholds' }));
+
+    const zones = within(screen.getByRole('group', { name: 'Select target zone' }));
+    expect(zones.getAllByText('Low')).toHaveLength(6);
+    expect(zones.queryByText(/^critical$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    fireEvent.click(zones.getByRole('button', { name: /CBD Low/ }));
     expect(screen.getByText('Current shortage')).toBeInTheDocument();
     expect(screen.getByText('Projected shortage')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Demand details' }));
+    expect(within(screen.getByRole('complementary', { name: 'Demand & supply' })).getByText('Low')).toBeVisible();
   });
+
+  it('collects configured demand level changes in Notifications without emitting a toast', async () => {
+    const heat = makeHeat();
+    heat.zones[1].rental_demand = 3;
+    server({ '/api/demand/heat-map': heat });
+    render(<App/>);
+    await screen.findByRole('button', { name: /Bishan Low/ });
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+
+    heat.zones[1].rental_demand = 10;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
+    await screen.findByRole('button', { name: 'Notifications, 1 to review' });
+
+    const notifications = openNotifications();
+    expect(notifications.getByText('Bishan rental demand changed from Low to Critical.')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(openNotifications().getByText(/Bishan rental demand changed/)).toBeVisible();
+  });
+
   it('separates recommendation from approval and shows backend explanation', async () => {
     const fetch = server(); render(<App/>); await selectAndRecommend();
     expect(screen.getByText('Backend selected the highest scoring eligible EV.')).toBeInTheDocument();
@@ -45,7 +120,7 @@ describe('dispatcher dashboard', () => {
     expect(within(dialog).getByText('bishan')).toBeInTheDocument();
     expect(within(dialog).getByText('85%')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Dispatch dispatch-1:/);
+    await openNotifications().findByText(/Dispatch dispatch-1:/);
     expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(1);
   });
   it('does not report HTTP 202 with a rejected dispatch as approved', async () => {
@@ -62,12 +137,14 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('ONEMAP_ROUTE_REQUIRED');
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/ONEMAP_ROUTE_REQUIRED/)).toBeVisible();
+    expect(notifications.getByText('Error')).toBeVisible();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
   it('keeps the same approval pending while HTTP 202 reports UNKNOWN', async () => {
-    const uncertain = makeDispatch();
+    const uncertain = { ...makeDispatch(), approval_status: 'UNKNOWN', claim_held: null };
     uncertain.state = 'UNKNOWN';
     uncertain.failure_reason = 'CLAIM_UNCONFIRMED';
     const fetch = server();
@@ -80,8 +157,14 @@ describe('dispatcher dashboard', () => {
     await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    expect(await screen.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Unresolved approval/)).toBeInTheDocument();
+    const notifications = openNotifications();
+    expect(await notifications.findByText(/approval not yet confirmed \(UNKNOWN\)/)).toBeVisible();
+    expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
+    fireEvent.click(notifications.getByRole('button', { name: 'Clear activity' }));
+    expect(notifications.getByText('Unconfirmed approval')).toBeVisible();
+    expect(notifications.queryByText(/approval not yet confirmed/)).not.toBeInTheDocument();
+    fireEvent.click(notifications.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
     expect(screen.queryByText(/approval recorded/i)).not.toBeInTheDocument();
   });
 
@@ -89,13 +172,14 @@ describe('dispatcher dashboard', () => {
     const heat = makeHeat(); heat.status = 'PARTIAL'; heat.fleet_status = 'UNAVAILABLE'; heat.issues = ['FLEET_UNAVAILABLE'];
     heat.zones[0].available_evs = null; heat.zones[0].hotspot_severity = 'UNKNOWN';
     server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': new Error('Fleet down') }); render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: /CBD UNKNOWN/ }));
-    expect(screen.getByText(/FLEET_UNAVAILABLE/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    expect(await openNotifications().findByText(/FLEET_UNAVAILABLE/)).toBeVisible();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled();
   });
   it('keeps fleet visible when Demand is unavailable', async () => {
     server({ '/api/demand/heat-map': new Error('Demand down') }); render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
     expect(await screen.findByTestId('vehicle-ev-01')).toHaveTextContent('90%');
     expect(await screen.findByText(/Demand · unavailable/)).toBeInTheDocument();
   });
@@ -104,9 +188,51 @@ describe('dispatcher dashboard', () => {
     server({ '/api/dispatch/dispatches': { dispatches: [dispatch] } }); render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
     const card = await screen.findByTestId('dispatch-dispatch-1');
-    expect(card).toHaveTextContent('PROGRESS_TIMEOUT'); expect(card).toHaveTextContent('2 km');
-    expect(card).toHaveTextContent('Acknowledged / execution confirmed'); expect(card).toHaveTextContent('retains ownership');
+    expect(card).toHaveTextContent('Vehicle updates stopped. Check the relocation status.');
+    expect(card).not.toHaveTextContent('PROGRESS_TIMEOUT');
+    expect(card).toHaveTextContent('2 km');
+    expect(card).toHaveTextContent('Move confirmed');
+    expect(card).toHaveTextContent(/Claim held\s*Yes/);
   });
+  it('paginates relocations and combines search with request time and outcome filters', async () => {
+    const dispatches = Array.from({ length: 8 }, (_, index) => ({
+      ...makeDispatch(),
+      dispatch_id: `dispatch-${index}`,
+      vehicle_id: `ev-0${index}`,
+      created_at: index === 0 ? '2026-11-06T17:00:00Z' : '2026-11-07T06:00:00Z',
+      state: index === 0 ? 'SUCCEEDED' : 'IN_PROGRESS',
+      claim_held: index !== 0,
+      revalidated_metrics: {
+        origin: { position: null, zone_id: index === 0 ? 'jurong-east' : 'bishan', facility_id: null },
+      },
+    }));
+    server({ '/api/dispatch/dispatches': { dispatches } });
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Relocations/ }));
+    await screen.findByText('Showing 1–6 of 8');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Showing 7–8 of 8')).toBeVisible();
+
+    const search = screen.getByRole('searchbox', { name: 'Search relocations' });
+    fireEvent.change(search, { target: { value: 'EV-00 Jurong East CBD' } });
+    expect(screen.getByText('Showing 1–1 of 1')).toBeVisible();
+    expect(screen.getByTestId('dispatch-dispatch-0')).toHaveTextContent('Jurong East');
+
+    fireEvent.change(screen.getByLabelText('Request date (SGT)'), { target: { value: '2026-11-07' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Time' }));
+    const timeFilter = screen.getByLabelText('Request time (SGT)');
+    fireEvent.change(timeFilter, { target: { value: '12' } });
+    expect(screen.getByText(/No relocations match/)).toBeVisible();
+    fireEvent.change(timeFilter, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Outcome' }));
+    fireEvent.change(screen.getByLabelText('Relocation outcome'), { target: { value: 'SUCCEEDED' } });
+    expect(screen.getByTestId('dispatch-dispatch-0')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search and filters' }));
+    expect(search).toHaveValue('');
+    expect(screen.getByText('Showing 1–6 of 8')).toBeVisible();
+  });
+
   it('blocks expired recommendation approval', async () => {
     const rec = makeRecommendation(); rec.expires_at = new Date(0).toISOString();
     server({ '/api/rebalancing/recommendations': rec }); render(<App/>); await selectAndRecommend();
@@ -117,8 +243,9 @@ describe('dispatcher dashboard', () => {
     rec.excluded_candidates = [{ ...rec.ranked_candidates[0], exclusion_reasons: ['STALE_TELEMETRY'] }];
     rec.ranked_candidates = [];
     server({ '/api/rebalancing/recommendations': rec }); render(<App/>); await selectAndRecommend();
-    expect(screen.getByText('No eligible EV')).toBeInTheDocument();
-    expect(screen.getByText('ev-01: STALE_TELEMETRY')).toBeInTheDocument();
+    expect(screen.getByText('No eligible EV')).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Evidence' }));
+    expect(screen.getByText('ev-01: STALE_TELEMETRY')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeDisabled();
   });
   it('shows stale telemetry and disables review while preserving the recommendation explanation', async () => {
@@ -130,16 +257,16 @@ describe('dispatcher dashboard', () => {
   });
   it('clears the recommendation when target changes', async () => {
     server(); render(<App/>); await selectAndRecommend();
-    fireEvent.click(screen.getByRole('button', { name: /Bishan NORMAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Map marker for Bishan' }));
     expect(screen.queryByTestId('recommendation')).not.toBeInTheDocument();
   });
   it('ignores a recommendation that arrives after its target was changed', async () => {
     const fetch = server(); const base = fetch.getMockImplementation()!;
     let finish!: (response: Response) => void;
     fetch.mockImplementation((input, init) => String(input).includes('recommendations') ? new Promise(resolve => { finish = resolve; }) : base(input, init));
-    render(<App/>); fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    render(<App/>); fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
-    fireEvent.click(screen.getByRole('button', { name: /Bishan NORMAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Bishan Critical/ }));
     finish(new Response(JSON.stringify(makeRecommendation())));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
     expect(screen.queryByTestId('recommendation')).not.toBeInTheDocument();
@@ -156,9 +283,9 @@ describe('dispatcher dashboard', () => {
     const view = render(<App/>); await selectAndRecommend();
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Approve 1 EV' }));
-    await screen.findByText(/Approval outcome uncertain/);
+    await openNotifications().findByText(/Approval outcome uncertain/);
     view.unmount(); render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry same approval' }));
+    fireEvent.click(openNotifications().getByRole('button', { name: 'Retry same approval' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[0]).toEqual(bodies[1]);
   });
@@ -173,12 +300,14 @@ describe('dispatcher dashboard', () => {
     server({ '/api/facilities/facilities': { data_source: 'MOCK', generated_at: new Date().toISOString(), facilities: [site] } });
     render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.change(await screen.findByLabelText('Operating zone'), { target: { value: 'cbd' } });
     const facility = await screen.findByTestId('facility-mock-cbd-01');
     expect(facility).toHaveTextContent('CBD simulated parking 1');
     expect(facility).toHaveTextContent('12 / 90');
     expect(facility).toHaveTextContent('6 / 12');
     expect(screen.getByText(/Batch recommendations evaluate and internally reserve simulated spaces/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
   it('keeps observations available but blocks new destinations when the provider is unknown', async () => {
@@ -186,7 +315,7 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     expect(await screen.findByText(/Facilities \(mock\) · unavailable/)).toBeInTheDocument();
     expect(await screen.findByTestId('vehicle-ev-01')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(screen.getByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeDisabled());
   });
   it('marks rented EVs and expected end times from Fleet without breaking zone selection', async () => {
@@ -199,11 +328,14 @@ describe('dispatcher dashboard', () => {
     };
     server({ '/api/fleet/vehicles': snapshot });
     render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
     const row = await screen.findByTestId('vehicle-ev-01');
-    expect(row).toHaveTextContent('RENTED');
-    expect(row).toHaveTextContent('Expected return');
     expect(row).toHaveTextContent('UNAVAILABLE');
-    fireEvent.click(screen.getByRole('button', { name: /CBD CRITICAL/ }));
+    const detail = screen.getByRole('region', { name: 'Selected vehicle details' });
+    expect(detail).toHaveTextContent('Rented');
+    expect(detail).toHaveTextContent('Expected return');
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
+    fireEvent.click(screen.getByRole('button', { name: /CBD Critical/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
 
@@ -234,7 +366,7 @@ describe('dispatcher dashboard', () => {
       '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
     });
     render(<App/>);
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs' }));
     expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 3 EVs recommended');
@@ -280,12 +412,14 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     fireEvent.click(screen.getByRole('tab', { name: /Facilities/ }));
     await screen.findByText('LTA DATAMALL · SIMULATED ALLOCATIONS');
-    fireEvent.click(await screen.findByRole('button', { name: /CBD CRITICAL/ }));
+    fireEvent.change(await screen.findByLabelText('Operating zone'), { target: { value: 'cbd' } });
     const card = await screen.findByTestId('facility-lta-parking-LTA-A1');
     expect(card).toHaveTextContent('3 / total unknown');
     expect(card).toHaveTextContent('Reported by LTA before simulated allocations4');
     expect(card).toHaveTextContent('Charging bays availableUnknown');
     expect(screen.getByText(/LTA charging: ERROR/)).toHaveTextContent('LTA_AUTH_FAILED');
+    fireEvent.click(screen.getByRole('tab', { name: 'Dispatch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
     await screen.findByTestId('batch-recommendation');
     const requests = fetch.mock.calls.filter(([path, init]) =>
@@ -389,6 +523,7 @@ describe('dispatcher dashboard', () => {
     expect(await within(panel).findByText(/Traffic feed unavailable: Rebalancing down/)).toBeInTheDocument();
     expect(within(panel).getByText('UNAVAILABLE')).toBeInTheDocument();
     expect(within(panel).queryByText(/Live LTA traffic ranking is disabled/)).not.toBeInTheDocument();
+    expect(openNotifications().getByText(/Traffic: Rebalancing down/)).toBeVisible();
   });
 
   it('shows traffic feed freshness and geolocated incident/approved roadworks', async () => {
@@ -428,7 +563,8 @@ describe('dispatcher dashboard', () => {
     const fetch = server({ '/api/fleet/vehicles': fleet,
       '/api/fleet/vehicles/ev-01/telemetry-history?limit=100': history });
     render(<App/>);
-    fireEvent.click(await screen.findByText('EV digital twin diagnostics', { exact: true }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Fleet' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'EV digital twin diagnostics' }));
     const panel = await screen.findByRole('region', { name: 'EV digital twin diagnostics' });
     expect(within(panel).getByText('28 km/h')).toBeInTheDocument();
     expect(within(panel).getByText('32°C')).toBeInTheDocument();

@@ -17,6 +17,17 @@ Extra fields and non-finite numbers are rejected. Domain routes use `/api/v1`.
 | GET /vehicles/{id} | VehicleState or 404 |
 | POST /vehicles/{id}/telemetry-sessions | request_id UUID; returns session_id; same active request is idempotent |
 | POST /vehicles/{id}/telemetry | session_id, sequence, observed_at, position, soc_pct, availability, relocation_state, optional active_dispatch_id |
+| POST /vehicles/{id}/simulator-sessions | Checkpoint-enabled simulator ownership: ACQUIRE, RENEW, coordinated RESTORE, or guarded RESTORE_IDLE; returns SimulatorSession |
+
+`RESTORE_IDLE` supplies a request UUID, expected Fleet instance/control version,
+owner generation/revision, checkpoint revision, and simulation configuration.
+It accepts no physical state. Fleet requires an expired owner, stale telemetry,
+a matching saved idle/noncharging checkpoint, no active claim/rental/charging task,
+and a successful Dispatch read with only succeeded/rejected, released journeys
+and no pending recovery. An exact retry returns the original receipt. Conflicting
+evidence returns 409; unavailable/invalid Dispatch evidence returns 503.
+The new session fences the previous owner and leaves telemetry timestamps
+unchanged. Only a new simulator checkpoint can establish freshness.
 
 Telemetry returns accepted, duplicate and vehicle. VehicleState contains registration,
 state_version, nested last telemetry, received_at, telemetry_age_seconds, stale and

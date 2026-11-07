@@ -54,6 +54,39 @@ class SessionRequest(Model):
     request_id: UUID
 
 
+class SimulatorRecoveryState(Model):
+    generation: int = Field(ge=1)
+    owner_revision: int = Field(ge=1)
+    expires_at: AwareDatetime
+    status: Literal["ACTIVE", "EXPIRED", "BLOCKED"]
+    checkpoint_revision: int = Field(ge=0)
+    checkpoint_at: AwareDatetime | None = None
+    durable: bool
+
+
+class SimulatorRuntimeReport(Model):
+    vehicle_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    process_id: UUID
+    sequence: int = Field(ge=0)
+    initialized: bool
+    live: bool
+    ready: bool
+    mode: Literal["STARTING", "RUNNING", "RETRYING", "RECOVERY_WAIT", "STOPPED"]
+    blocking_reason: str | None = Field(default=None, max_length=200)
+    heartbeat_age_seconds: float | None = Field(default=None, ge=0)
+    heartbeat_timeout_seconds: float = Field(gt=0)
+    checkpoint_revision: int = Field(ge=0)
+    checkpoint_at: AwareDatetime | None = None
+    session_id: UUID | None = None
+    generation: int | None = Field(default=None, ge=1)
+
+
+class SimulatorRuntimeState(SimulatorRuntimeReport):
+    status: Literal["RESPONSIVE", "UNRESPONSIVE", "STALE"]
+    reported_at: AwareDatetime
+    report_age_seconds: float = Field(ge=0)
+
+
 class VehicleState(VehicleRegistration):
     state_version: int = Field(ge=1)
     control_version: int = Field(default=1, ge=1)
@@ -68,6 +101,7 @@ class VehicleState(VehicleRegistration):
     effective_availability: Availability = Availability.UNAVAILABLE
     current_zone_id: str | None = None
     effective_relocation_state: RelocationState = RelocationState.IDLE
+    simulator_recovery: SimulatorRecoveryState | None = None
 
     @model_validator(mode="after")
     def telemetry_metadata(self):
@@ -81,6 +115,25 @@ class FleetSnapshot(Model):
     snapshot_version: int = Field(ge=0)
     snapshot_at: AwareDatetime
     vehicles: list[VehicleState]
+
+    @model_validator(mode="after")
+    def unique_vehicles(self):
+        if len({vehicle.vehicle_id for vehicle in self.vehicles}) != len(self.vehicles):
+            raise ValueError("duplicate vehicle IDs in snapshot")
+        return self
+
+
+class DashboardVehicleState(VehicleState):
+    """Operational diagnostics stay off the strict simulator/service wire API."""
+
+    simulator_runtime: SimulatorRuntimeState | None = None
+
+
+class DashboardFleetSnapshot(Model):
+    instance_id: UUID
+    snapshot_version: int = Field(ge=0)
+    snapshot_at: AwareDatetime
+    vehicles: list[DashboardVehicleState]
 
     @model_validator(mode="after")
     def unique_vehicles(self):

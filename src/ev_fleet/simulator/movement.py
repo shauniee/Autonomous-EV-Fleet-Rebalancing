@@ -2,6 +2,7 @@ from copy import deepcopy
 from math import atan2, cos, degrees, isfinite, radians
 from bisect import bisect_right
 from ev_fleet.common.travel import distance_km, predicted_soc
+from ev_fleet.contracts.recovery import SimulatorCheckpoint, SimulatorConfiguration
 
 
 class Movement:
@@ -30,6 +31,66 @@ class Movement:
         self.odometer_km = 0.0
         self.speed_kph = 0.0
         self.heading_deg = 0.0
+        self.completed_command_id = None
+
+    def snapshot(self):
+        """Physical state and the original command decision, without network identity."""
+        decision = self.seen.get(self.command["command_id"], {}) if self.command else {}
+        return {"physical": self.telemetry(), "command": deepcopy(self.command),
+                "accepted": self.accepted, "reason": decision.get("reason"),
+                "completed_command_id": self.completed_command_id}
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint, configuration):
+        """Restore a recorded trip directly; never re-accept or re-run its origin."""
+        saved = SimulatorCheckpoint.model_validate(checkpoint)
+        configuration = SimulatorConfiguration.model_validate(configuration)
+        if saved.simulation is None or saved.simulation != configuration:
+            raise ValueError("checkpoint simulation model/configuration does not match")
+        physical = saved.physical
+        movement = cls(physical.position.model_dump(), physical.soc_pct,
+                       configuration.capacity_kwh, configuration.consumption_kwh_per_km)
+        movement.odometer_km, movement.heading_deg = physical.odometer_km, physical.heading_deg
+        movement.command = saved.command.model_dump(mode="json") if saved.command else None
+        movement.accepted, movement.reason = saved.accepted, saved.reason
+        movement.state = physical.relocation_state.value
+        movement.distance = physical.distance_travelled_km or 0.0
+        movement.completed_command_id = str(saved.completed_command_id) if saved.completed_command_id else None
+        if movement.completed_command_id:
+            movement.seen[movement.completed_command_id] = {"command": None, "accepted": None, "completed": True}
+        if saved.command:
+            route = movement.command.get("route")
+            if route:
+                movement.total = route["distance_km"]
+                movement.origin = deepcopy(route["geometry"][0])
+                movement.path_lengths = [0.0]
+                for a, b in zip(route["geometry"], route["geometry"][1:]):
+                    movement.path_lengths.append(movement.path_lengths[-1] + distance_km(a, b))
+                if saved.accepted and (movement.total > 0 and movement.path_lengths[-1] <= 0
+                        or distance_km(movement.position, movement.route_position()) > .005):
+                    raise ValueError("checkpoint position and route progress disagree")
+            movement.seen[str(saved.command.command_id)] = {"command": deepcopy(movement.command),
+                "accepted": saved.accepted, "reason": saved.reason, "completed": False}
+        if movement.state == "FAILED":
+            if saved.pending_event and saved.pending_event.kind == "FAILED" and saved.pending_event.reason:
+                movement.reason = saved.pending_event.reason
+            elif "BATTERY_DEPLETED" in physical.fault_codes:
+                movement.reason = "BATTERY_DEPLETED"
+            else:
+                raise ValueError("failed checkpoint has no recorded execution failure reason")
+        # Parking must be verified anew; no downtime is advanced or charged.
+        movement.speed_kph = 0.0
+        return movement
+
+    def route_position(self):
+        route = self.command["route"]
+        fraction = 1 if self.total == 0 else min(1, self.distance / self.total)
+        along_path = fraction * self.path_lengths[-1]
+        index = min(len(self.path_lengths) - 2, max(0, bisect_right(self.path_lengths, along_path) - 1))
+        length = self.path_lengths[index + 1] - self.path_lengths[index]
+        ratio = (along_path - self.path_lengths[index]) / length if length else 1
+        a, b = route["geometry"][index:index + 2]
+        return {key: a[key] + ratio * (b[key] - a[key]) for key in ("latitude", "longitude")}
 
     def accept(self, command):
         identity = command["command_id"]
@@ -48,7 +109,8 @@ class Movement:
             self.reason = "ONEMAP_ROUTE_REQUIRED"
             self.state = "IDLE"
             self.distance = 0.0
-            self.seen[identity] = {"command": deepcopy(command), "accepted": False, "completed": False}
+            self.seen[identity] = {"command": deepcopy(command), "accepted": False,
+                                   "reason": self.reason, "completed": False}
             return False
         if command.get("route") and distance_km(self.position, command["route"]["geometry"][0]) > .005:
             raise ValueError("route starts away from the road-aligned EV position")
@@ -80,7 +142,8 @@ class Movement:
             self.origin = deepcopy(self.position)
         self.reason = None if self.accepted else "INSUFFICIENT_LOCAL_SOC"
         self.state = "DISPATCHED" if self.accepted else "IDLE"
-        self.seen[identity] = {"command": deepcopy(command), "accepted": self.accepted, "completed": False}
+        self.seen[identity] = {"command": deepcopy(command), "accepted": self.accepted,
+                               "reason": self.reason, "completed": False}
         return self.accepted
 
     def start(self):
@@ -112,12 +175,7 @@ class Movement:
         self.soc_pct = max(0, self.soc_pct - 100 * step * self.consumption / self.capacity)
         fraction = 1 if self.total == 0 else min(1, self.distance / self.total)
         if route:
-            along_path = fraction * self.path_lengths[-1]
-            index = min(len(self.path_lengths) - 2, max(0, bisect_right(self.path_lengths, along_path) - 1))
-            length = self.path_lengths[index + 1] - self.path_lengths[index]
-            ratio = (along_path - self.path_lengths[index]) / length if length else 1
-            a, b = route["geometry"][index:index + 2]
-            self.position = {key: a[key] + ratio * (b[key] - a[key]) for key in ("latitude", "longitude")}
+            self.position = self.route_position()
         else:
             self.position = {key: self.origin[key] + fraction * (self.command["target_position"][key] - self.origin[key])
                              for key in ("latitude", "longitude")}
@@ -138,6 +196,8 @@ class Movement:
         if not self.command or self.state not in ("ARRIVED", "IDLE"):
             raise ValueError("cannot release an unfinished journey")
         self.seen[self.command["command_id"]]["completed"] = True
+        self.completed_command_id = self.command["command_id"]
+        self.seen = {self.completed_command_id: self.seen[self.completed_command_id]}
         self.command = None
         self.state = "IDLE"
         self.accepted = None

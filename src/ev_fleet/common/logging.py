@@ -57,6 +57,8 @@ def base_app(name: str) -> FastAPI:
     async def ready():
         configured = getattr(app.state, "persistence", None)
         repositories = configured if isinstance(configured, tuple) else (() if configured is None else (configured,))
+        if any(getattr(repository, "faulted", False) for repository in repositories):
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
         if any(not repository.ready for repository in repositories):
             raise HTTPException(503, "PERSISTENCE_NOT_READY")
         storage = "postgresql" if any(repository.enabled for repository in repositories) else "ephemeral"

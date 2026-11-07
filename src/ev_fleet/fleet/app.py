@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from ev_fleet.common.logging import base_app
+from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.contracts.vehicles import DashboardFleetSnapshot, SimulatorRuntimeReport
 from ev_fleet.common.dashboard_cache import DashboardCache
 from fastapi import Response, Query
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate, SessionRequest, VehicleState, FleetSnapshot
@@ -8,24 +10,33 @@ from uuid import UUID
 from ev_fleet.contracts.dispatch import ClaimRequest, ClaimRelease, VehicleClaim
 from ev_fleet.contracts.rentals import RentalStart, RentalReturn, RentalRecord
 from ev_fleet.contracts.charging_tasks import ChargingTaskCreate, ChargingTaskUpdate
+from ev_fleet.contracts.recovery import (SimulatorSessionRequest, SimulatorSession, SimulatorCheckpointRequest,
+    SimulatorCheckpointReceipt, SimulatorCheckpointSnapshot, SimulatorRestoreRequest, SimulatorIdleRestoreRequest, SimulatorStopRequest)
 
 
 def create_app(store=None, cache=None):
     app = base_app("Fleet State Service")
     state = store or FleetStore()
     app.state.store = state
-    app.state.persistence = state.repository
+    app.state.persistence = state
     display_cache = cache if cache is not None else DashboardCache.from_env('fleet', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
 
     @asynccontextmanager
     async def lifespan(app):
-        await state.start()
+        repository = state.repository
+        if isinstance(repository, SnapshotRepository):
+            repository.enable_recovery_exit()
         try:
+            await state.start()
             yield
         finally:
-            await display_cache.aclose()
-            await state.close()
+            try:
+                await display_cache.aclose()
+            finally:
+                await state.close()
+                if isinstance(repository, SnapshotRepository):
+                    repository.disable_recovery_exit()
 
     app.router.lifespan_context = lifespan
 
@@ -37,10 +48,13 @@ def create_app(store=None, cache=None):
     async def vehicles():
         return await state.snapshot()
 
-    @app.get("/api/v1/dashboard/vehicles", response_model=FleetSnapshot)
+    @app.get("/api/v1/dashboard/vehicles", response_model=DashboardFleetSnapshot)
     async def dashboard_vehicles(response: Response):
+        async def producer():
+            return await state.snapshot(include_runtime=True)
+
         result, status = await display_cache.get_or_compute(
-            f"vehicles:{state.version}", state.snapshot, FleetSnapshot)
+            f"vehicles-runtime:{state.version}", producer, DashboardFleetSnapshot)
         response.headers["X-Dashboard-Cache"] = status
         return result
 
@@ -59,6 +73,26 @@ def create_app(store=None, cache=None):
     @app.post("/api/v1/vehicles/{vehicle_id}/telemetry")
     async def telemetry(vehicle_id: str, body: TelemetryUpdate):
         return await state.telemetry(vehicle_id, body)
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/simulator-runtime")
+    async def simulator_runtime(vehicle_id: str, body: SimulatorRuntimeReport):
+        return await state.report_runtime(vehicle_id, body)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/simulator-sessions", response_model=SimulatorSession)
+    async def simulator_session(vehicle_id: str, body: SimulatorSessionRequest | SimulatorRestoreRequest | SimulatorIdleRestoreRequest):
+        return await state.simulator_recovery.session(vehicle_id, body)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/simulator-stop", response_model=VehicleClaim)
+    async def simulator_stop(vehicle_id: str, body: SimulatorStopRequest):
+        return await state.simulator_recovery.stop_relocation(vehicle_id, body)
+
+    @app.get("/api/v1/vehicles/{vehicle_id}/simulator-checkpoint", response_model=SimulatorCheckpointSnapshot)
+    async def simulator_checkpoint_snapshot(vehicle_id: str):
+        return await state.simulator_recovery.snapshot(vehicle_id)
+
+    @app.put("/api/v1/vehicles/{vehicle_id}/simulator-checkpoint", response_model=SimulatorCheckpointReceipt)
+    async def simulator_checkpoint(vehicle_id: str, body: SimulatorCheckpointRequest):
+        return await state.simulator_recovery.checkpoint(vehicle_id, body)
 
     @app.post("/api/v1/vehicles/{vehicle_id}/rentals", status_code=201, response_model=RentalRecord)
     async def start_rental(vehicle_id: str, body: RentalStart):

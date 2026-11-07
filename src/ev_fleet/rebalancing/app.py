@@ -10,7 +10,10 @@ import httpx
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.logging import base_app
-from ev_fleet.common.settings import Settings
+from ev_fleet.common.settings import Settings, CrdsSettings
+from .crds_service import plan_one, plan_batch, recommendation_record
+from .crds_futures import MODEL_VERSION, parameters_for
+from ev_fleet.contracts.crds import CrdsRevalidationRequest, CrdsRevalidationResult
 from ev_fleet.contracts.recommendations import RecommendationRequest, Recommendation, BatchRecommendationRequest, BatchRecommendation
 from ev_fleet.contracts.vehicles import FleetSnapshot
 from ev_fleet.contracts.demand import ZoneState
@@ -33,15 +36,21 @@ class TrafficRouteQuery(BaseModel):
     duration_seconds: float = Field(ge=0, le=86400)
 
 
-def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
+def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, crds_settings=None):
     app = base_app("EV Rebalancing Service")
     config = settings or Settings.from_env()
+    crds_config = crds_settings or CrdsSettings.from_env()
     clock = clock or Clock()
     store = RecommendationStore(clock, "rebalancing.recommendations")
     batch_store = RecommendationStore(clock, "rebalancing.batches")
     app.state.persistence = (store.repository, batch_store.repository)
     app.state.traffic_monitor = None
     app.state.traffic_scenarios = TrafficScenarios(clock)
+    app.state.traffic_instance_id = str(uuid4())
+
+    def traffic_snapshot():
+        return {**app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot()),
+                "instance_id": app.state.traffic_instance_id}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -85,11 +94,22 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     @app.post("/api/v1/recommendations", status_code=201, response_model=Recommendation)
     async def recommend(body: RecommendationRequest):
         start = clock.monotonic()
+        if crds_config.mode != "DISABLED":
+            try:
+                plan = await plan_one(app.state.client, config, crds_config, clock,
+                                      traffic_snapshot(), body.target_zone_id)
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+            except ValueError:
+                raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+            record = recommendation_record(plan, config, clock, body.target_zone_id, started_at=start)
+            await store.put(record, config.recommendation_ttl_seconds)
+            return record
         fleet, target = await asyncio.gather(
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
+        traffic = traffic_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet).model_dump(mode="json")
             target = ZoneState.model_validate(target).model_dump(mode="json")
@@ -134,6 +154,35 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
     @app.get("/api/v1/traffic/scenarios")
     async def list_traffic_scenarios():
         return app.state.traffic_scenarios.list()
+
+    @app.post("/api/v1/crds/revalidate", response_model=CrdsRevalidationResult)
+    async def revalidate_crds(body: CrdsRevalidationRequest):
+        record = Recommendation.model_validate(await store.get(str(body.recommendation_id)))
+        if (crds_config.mode != "ACTIVE" or record.crds is None
+                or not record.crds.approval_allowed or record.crds.decision != "MOVE"):
+            raise HTTPException(409, "CRDS_APPROVAL_DISABLED")
+        if record.expires_at <= clock.now():
+            raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+        if (record.crds.parameters != parameters_for(crds_config)
+                or record.crds.scenario_model_version != MODEL_VERSION):
+            raise HTTPException(409, "CRDS_POLICY_CHANGED")
+        policy = Settings(**{**config.model_dump(), **record.policy_settings})
+        try:
+            plan = await plan_one(app.state.client, policy, crds_config, clock,
+                traffic_snapshot(), record.target.zone_id, vehicle_id=record.selected_vehicle_id,
+                facility_id=record.parking_facility_id, route_override=body.route,
+                exclude_dispatch_id=str(body.dispatch_id))
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+        except ValueError:
+            raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+        if (plan.inputs.planning.instance_id != body.expected_planning_instance_id
+                or plan.inputs.planning.revision != body.expected_planning_revision):
+            raise HTTPException(409, "CRDS_PLANNING_CHANGED")
+        allowed = (plan.metadata.approval_allowed and
+                   plan.evaluation.selected_vehicle_id == record.selected_vehicle_id and
+                   plan.evaluation.selected_facility_id == record.parking_facility_id)
+        return CrdsRevalidationResult(allowed=allowed, metadata=plan.metadata)
 
     @app.post("/api/v1/traffic/scenarios", status_code=201)
     async def create_traffic_scenario(
@@ -216,12 +265,51 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE):
 
     @app.post("/api/v1/batch-recommendations", status_code=201, response_model=BatchRecommendation)
     async def batch_recommend(body: BatchRecommendationRequest):
+        if body.purpose == "REBALANCE" and crds_config.mode != "DISABLED":
+            start = clock.monotonic()
+            try:
+                plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
+                    body.target_zone_id, vehicle_id=body.vehicle_id)
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+            except ValueError:
+                raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+            children, metadata, stop_reason = await plan_batch(plan, body.quantity, app.state.client, crds_config, clock,
+                                                              stale_seconds=config.stale_seconds)
+            now = clock.now()
+            expires = now + timedelta(seconds=config.recommendation_ttl_seconds)
+            assignments = []
+            for child in children:
+                record = recommendation_record(child, config, clock, body.target_zone_id, started_at=start)
+                record["expires_at"] = expires.isoformat()
+                await store.put(record, config.recommendation_ttl_seconds)
+                gain = child.evaluation.ranked_candidates[0]
+                site = child.sites[(gain.vehicle_id, gain.facility_id)]
+                assessment = child.assessments[gain.vehicle_id]
+                assignments.append({"recommendation_id": record["recommendation_id"],
+                    "vehicle_id": gain.vehicle_id, "facility_id": gain.facility_id, "facility_name": site.name,
+                    "target_position": site.position.model_dump(mode="json"),
+                    "requires_charging": record["requires_charging"], "distance_km": assessment["distance_km"],
+                    "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"], "score": None,
+                    "traffic_assessment": assessment["traffic_assessment"], "crds_gain": gain.model_dump(mode="json")})
+            result = {"batch_recommendation_id": str(uuid4()), "target_zone_id": body.target_zone_id,
+                "purpose": "REBALANCE", "requested_count": body.quantity, "recommended_count": len(assignments),
+                "unfulfilled_count": body.quantity - len(assignments), "assignments": assignments,
+                "created_at": now.isoformat(), "expires_at": expires.isoformat(),
+                "crds": metadata.model_dump(mode="json"),
+                "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
+                "explanation": f"CRDS proposes {len(assignments)} of {body.quantity} EVs. {metadata.reason_code}.",
+                "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
+                    "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
+            await batch_store.put({**result, "recommendation_id": result["batch_recommendation_id"]},
+                                  config.recommendation_ttl_seconds)
+            return result
         fleet_raw, target_raw, sites_raw = await asyncio.gather(
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),
             get_json(app.state.client, f"{config.facilities_url}/api/v1/facilities?zone_id={body.target_zone_id}"))
         now = clock.now()
-        traffic = app.state.traffic_scenarios.merged_snapshot(app.state.traffic_monitor.cached_snapshot())
+        traffic = traffic_snapshot()
         try:
             fleet = FleetSnapshot.model_validate(fleet_raw).model_dump(mode="json")
             target = ZoneState.model_validate(target_raw).model_dump(mode="json")

@@ -19,9 +19,15 @@ class DispatchRecord:
     claim_tick: float | None = None
     progress_tick: float | None = None
     release_outcome: str | None = None
+    recovery: dict | None = None
+    resolution: dict | None = None
 
     def view(self):
-        return deepcopy(self.data)
+        result = deepcopy(self.data)
+        result["recovery"] = None if self.recovery is None else {
+            key: deepcopy(self.recovery.get(key)) for key in (
+                "request_id", "status", "reason_code", "generation", "confirmed_paused", "intent_fingerprint")}
+        return result
 
 
 class DispatchStore:

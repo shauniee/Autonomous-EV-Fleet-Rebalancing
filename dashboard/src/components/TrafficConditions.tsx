@@ -19,6 +19,12 @@ export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapsh
     <div className="section-title"><h2>Traffic conditions & roadworks</h2>
       <strong>{error ? 'UNAVAILABLE' : combined ? 'LIVE LTA + SIMULATION' : simulated ? 'SIMULATION MODE' : live ? 'LIVE LTA MODE' : 'DISABLED'}</strong></div>
     {error && <p className="warning" role="status">Traffic feed unavailable: {error}. Cached road conditions must not be interpreted as a clear route.</p>}
+    {live && <div className="traffic-incidents">
+      <h3>Geolocated incidents ({issues.length})</h3>
+      {!issues.length && <p className="muted">No usable incident observations. Roads may still be disrupted.</p>}
+      {issues.length > 0 && <div className="table-scroll"><table><thead><tr><th>Type</th><th>Message</th></tr></thead>
+        <tbody>{issues.slice(0,20).map(i => <tr key={i.id}><td>{i.type}</td><td>{i.message}</td></tr>)}</tbody></table></div>}
+    </div>}
     <div className="map-marker-help traffic-map-legend" aria-label="Traffic map legend">
       <strong>Map legend:</strong>
       <span><span className="traffic-line-swatch" aria-hidden="true"/>Observed speed</span>
@@ -54,14 +60,11 @@ export function TrafficConditions({ snapshot, error }: {snapshot?: TrafficSnapsh
       {live.speed_display_count != null && <p className="muted">
         Map displays {live.speed_display_count} spatially sampled speed links from {live.feeds.speeds?.count ?? 0} validated observations;
         route assessment uses the complete cached dataset.</p>}
+      <h3>Observed feeds</h3>
       <div className="table-scroll"><table><thead><tr><th>Feed</th><th>Status</th><th>Observations</th><th>Last received</th></tr></thead>
         <tbody>{Object.entries(live.feeds).map(([name, feed]) =>
           <tr key={name}><td>{name}</td><td>{feed.status}</td><td>{feed.count}</td><td>{time(feed.observed_at)}</td></tr>)}</tbody>
       </table></div>
-      <h3>Geolocated incidents ({issues.length})</h3>
-      {!issues.length && <p className="muted">No usable incident observations. Roads may still be disrupted.</p>}
-      {issues.length > 0 && <div className="table-scroll"><table><thead><tr><th>Type</th><th>Message</th></tr></thead>
-        <tbody>{issues.slice(0,20).map(i => <tr key={i.id}><td>{i.type}</td><td>{i.message}</td></tr>)}</tbody></table></div>}
       <h3>Approved works active today ({active.length})</h3>
       {!active.length && <p className="muted">No active works in the available feed. Roadworks are not automatic closures.</p>}
       {active.length > 0 && <div className="table-scroll"><table><thead><tr><th>Road</th><th>Until</th></tr></thead>

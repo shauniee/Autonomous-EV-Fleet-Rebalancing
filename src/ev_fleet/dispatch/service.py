@@ -5,7 +5,8 @@ from copy import deepcopy
 from uuid import uuid4, uuid5
 from fastapi import HTTPException
 from ev_fleet.common.clock import Clock
-from ev_fleet.common.settings import DispatchSettings, Settings
+from ev_fleet.common.settings import DispatchSettings, Settings, CrdsSettings
+from ev_fleet.contracts.crds import CrdsRevalidationRequest, CrdsRevalidationResult
 from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, VehicleClaim
 from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
@@ -17,6 +18,8 @@ from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
+from .recovery import RecoveryCoordinator
+from .resolution import advance_resolution, stop_pending
 from .routing import RoutingSettings, driving_route
 from .traffic_routes import choose_traffic_route
 from ev_fleet.rebalancing.traffic import assess_traffic
@@ -34,11 +37,17 @@ class DispatchService:
         self.store = DispatchStore(self.clock)
         self.batch_lock = asyncio.Lock()
         self.persist_lock = asyncio.Lock()
+        self.admission_lock = asyncio.Lock()
+        self.crds_settings = CrdsSettings.from_env()
         self.batches = {}
         self.batch_recommendations = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.persisted_snapshot = None
         self.routing = RoutingSettings.from_env()
+        self.planning_instance_id = uuid4()
+        self.planning_revision = 0
+        self.route_estimates = {}
+        self.recovery = RecoveryCoordinator(self)
         self.traffic_enabled = (os.getenv("TRAFFIC_SOURCE", "DISABLED").upper() == "LTA_DATAMALL"
             or os.getenv("TRAFFIC_SIMULATION_ENABLED", "false").lower() == "true")
 
@@ -52,6 +61,7 @@ class DispatchService:
         self.store.recommendations = payload["recommendations"]
         self.batches = payload["batches"]
         self.batch_recommendations = payload["batch_recommendations"]
+        self.planning_revision = payload.get("planning_revision", 0)
         tick = self.clock.monotonic()
         for key, item in payload["records"].items():
             record = DispatchRecord(
@@ -59,7 +69,8 @@ class DispatchService:
                 parking_request=item["parking_request"], claimed=item["claimed"],
                 ack=item["ack"], events=item["events"],
                 event_sequence=item["event_sequence"],
-                release_outcome=item["release_outcome"])
+                release_outcome=item["release_outcome"], recovery=item.get("recovery"),
+                resolution=item.get("resolution"))
             if record.data["delivery_attempts"]:
                 record.sent_tick = tick
             if record.claimed and record.data["state"] not in TERMINAL:
@@ -124,9 +135,73 @@ class DispatchService:
 
     def record_checkpoint(self, record):
         return deepcopy(self.durable_record(record))
+            records = {key: {
+                "data": record.data,
+                "claim_request": record.claim_request,
+                "parking_request": record.parking_request,
+                "claimed": record.claimed,
+                "ack": record.ack,
+                "events": record.events,
+                "event_sequence": record.event_sequence,
+                "release_outcome": record.release_outcome,
+                "recovery": record.recovery,
+                "resolution": record.resolution,
+            } for key, record in self.store.records.items()}
+            await self.repository.save({
+                "records": records,
+                "requests": self.store.requests,
+                "recommendations": self.store.recommendations,
+                "batches": self.batches,
+                "batch_recommendations": self.batch_recommendations,
+                "planning_revision": self.planning_revision,
+            })
 
     def transition(self, record, state, reason=None):
+        if (record.data["state"], record.data["failure_reason"]) != (state, reason):
+            self.planning_revision += 1
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
+
+    async def planning_snapshot(self):
+        from ev_fleet.contracts.crds import CrdsPlanningSnapshot
+
+        async with self.store.lock:
+            return CrdsPlanningSnapshot(
+                instance_id=self.planning_instance_id, revision=self.planning_revision,
+                observed_at=self.clock.now(), dispatches=[
+                    record.view() for record in self.store.records.values()
+                    if record.data["command"] is not None
+                    and (record.data["state"] not in TERMINAL or record.data["claim_held"] is not False)])
+
+    async def estimate_route(self, body):
+        from ev_fleet.contracts.crds import CrdsRouteEstimate
+
+        fleet, facility = await asyncio.gather(
+            request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot),
+            request_json(self.client, "GET", f"{self.settings.facilities_url}/api/v1/facilities/{body.facility_id}", model=Facility))
+        vehicle = next((v for v in fleet.vehicles if v.vehicle_id == body.vehicle_id), None)
+        if (fleet.instance_id != body.expected_fleet_instance_id or vehicle is None
+                or vehicle.control_version != body.expected_control_version or vehicle.telemetry is None
+                or vehicle.stale or vehicle.connectivity != "ONLINE"):
+            raise HTTPException(409, "ROUTE_ESTIMATE_INPUT_CHANGED")
+        if facility.status != "OPEN" or not facility.is_fresh(self.clock.now()):
+            raise HTTPException(409, "PARKING_DESTINATION_CHANGED")
+        origin = vehicle.telemetry.position
+        key = (vehicle.vehicle_id, facility.facility_id, str(fleet.instance_id), vehicle.control_version,
+               origin.latitude, origin.longitude, facility.position.latitude, facility.position.longitude)
+        cached = self.route_estimates.get(key)
+        if cached and self.clock.monotonic() - cached[0] < 15:
+            return cached[1]
+        route = await driving_route(self.client, self.routing, origin.model_dump(),
+                                    facility.position.model_dump(), self.settings.arrival_tolerance_km,
+                                    facility=True)
+        if route is None or route.source != "ONEMAP":
+            raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
+        result = CrdsRouteEstimate(vehicle_id=vehicle.vehicle_id, facility_id=facility.facility_id,
+            fleet_instance_id=fleet.instance_id, control_version=vehicle.control_version, origin=origin, route=route)
+        if len(self.route_estimates) >= 256:
+            self.route_estimates.pop(next(iter(self.route_estimates)))
+        self.route_estimates[key] = (self.clock.monotonic(), result)
+        return result
 
     def claim_url(self, record):
         return f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}/claims/{record.data['dispatch_id']}"
@@ -146,8 +221,19 @@ class DispatchService:
             raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
         if recommendation.expires_at <= self.clock.now():
             raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+        if recommendation.crds is not None and (
+                self.crds_settings.mode != "ACTIVE" or not recommendation.crds.approval_allowed
+                or recommendation.crds.decision != "MOVE"):
+            raise HTTPException(409, "CRDS_ADVISORY_ONLY")
         if not recommendation.selected_vehicle_id:
             raise HTTPException(409, "NO_RECOMMENDED_VEHICLE")
+        for other in self.store.records.values():
+            if (other is not record and other.claim_request and not other.claimed
+                    and other.data["state"] not in TERMINAL
+                    and (other.data["vehicle_id"] == recommendation.selected_vehicle_id
+                         or recommendation.parking_facility_id is not None
+                         and other.data["parking_facility_id"] == recommendation.parking_facility_id)):
+                raise HTTPException(409, "APPROVAL_RESOURCE_UNRESOLVED")
         target, fleet = await asyncio.gather(
             request_json(self.client, "GET", f"{self.settings.demand_url}/api/v1/zones/{recommendation.target.zone_id}", model=ZoneState),
             request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
@@ -229,6 +315,37 @@ class DispatchService:
                 expected_zone_id=target.zone_id, expected_position=parking.position,
                 access_position=destination if route else None,
                 requires_charging=requires_charge).model_dump(mode="json")
+        if recommendation.crds is not None:
+            deadline = self.clock.monotonic() + self.crds_settings.deadline_seconds
+            for attempt in range(2):
+                revision = self.planning_revision
+                remaining = (recommendation.expires_at - self.clock.now()).total_seconds()
+                if remaining <= 0:
+                    raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+                budget = min(remaining, deadline - self.clock.monotonic())
+                if budget <= 0:
+                    raise HTTPException(409, "CRDS_PLANNING_CHANGED")
+                body = CrdsRevalidationRequest(recommendation_id=recommendation.recommendation_id,
+                    dispatch_id=record.data["dispatch_id"], route=route,
+                    expected_planning_instance_id=self.planning_instance_id,
+                    expected_planning_revision=revision)
+                try:
+                    revalidated = await request_json(self.client, "POST",
+                        f"{self.settings.rebalancing_url}/api/v1/crds/revalidate",
+                        body.model_dump(mode="json"), model=CrdsRevalidationResult, timeout_seconds=budget)
+                except HTTPException as exc:
+                    if attempt == 0 and exc.status_code == 409 and exc.detail == "CRDS_PLANNING_CHANGED":
+                        continue
+                    raise
+                if self.planning_revision == revision:
+                    break
+            else:
+                raise HTTPException(409, "CRDS_PLANNING_CHANGED")
+            if not revalidated.allowed:
+                raise HTTPException(409, "CRDS_BENEFIT_CHANGED:" + revalidated.metadata.reason_code)
+            if recommendation.expires_at <= self.clock.now():
+                raise HTTPException(409, "RECOMMENDATION_EXPIRED")
+            assessment["crds"] = revalidated.metadata.model_dump(mode="json")
         command_id = uuid4()
         claim = ClaimRequest(command_id=command_id, expected_instance_id=fleet.instance_id,
             expected_version=vehicle.state_version,
@@ -245,13 +362,23 @@ class DispatchService:
             target_zone_id=target.zone_id, target_position=destination, issued_at=self.clock.now(),
             min_reserve_pct=claim.min_reserve_pct, route_factor=claim.route_factor,
             energy_margin_factor=claim.energy_margin_factor, route=route)
+        assessment["origin"] = {
+            "position": origin,
+            "zone_id": vehicle.current_zone_id,
+            "facility_id": (
+                vehicle.telemetry.parked_facility_id if vehicle.telemetry else None
+            ),
+        }
         record.data.update(vehicle_id=vehicle.vehicle_id, command=command.model_dump(mode="json"),
                            revalidated_metrics=assessment)
         # Store the exact request BEFORE the remote mutation. Never silently refresh its version.
         record.claim_request = claim.model_dump(mode="json")
 
     async def acquire(self, record):
-        if record.parking_request:
+        # Applies to initial admission AND exact-request reconciliation retries.
+        # Persistence failure prevents any subsequent remote resource mutation.
+        await self.persist()
+        if record.parking_request and record.data["parking_status"] != "RESERVED":
             hold = await request_json(self.client, "POST",
                 f"{self.settings.facilities_url}/api/v1/facilities/{record.data['parking_facility_id']}/holds",
                 record.parking_request, model=ParkingHold)
@@ -260,13 +387,17 @@ class DispatchService:
                     hold.facility_id != record.data["parking_facility_id"] or hold.status != "RESERVED"):
                 raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
             record.data["parking_status"] = hold.status
+            self.planning_revision += 1
         receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
         self.check_receipt(record, receipt)
         record.claimed = True
         if record.claim_tick is None:
             elapsed = max(0, (self.clock.now() - receipt.acquired_at).total_seconds())
             record.claim_tick = self.clock.monotonic() - elapsed
-        record.data["claim_held"] = receipt.status == "ACTIVE"
+        claim_held = receipt.status == "ACTIVE"
+        if record.data["claim_held"] is not claim_held:
+            record.data["claim_held"] = claim_held
+            self.planning_revision += 1
         if receipt.status == "RELEASED":
             self.finish(record, receipt.outcome)
             await self.sync_parking(record)
@@ -302,9 +433,10 @@ class DispatchService:
             wanted = "OCCUPIED" if action == "complete" else "RELEASED"
             if (str(receipt.dispatch_id) != record.data["dispatch_id"] or
                     receipt.facility_id != record.data["parking_facility_id"] or
-                    receipt.status != wanted):
+                    receipt.vehicle_id != record.data["vehicle_id"] or receipt.status != wanted):
                 raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
             record.data["parking_status"] = receipt.status
+            self.planning_revision += 1
         except HTTPException as exc:
             logging.warning("parking finalisation pending dispatch=%s error=%s",
                             record.data["dispatch_id"], exc.detail)
@@ -347,6 +479,18 @@ class DispatchService:
                 "assessment": report}
 
     async def approve(self, body):
+        # Shared by legacy requests and CRDS batch children. Read-only planning
+        # and route endpoints never take this admission lock.
+        try:
+            await asyncio.wait_for(self.admission_lock.acquire(), self.crds_settings.deadline_seconds)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, "ADMISSION_BUSY_RETRY_SAME_REQUEST") from None
+        try:
+            return await self.approve_serial(body)
+        finally:
+            self.admission_lock.release()
+
+    async def approve_serial(self, body):
         record = await self.store.begin(body)
         try:
             async with record.lock:
@@ -355,6 +499,9 @@ class DispatchService:
                 try:
                     if not record.claim_request:
                         await self.prepare(record)
+                        # Durable intent/IDs must precede the first remote hold
+                        # or claim. On restart, reconcile this exact request.
+                        self.planning_revision += 1
                     await self.acquire(record)
                 except HTTPException as exc:
                     if not record.claim_request and str(exc.detail).startswith("ONEMAP_"):
@@ -362,46 +509,45 @@ class DispatchService:
                         # never retry expired tokens/rate limits in reconciliation.
                         self.transition(record, "REJECTED", str(exc.detail))
                         return record.view()
-                    # Only definite claim failures may free a parking reservation.
-                    # Lost responses keep the reservation until reconciliation.
-                    if (exc.status_code in (404, 409, 422) and not record.claimed
-                            and record.data["parking_status"] == "RESERVED"):
-                        try:
-                            released = await request_json(self.client, "POST",
-                                f"{self.settings.facilities_url}/api/v1/holds/{record.data['dispatch_id']}/release",
-                                model=ParkingHold)
-                            if released.status != "RELEASED" or str(released.dispatch_id) != record.data["dispatch_id"]:
-                                raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
-                            record.data["parking_status"] = "RELEASED"
-                        except HTTPException:
-                            self.transition(record, "UNKNOWN", "PARKING_RELEASE_UNCONFIRMED")
-                            return record.view()
-                    self.handle_approval_error(record, exc)
-                    if exc.status_code in (404, 409, 422):
+                    await self.handle_approval_error(record, exc)
+                    if record.data["state"] == "REJECTED" and exc.status_code in (404, 409, 422):
                         raise HTTPException(409, exc.detail) from exc
                 return record.view()
         finally:
             await self.persist()
 
-    def handle_approval_error(self, record, exc):
+    async def handle_approval_error(self, record, exc):
         # A Fleet epoch change after an attempted claim cannot prove the old claim did not execute.
-        uncertain = exc.status_code >= 500 or (record.claim_request and exc.detail == "FLEET_INSTANCE_CHANGED")
-        self.transition(record, "UNKNOWN" if uncertain else "REJECTED", str(exc.detail))
-        if uncertain and record.claim_request:
-            record.data["claim_held"] = None  # Unknown, not proof that the EV is free.
+        uncertain = exc.status_code >= 500 or (record.claim_request and exc.detail in (
+            "FLEET_INSTANCE_CHANGED", "CLAIM_ID_CONFLICT", "PARKING_HOLD_ID_CONFLICT"))
+        state, reason = ("UNKNOWN" if uncertain else "REJECTED"), str(exc.detail)
+        claim_held = None if uncertain and record.claim_request else False
+        if record.data["claim_held"] is not claim_held:
+            record.data["claim_held"] = claim_held
+            self.planning_revision += 1
+        self.transition(record, state, reason)
+        if not uncertain:
+            await self.sync_parking(record)
 
     async def refresh(self, record):
         """Caller serializes this dispatch; Fleet owns the vehicle's atomic state."""
+        if stop_pending(record):
+            return
         if record.data["state"] in TERMINAL:
             await self.sync_parking(record)
             return
         if not record.claimed:
             try:
                 if not record.claim_request:
-                    await self.prepare(record)
+                    # No durable resource intent exists yet. Only explicit
+                    # approval retries may prepare it through admission order.
+                    reason = "PREPARATION_INCOMPLETE_RETRY_SAME_REQUEST"
+                    if record.data["state"] != "UNKNOWN" or record.data["failure_reason"] != reason:
+                        self.transition(record, "UNKNOWN", reason)
+                    return
                 await self.acquire(record)
             except HTTPException as exc:
-                self.handle_approval_error(record, exc)
+                await self.handle_approval_error(record, exc)
             return
         try:
             receipt = await request_json(self.client, "GET", self.claim_url(record), model=VehicleClaim)
@@ -410,7 +556,9 @@ class DispatchService:
                 self.finish(record, receipt.outcome)
                 await self.sync_parking(record)
                 return
-            record.data["claim_held"] = True
+            if record.data["claim_held"] is not True:
+                record.data["claim_held"] = True
+                self.planning_revision += 1
             vehicle = await request_json(self.client, "GET",
                 f"{self.settings.fleet_url}/api/v1/vehicles/{record.data['vehicle_id']}", model=VehicleState)
             if not vehicle.active_claim or vehicle.active_claim != receipt:
@@ -423,8 +571,10 @@ class DispatchService:
                 self.transition(record, "SENT" if record.sent_tick is not None else "PENDING")
             if telemetry and str(telemetry.active_dispatch_id) == record.data["dispatch_id"]:
                 record.data["last_contact_at"] = telemetry.observed_at.isoformat()
-                if telemetry.distance_travelled_km is not None:
-                    record.data["distance_travelled_km"] = max(record.data["distance_travelled_km"], telemetry.distance_travelled_km)
+                if (telemetry.distance_travelled_km is not None
+                        and telemetry.distance_travelled_km > record.data["distance_travelled_km"]):
+                    record.data["distance_travelled_km"] = telemetry.distance_travelled_km
+                    self.planning_revision += 1
                 state = telemetry.relocation_state
                 if state == "ARRIVED":
                     record.release_outcome = "ARRIVED"
@@ -479,7 +629,7 @@ class DispatchService:
                     continue
                 async with record.lock:
                     await self.refresh(record)
-                    if (not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
+                    if (stop_pending(record) or not record.claimed or record.data["state"] in TERMINAL or record.release_outcome or
                         record.data["state"] == "UNKNOWN" and record.data["failure_reason"] != "ACK_TIMEOUT"):
                         continue
                     # Only a positively reconciled claim can be delivered. ACK timeout permits same-ID redelivery.
@@ -493,15 +643,18 @@ class DispatchService:
             await self.persist_if_changed()
 
     def check_command(self, record, body):
+        if stop_pending(record):
+            raise HTTPException(409, "RELOCATION_STOP_PENDING")
         if (not record.claimed or not record.data["delivery_attempts"] or
             record.data["command"]["command_id"] != str(body.command_id) or
             record.data["vehicle_id"] != body.vehicle_id):
             raise HTTPException(409, "COMMAND_ID_CONFLICT")
 
-    async def acknowledge(self, dispatch_id, body):
+    async def acknowledge(self, dispatch_id, body, *, simulator_generation=None, simulator_session_id=None):
         record = self.store.get(dispatch_id)
         async with record.lock:
             self.check_command(record, body)
+            await self.recovery.guard(record, simulator_generation, simulator_session_id)
             payload = body.model_dump(mode="json")
             if record.ack:
                 if record.ack != payload:
@@ -524,10 +677,11 @@ class DispatchService:
         await self.persist()
         return result
 
-    async def event(self, dispatch_id, body):
+    async def event(self, dispatch_id, body, *, simulator_generation=None, simulator_session_id=None):
         record = self.store.get(dispatch_id)
         async with record.lock:
             self.check_command(record, body)
+            await self.recovery.guard(record, simulator_generation, simulator_session_id)
             payload = body.model_dump(mode="json")
             previous = record.events.get(body.sequence)
             if previous == payload:
@@ -547,7 +701,9 @@ class DispatchService:
                 raise HTTPException(409, "COMMAND_REJECTED")
             record.events[body.sequence] = payload
             record.event_sequence = body.sequence
-            record.data["distance_travelled_km"] = body.distance_travelled_km
+            if body.distance_travelled_km != record.data["distance_travelled_km"]:
+                record.data["distance_travelled_km"] = body.distance_travelled_km
+                self.planning_revision += 1
             record.data["last_contact_at"] = body.observed_at.isoformat()
             record.progress_tick = self.clock.monotonic()
             if body.kind == "FAILED":
@@ -563,13 +719,72 @@ class DispatchService:
         await self.persist()
         return result
 
+    @staticmethod
+    def approval_status(record):
+        if record.claimed:
+            return "APPROVED"
+        return "REJECTED" if record.data["state"] == "REJECTED" else "UNKNOWN"
+
+    def approval_view(self, request_id):
+        key = self.store.requests.get(str(request_id))
+        if key is None:
+            raise HTTPException(404, "APPROVAL_NOT_FOUND")
+        record = self.store.get(key)
+        return {**record.view(), "approval_status": self.approval_status(record)}
+
+    async def close_unstarted(self, request_id: UUID, recommendation_id: UUID | None = None):
+        async with self.admission_lock:
+            key = self.store.requests.get(str(request_id))
+            if recommendation_id is not None:
+                record = await self.store.begin(DispatchApproval(
+                    request_id=request_id, recommendation_id=recommendation_id))
+            elif key is not None:
+                record = self.store.get(key)
+            else:
+                raise HTTPException(404, "APPROVAL_NOT_FOUND")
+            async with record.lock:
+                if (record.claimed or record.data["claim_held"] is not False
+                        or record.claim_request or record.data["command"]
+                        or record.data["parking_status"] or record.data["delivery_attempts"]
+                        or record.ack or record.events):
+                    raise HTTPException(409, "APPROVAL_MAY_HAVE_ACQUIRED_RESOURCES")
+                if record.data["state"] not in TERMINAL:
+                    self.transition(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
+                await self.persist()
+                return self.approval_view(request_id)
+
     def batch_view(self, data):
-        items = list(data["items"])
-        approved = sum(item["state"] not in ("REJECTED", "UNKNOWN") for item in items)
-        unknown = sum(item["state"] == "UNKNOWN" for item in items)
+        items = []
+        for stored in data["items"]:
+            item = dict(stored)
+            key = item.get("dispatch_id") or self.store.requests.get(
+                str(uuid5(UUID(data["request_id"]), item["recommendation_id"])))
+            child = self.store.records.get(key)
+            if child:
+                item.update(dispatch_id=key, state=child.data["state"], error=child.data["failure_reason"])
+                item["approval_status"] = self.approval_status(child)
+            else:
+                item["approval_status"] = "REJECTED" if item["state"] == "REJECTED" else "UNKNOWN"
+            items.append(item)
+        unknown = any(i["approval_status"] == "UNKNOWN" for i in items)
+        approved = sum(i["approval_status"] == "APPROVED" for i in items)
         status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
                   else "PARTIAL" if approved else "REJECTED")
-        return {**data, "status": status}
+        return {**data, "items": items, "status": status}
+
+    async def close_batch_item(self, request_id: UUID, recommendation_id: UUID):
+        async with self.batch_lock:
+            data = self.batches.get(str(request_id))
+            item = next((i for i in data["items"]
+                         if i["recommendation_id"] == str(recommendation_id)), None) if data else None
+            if item is None:
+                raise HTTPException(404, "BATCH_ITEM_NOT_FOUND")
+            child_id = uuid5(request_id, item["recommendation_id"])
+            if item.get("dispatch_id") and self.store.requests.get(str(child_id)) != item["dispatch_id"]:
+                raise HTTPException(409, "BATCH_CHILD_UNAVAILABLE")
+            if item["state"] != "REJECTED" or str(child_id) in self.store.requests:
+                await self.close_unstarted(child_id, recommendation_id)
+            return self.batch_view(data)
 
     async def approve_batch(self, body):
         key = str(body.request_id)
@@ -599,11 +814,17 @@ class DispatchService:
                                   for a in rec.assignments]}
                 self.batches[key] = data
                 self.batch_recommendations[str(body.batch_recommendation_id)] = key
+            await self.persist()
             for item in data["items"]:
                 if item["state"] not in ("PENDING", "UNKNOWN"):
                     continue
                 # Stable child idempotency key across HTTP retries.
                 child_id = uuid5(body.request_id, item["recommendation_id"])
+                existing_id = item.get("dispatch_id") or self.store.requests.get(str(child_id))
+                child = self.store.records.get(existing_id)
+                if child and (child.claimed or child.data["state"] in TERMINAL):
+                    item["dispatch_id"] = existing_id
+                    continue
                 try:
                     result = await self.approve(DispatchApproval(
                         request_id=child_id, recommendation_id=item["recommendation_id"]))
@@ -646,4 +867,21 @@ class DispatchService:
     async def reconcile_loop(self):
         while True:
             await self.reconcile_once()
+            for record in list(self.store.records.values()):
+                if record.lock.locked():
+                    continue
+                try:
+                    if record.resolution and record.resolution["status"] in ("REQUESTED", "CLEANUP_PENDING"):
+                        await advance_resolution(self, record)
+                        continue
+                    if record.recovery and not (record.resolution and record.resolution["status"] == "ENDED"):
+                        await self.recovery.advance(record)
+                    if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
+                        continue
+                    async with record.lock:
+                        if not record.recovery or record.recovery["status"] != "REQUESTED":
+                            await self.refresh(record)
+                    await self.persist()
+                except Exception:
+                    logging.exception("dispatch reconciliation failed: %s", record.data["dispatch_id"])
             await asyncio.sleep(self.settings.reconcile_interval_seconds)

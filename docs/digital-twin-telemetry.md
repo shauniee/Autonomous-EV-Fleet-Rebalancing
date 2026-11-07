@@ -38,6 +38,23 @@ The odometer and heading restore from the last accepted *idle* reading
 when an EV simulator restarts. An unresolved journey is never resumed
 by guessing physical location or generating new browser motion.
 
+Checkpoint-enabled simulators also recover automatically from an expired **idle,
+noncharging** owner, including after a restart. Fleet validates its saved checkpoint
+against the last published physical observation, the configured simulation model,
+and current task/Dispatch evidence before rotating the owner generation. This
+does not require a completed-command ID or replay a succeeded journey. Lost
+responses retry the same request; concurrent owners and changed evidence are
+rejected. Position, SOC, odometer, heading and recorded time are retained; downtime
+adds no travel or charge. Parking is verified again and fresh telemetry is required
+before availability can return. The simulator logs `idle_simulation_restored` on
+handoff and the actual reason code while blocked.
+
+Active journeys keep the operator-approved recovery flow. Charging, rentals,
+unresolved/failed dispatches, missing checkpoints, configuration conflicts and
+unavailable dependencies still block automatic idle recovery. Recovery requires
+compatible Fleet and simulator images; merely restarting an older image cannot
+add this behavior.
+
 ## Frequent telemetry and safe dispatch concurrency
 
 At 1 Hz, Fleet increments the observation `state_version` for every accepted

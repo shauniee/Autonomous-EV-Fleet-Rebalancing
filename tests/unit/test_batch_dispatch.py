@@ -1,13 +1,13 @@
 """Contract, matching, parking capacity and batch dispatch tests."""
 import asyncio
 from datetime import timedelta
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 import httpx
 import pytest
 from fastapi import HTTPException
 
-from ev_fleet.contracts.dispatch import BatchApproval
+from ev_fleet.contracts.dispatch import BatchApproval, DispatchApproval
 from ev_fleet.contracts.facilities import ParkingHoldRequest
 from ev_fleet.contracts.rentals import RentalStart
 from ev_fleet.facilities.store import FacilitiesStore
@@ -162,6 +162,13 @@ def test_batch_conflicting_vehicle_becomes_partial_and_releases_parking(clock):
             assert len(holds) == 1
             other = await cluster.dispatch.get_batch(key)
             assert other == result
+            admitted = next(row for row in result["items"] if row["state"] == "PENDING")
+            child = cluster.dispatch.store.get(admitted["dispatch_id"])
+            cluster.dispatch.transition(child, "UNKNOWN", "PROGRESS_TIMEOUT")
+            after = await cluster.dispatch.get_batch(key)
+            assert after["status"] == "PARTIAL"
+            assert next(row for row in after["items"] if row["dispatch_id"] == admitted["dispatch_id"])[
+                "approval_status"] == "APPROVED"
     asyncio.run(scenario())
 
 
@@ -242,4 +249,27 @@ def test_charging_hold_requires_an_available_charger():
                 requires_charging=True))
         assert exc.value.detail == "CHARGING_FULL"
         assert (await store.get(site.facility_id)).parking_available == site.parking_available
+    asyncio.run(scenario())
+
+def test_close_unstarted_batch_item_blocks_late_child_retry(clock):
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            key, recommendation_id = uuid4(), uuid4()
+            cluster.dispatch.batches[str(key)] = {
+                "request_id": str(key), "batch_recommendation_id": str(uuid4()),
+                "requested_count": 1, "recommended_count": 1,
+                "items": [{"recommendation_id": str(recommendation_id), "vehicle_id": "ev-1",
+                           "facility_id": "mock-cbd-01", "state": "PENDING"}],
+            }
+            path = f"http://dispatch.test/api/v1/batches/{key}/items/{recommendation_id}/close"
+            closed = await cluster.client.post(path)
+            assert closed.status_code == 200, closed.text
+            assert closed.json()["status"] == "REJECTED"
+            child = DispatchApproval(request_id=uuid5(key, str(recommendation_id)),
+                                     recommendation_id=recommendation_id)
+            result = await cluster.dispatch.approve(child)
+            assert result["state"] == "REJECTED"
+            assert result["command"] is None
+            assert (await cluster.client.post(path)).json() == closed.json()
+
     asyncio.run(scenario())

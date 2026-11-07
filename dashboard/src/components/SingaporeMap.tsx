@@ -7,7 +7,9 @@ import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } fro
 import { RouteDetails } from './RouteDetails';
 import { planConfirmedMotion, routeForVehicle, type MotionSample } from './confirmedMotion';
 import { liveTrafficIconKind, mapIcon, mapSymbols, simulatedTrafficIconKind } from './mapIcons';
-const colours = { NORMAL: '#258371', WARNING: '#bc790b', CRITICAL: '#ce5147', UNKNOWN: '#76838a' };
+import type { DemandLevel } from './DemandThresholds';
+
+const colours = { Low: '#258371', Moderate: '#bc790b', Critical: '#ce5147', Unknown: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
 const reportedPositions = new WeakMap<L.Marker, L.LatLng>();
 
@@ -50,9 +52,11 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch }: {
+export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget, rentalDemandLevel }: {
+  rentalDemandLevel: (zone: Zone) => DemandLevel;
   zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
+  focusTarget?: { dispatchId: string } | { facility: Facility } | null;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -63,9 +67,11 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const displayAnimations = useRef(new Map<string, number>());
   const lastConfirmed = useRef(new Map<string, MotionSample>());
   const fitted = useRef(false);
+  const [mapVisible, setMapVisible] = useState(false);
   const [tileError, setTileError] = useState(false);
+  const appliedFocus = useRef<typeof focusTarget>(null);
   const [visible, setVisible] = useState({ zones: true, vehicles: true, parking: true, charging: true, routes: true, traffic: true });
-  const [selectedZoneOnly, setSelectedZoneOnly] = useState(true);
+  const [selectedZoneOnly, setSelectedZoneOnly] = useState(false);
   const areaZone = selectedZoneOnly ? selected : '';
   const area = zones.find(zone => zone.zone_id === areaZone);
   const shownZones = useMemo(() => areaZone ? zones.filter(zone => zone.zone_id === areaZone) : zones, [zones, areaZone]);
@@ -94,7 +100,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     : facilities, [facilities, areaZone]);
   const chargingCount = shownFacilities.filter(isChargingSite).length;
   const layers = [
-    { key: 'zones', label: 'Demand zones', colour: '#258371', count: shownZones.length },
+    { key: 'zones', label: 'Demand', colour: '#258371', count: shownZones.length },
     { key: 'vehicles', label: 'EVs', colour: '#163c63', count: shownVehicles.filter(vehicle => vehicle.telemetry).length },
     { key: 'parking', label: 'Parking', colour: '#287d83', count: shownFacilities.filter(facility => facility.facility_type !== 'CHARGING').length },
     { key: 'charging', label: 'Charging', colour: '#a96817', count: chargingCount },
@@ -104,7 +110,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         : (traffic?.live_observations?.speeds.length ?? 0) + (traffic?.live_observations?.incidents.length ?? 0))
       + (traffic?.simulated_events?.length ?? 0) },
   ] as const;
-  useEffect(() => { setSelectedZoneOnly(true); setFollowEV(false); }, [selected]);
+  useEffect(() => { setFollowEV(false); }, [selected]);
   useEffect(() => {
     const instance = L.map(element.current!, { preferCanvas: true, maxZoom: 18 }).setView([1.35, 103.82], 11);
     map.current = instance;
@@ -126,7 +132,9 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 18,
     }).on('tileerror', () => setTileError(true)).addTo(instance);
     const resize = new ResizeObserver(() => {
-      instance.invalidateSize();
+      const visible = !!element.current?.clientWidth && !!element.current?.clientHeight;
+      setMapVisible(visible);
+      if (visible) instance.invalidateSize();
     });
     resize.observe(element.current!);
     return () => {
@@ -138,15 +146,15 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   }, []);
   useEffect(() => {
     const route = journey?.command?.route;
-    if (!map.current || !route || !journey || fittedJourney.current === journey.dispatch_id) return;
+    if (!mapVisible || !map.current || !route || !journey || selectedDispatch !== journey.dispatch_id ||
+        fittedJourney.current === journey.dispatch_id) return;
     fittedJourney.current = journey.dispatch_id;
-    if (selectedDispatch !== journey.dispatch_id) onSelectDispatch(journey.dispatch_id);
     setVisible(current => ({ ...current, routes: true, vehicles: true }));
     if (followEV && !followUnavailable) return;
     const points = route.geometry.filter(point => !areaZone || nearestZone(point, zones) === areaZone);
     if (points.length) map.current.fitBounds(points.map(point => [point.latitude, point.longitude]), { padding: [35, 35], maxZoom: 16 });
     // Fit once per selected journey; telemetry refreshes must preserve the operator's zoom.
-  }, [journey, selectedDispatch, onSelectDispatch, areaZone, zones, followEV, followUnavailable]);
+  }, [mapVisible, journey, selectedDispatch, areaZone, zones, followEV, followUnavailable]);
   useEffect(() => {
     // Following owns the camera when enabling it also changes the map area.
     if (followEV) return;
@@ -167,23 +175,27 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   }, [followEV, followUnavailable, visible.vehicles, areaZone, trackedVehicle, journeyId]);
   useEffect(() => {
     if (!map.current) return;
-    if (!fitted.current && zones.length) {
+    if (mapVisible && !fitted.current && zones.length) {
       if (!fittedJourney.current) map.current.fitBounds(zones.map(z => [z.position.latitude, z.position.longitude]), { padding: [30, 30], maxZoom: 12, animate: false });
       fitted.current = true;
     }
     if (!visible.zones) return;
     const layer = L.layerGroup().addTo(map.current);
     for (const zone of shownZones) {
+      const level = rentalDemandLevel(zone);
       // Text nodes prevent backend names from being interpreted as HTML.
       const label = document.createElement('span');
-      label.textContent = `${zone.name} · ${zone.hotspot_severity}`;
+      label.textContent = `${zone.name} · ${level} rental demand`;
+      const selectedZone = selected === zone.zone_id;
+      const critical = level === 'Critical';
       L.circleMarker([zone.position.latitude, zone.position.longitude], {
-        radius: selected === zone.zone_id ? 19 : 14, color: selected === zone.zone_id ? '#143d42' : colours[zone.hotspot_severity],
-        fillColor: colours[zone.hotspot_severity], fillOpacity: .65, weight: selected === zone.zone_id ? 4 : 2,
+        radius: critical ? 26 : selectedZone ? 23 : 14,
+        color: colours[level], fillColor: colours[level],
+        fillOpacity: selectedZone ? .58 : .5, weight: selectedZone ? 4 : 2,
       }).bindTooltip(label).on('click', () => onSelect(zone.zone_id)).addTo(layer);
     }
     return () => { layer.remove(); };
-  }, [zones, shownZones, selected, onSelect, visible.zones]);
+  }, [mapVisible, zones, shownZones, selected, onSelect, visible.zones, rentalDemandLevel]);
   useEffect(() => {
     const group = markers.current;
     if (!group) return;
@@ -200,7 +212,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       const existing = facilityPins.current.get(facility.facility_id);
       if (existing) updatePin(existing, position, icon, label);
       else {
-        const pin = L.marker(position, { icon, title: facility.name }).bindTooltip(label);
+        const pin = L.marker(position, { icon, title: facility.name })
+          .bindTooltip(label, { direction: 'top', className: 'facility-map-tooltip', offset: [0, -5] });
         reportedPositions.set(pin, L.latLng(position));
         facilityPins.current.set(facility.facility_id, pin); added.push(pin);
       }
@@ -363,9 +376,37 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     removeHiddenPins(group, vehiclePins.current, ids);
     for (const pin of added) group.addLayer(pin);
   }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch, telemetryFeedHealthy]);
+  useEffect(() => {
+    const instance = map.current;
+    if (!mapVisible || !instance || !focusTarget || appliedFocus.current === focusTarget) return;
+    setFollowEV(false);
+    if (areaZone) {
+      setSelectedZoneOnly(false);
+      return;
+    }
+    instance.invalidateSize({ pan: false });
+    if ('facility' in focusTarget) {
+      const site = focusTarget.facility;
+      const layer = site.facility_type === 'CHARGING' ? 'charging' : 'parking';
+      if (!visible[layer]) {
+        setVisible(current => ({ ...current, [layer]: true }));
+        return;
+      }
+      appliedFocus.current = focusTarget;
+      instance.setView([site.position.latitude, site.position.longitude], 16, { animate: false });
+      const pin = facilityPins.current.get(site.facility_id);
+      if (pin) markers.current?.zoomToShowLayer(pin, () => pin.openTooltip());
+    } else {
+      const route = dispatches.find(dispatch => dispatch.dispatch_id === focusTarget.dispatchId)?.command?.route;
+      if (!route?.geometry.length) return;
+      appliedFocus.current = focusTarget;
+      setVisible(current => ({ ...current, routes: true, vehicles: true }));
+      instance.fitBounds(route.geometry.map(point => [point.latitude, point.longitude]), { padding: [35, 35], maxZoom: 16, animate: false });
+    }
+  }, [mapVisible, focusTarget, areaZone, dispatches, visible.parking, visible.charging]);
   return <>
     <div className="map-toolbar">
-      <fieldset className="map-filters"><legend>Show on map</legend><div className="map-filter-options">
+      <fieldset className="map-filters"><legend className="visually-hidden">Map layers</legend><div className="map-filter-options">
         {layers.map(({ key, label, colour, count }) => <label key={key} className="map-filter" data-active={visible[key]}>
           <input type="checkbox" checked={visible[key]} onChange={event => {
             const checked = event.currentTarget.checked;
@@ -378,7 +419,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           <span>{label}</span><span className="map-layer-count">{count}</span>
         </label>)}
       </div></fieldset>
-      <label className="map-scope"><span>Map area · all icons</span><span className="select-wrap">
+      <label className="map-scope"><span className="visually-hidden">Map area</span><span className="select-wrap">
         <select className="form-select" aria-label="Map area" value={areaZone ? 'selected' : 'all'} onChange={event => {
           const selectedOnly = event.target.value === 'selected';
           if (selectedOnly) setFollowEV(false);
@@ -395,12 +436,12 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         else map.current?.setView([1.35, 103.82], 11);
       }}>Reset view</button>
     </div>
-    <div className="route-toolbar">
-      <label className="map-scope"><span>Road journey</span><span className="select-wrap">
+    {shownDispatches.length > 0 && <div className="route-toolbar">
+      <label className="map-scope"><span className="visually-hidden">Road journey</span><span className="select-wrap">
         <select className="form-select" value={journeyId ?? ''} disabled={!shownDispatches.length} onChange={event => onSelectDispatch(event.target.value)}>
           {!journey && <option value="">No active road route</option>}
           {[...shownDispatches].reverse().map(dispatch => <option key={dispatch.dispatch_id} value={dispatch.dispatch_id}>
-            {dispatch.vehicle_id} · {dispatch.command?.target_zone_id} · {dispatch.state} · {dispatch.dispatch_id.slice(0, 8)}
+            {dispatch.vehicle_id} → {dispatch.command?.target_zone_id} · {dispatch.state.replaceAll('_', ' ')}
           </option>)}
         </select>
       </span></label>
@@ -412,7 +453,6 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         }
         setFollowEV(checked);
       }}/>Follow EV</label>
-      {followUnavailable && <span id="follow-ev-status" className="map-filter-note" role="status">{followUnavailable}</span>}
       <button className="map-reset" disabled={!journey} onClick={() => {
         const route = journey?.command?.route;
         if (route) {
@@ -421,16 +461,24 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
           if (points.length) map.current?.fitBounds(points.map(point => [point.latitude, point.longitude]), { padding: [35, 35], maxZoom: 16 });
         }
       }}>Fit route</button>
+    </div>}
+    <div className="map-status">
+      {journey && followUnavailable && <span id="follow-ev-status" className="follow-status" role="status">{followUnavailable}</span>}
+
+      {!Object.values(visible).some(Boolean) && <p className="warning" role="status">All layers are hidden. Select a layer above to show map items.</p>}
+      {!telemetryFeedHealthy && <p className="warning" role="status">Fleet telemetry stale or unavailable. Showing last confirmed positions.</p>}
+      {tileError && <p className="warning" role="status">Map tiles unavailable. Select a destination from the zone list.</p>}
     </div>
     <div ref={element} className="map" aria-label="Singapore zones, fleet, and parking or charging sites map"/>
-    <details className="map-help"><summary>Map controls & marker help</summary>
-      <p className="map-marker-help">Nearby parking and charging sites are grouped by count. Select a group to zoom in or spread overlapping sites apart. EVs remain at their geographic positions; the selected EV is outlined.</p>
-      <p className="map-marker-help">Follow EV switches to All zones and shows EVs so you can follow the selected journey across zone boundaries. Choosing a single zone or hiding EVs stops following.</p>
-    </details>
-    {areaZone && <p className="map-marker-help">Showing icons in {area?.name ?? areaZone}. EVs use their reported location; inbound EVs appear when they enter this operating zone. Routes to this zone may extend beyond it. Choose All zones for the full fleet.</p>}
-    {journey ? <RouteDetails dispatch={journey} vehicle={trackedVehicle}/> : <p className="map-filter-note">Approve a relocation with OneMap enabled to see its road route and follow the EV. Routes appear after approval.</p>}
-    {!Object.values(visible).some(Boolean) && <p className="map-filter-note" role="status">All layers are hidden. Select a layer above to show map items.</p>}
-    {!telemetryFeedHealthy && <p className="warning" role="status">Fleet telemetry connection is stale or unavailable. Map markers show the last confirmed positions; visual interpolation is suspended.</p>}
-    {tileError && <p className="warning" role="status">Map tiles unavailable. Use the zone list to select a destination.</p>}
+    <div className="map-context">
+      {journey && <details><summary>{journey.vehicle_id} · {journey.state.replaceAll('_', ' ')} · Journey details</summary>
+        <RouteDetails dispatch={journey} vehicle={trackedVehicle}/>
+      </details>}
+      <details className="map-help"><summary>Map help</summary>
+        <p className="map-marker-help">Select a site cluster to zoom in or spread overlapping sites apart. EVs stay at their reported positions.</p>
+        <p className="map-marker-help">Follow EV shows all zones. Selecting a single zone or hiding EVs stops following.</p>
+      </details>
+      {areaZone && <p className="map-marker-help">Showing {area?.name ?? areaZone} only. Switch to All zones for the full fleet and route.</p>}
+    </div>
   </>;
 }

@@ -5,6 +5,7 @@ import os
 from ev_fleet.contracts.common import Position
 from ev_fleet.demand.store import SINGAPORE_ZONES
 from .node import run_node
+from .health import SimulatorHealth, run_supervised
 
 
 def parse_args(argv=None):
@@ -24,7 +25,14 @@ def parse_args(argv=None):
     parser.add_argument("--time-scale", type=float, default=float(os.getenv("SIMULATION_TIME_SCALE", "10")), help="Simulated seconds per real second (demo default 10x)")
     parser.add_argument("--tick-seconds", type=float, default=.2)
     parser.add_argument("--poll-interval", type=float, default=1)
+    parser.add_argument("--health-port", type=int, default=int(os.getenv("SIMULATOR_HEALTH_PORT", "8081")),
+                        help="Local supervision HTTP port")
+    parser.add_argument("--checkpointing", action="store_true",
+                        default=os.getenv("SIMULATOR_CHECKPOINTING_ENABLED", "false").lower() in ("1", "true", "yes"),
+                        help="Use guarded Fleet checkpoints (requires compatible Fleet; existing owners await recovery coordination)")
     args = parser.parse_args(argv)
+    if not 1 <= args.health_port <= 65535:
+        parser.error("health port must be 1..65535")
     if not 0 <= args.soc <= 100 or args.interval <= 0 or (args.updates is not None and args.updates < 1):
         parser.error("SOC must be 0..100; interval and updates must be positive")
     import math
@@ -35,6 +43,8 @@ def parse_args(argv=None):
         parser.error("facilities grace must be finite and non-negative")
     if args.dispatch_url and args.updates:
         parser.error("--updates is only supported in stationary mode")
+    if args.checkpointing and not args.dispatch_url:
+        parser.error("--checkpointing requires --dispatch-url")
     return args
 
 
@@ -43,11 +53,14 @@ def main():
     zone = next(zone for zone in SINGAPORE_ZONES if zone[0] == args.zone)
     position = Position(latitude=zone[2], longitude=zone[3]).model_dump()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_node(args.fleet_url, args.vehicle_id, position, args.soc, args.interval, args.updates,
+    health = SimulatorHealth(args.vehicle_id, max(
+        30.0, 3 * args.interval, 3 * args.tick_seconds, 3 * args.poll_interval))
+    worker = run_node(args.fleet_url, args.vehicle_id, position, args.soc, args.interval, args.updates,
                         dispatch_url=args.dispatch_url, speed_kph=args.speed_kph, time_scale=args.time_scale,
                         tick_seconds=args.tick_seconds, poll_interval=args.poll_interval,
-                        facilities_url=args.facilities_url,
-                        facilities_grace_seconds=args.facilities_grace_seconds))
+                        facilities_url=args.facilities_url, checkpointing=args.checkpointing,
+                        facilities_grace_seconds=args.facilities_grace_seconds, runtime=health)
+    asyncio.run(run_supervised(health, worker, args.fleet_url, args.health_port))
 
 
 if __name__ == "__main__":

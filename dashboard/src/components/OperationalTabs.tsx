@@ -1,10 +1,22 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
-export function OperationalTabs({ tabs }: { tabs: { id: string; label: string; summary?: string; content: ReactNode }[] }) {
-  const [active, setActive] = useState('fleet');
+export function OperationalTabs({ tabs, activeTab, onTabChange, label = 'Operational views' }: { label?: string; activeTab?: string; onTabChange?: (id: string) => void; tabs: { id: string; label: string; summary?: string; content: ReactNode }[] }) {
+  const [localActive, setLocalActive] = useState(tabs[0]?.id);
+  const active = activeTab ?? localActive;
+  const setActive = (id: string) => { setLocalActive(id); onTabChange?.(id); };
   const prefix = useId();
+  const tabList = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const list = tabList.current;
+    const tab = document.getElementById(`${prefix}-${active}-tab`);
+    if (!list || !tab) return;
+    const frame = list.getBoundingClientRect();
+    const button = tab.getBoundingClientRect();
+    if (button.left < frame.left) list.scrollLeft += button.left - frame.left;
+    if (button.right > frame.right) list.scrollLeft += button.right - frame.right;
+  }, [active, prefix]);
   return <div className="operational-tabs">
-    <div className="operational-tablist" role="tablist" aria-label="Operational views">
+    <div ref={tabList} className="operational-tablist" role="tablist" aria-label={label}>
       {tabs.map((tab, index) => <button key={tab.id} id={`${prefix}-${tab.id}-tab`} type="button" role="tab"
         aria-selected={active === tab.id} aria-controls={`${prefix}-${tab.id}-panel`} tabIndex={active === tab.id ? 0 : -1}
         onClick={() => setActive(tab.id)} onKeyDown={event => {
