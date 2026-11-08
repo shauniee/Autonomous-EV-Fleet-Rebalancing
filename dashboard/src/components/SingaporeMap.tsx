@@ -3,7 +3,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
-import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, Zone } from '../api/contracts';
+import type { Dispatch, Facility, Position, TrafficSnapshot, Vehicle, VehiclePlacement, Zone } from '../api/contracts';
 import { RouteDetails } from './RouteDetails';
 import { planConfirmedMotion, routeForVehicle, type MotionSample } from './confirmedMotion';
 import { liveTrafficIconKind, mapIcon, mapSymbols, simulatedTrafficIconKind } from './mapIcons';
@@ -12,6 +12,7 @@ import type { DemandLevel } from './DemandThresholds';
 const colours = { Low: '#258371', Moderate: '#bc790b', Critical: '#ce5147', Unknown: '#76838a' };
 const isChargingSite = (facility: Facility) => facility.facility_type === 'CHARGING' || (facility.charging_bays ?? 0) > 0;
 const reportedPositions = new WeakMap<L.Marker, L.LatLng>();
+const dispatchClicks = new WeakMap<L.Marker, () => void>();
 
 function nearestZone(position: Position, zones: Zone[]) {
   const point = L.latLng(position.latitude, position.longitude);
@@ -52,9 +53,10 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
-export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget, rentalDemandLevel }: {
+export function SingaporeMap({ zones, vehicles, placements, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget, rentalDemandLevel }: {
   rentalDemandLevel: (zone: Zone) => DemandLevel;
-  zones: Zone[]; vehicles: Vehicle[]; facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
+  zones: Zone[]; vehicles: Vehicle[]; placements?: Record<string, VehiclePlacement> | null;
+  facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
   focusTarget?: { dispatchId: string } | { facility: Facility } | null;
 }) {
@@ -76,8 +78,20 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   const area = zones.find(zone => zone.zone_id === areaZone);
   const shownZones = useMemo(() => areaZone ? zones.filter(zone => zone.zone_id === areaZone) : zones, [zones, areaZone]);
   const shownVehicles = useMemo(() => areaZone
-    ? vehicles.filter(vehicle => vehicle.telemetry && nearestZone(vehicle.telemetry.position, zones) === areaZone)
-    : vehicles, [vehicles, zones, areaZone]);
+    ? vehicles.filter(vehicle => vehicle.telemetry && (placements === undefined
+      ? nearestZone(vehicle.telemetry.position, zones)
+      : placements?.[vehicle.vehicle_id]?.zone_id) === areaZone)
+    : vehicles, [vehicles, placements, zones, areaZone]);
+  function fitZone(zone: Zone) {
+    const points: L.LatLngTuple[] = [[zone.position.latitude, zone.position.longitude]];
+    if (visible.vehicles) {
+      for (const vehicle of shownVehicles) {
+        const position = vehicle.telemetry?.position;
+        if (position) points.push([position.latitude, position.longitude]);
+      }
+    }
+    map.current?.fitBounds(points, { padding: [24, 24], maxZoom: 13, animate: false });
+  }
   const shownDispatches = useMemo(() => dispatches.filter(dispatch => dispatch.command?.route
     && (!areaZone || dispatch.command.target_zone_id === areaZone)), [dispatches, areaZone]);
   const activeRoutes = useMemo(() => shownDispatches.filter(dispatch => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(dispatch.state)), [shownDispatches]);
@@ -158,7 +172,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
   useEffect(() => {
     // Following owns the camera when enabling it also changes the map area.
     if (followEV) return;
-    if (area) map.current?.setView([area.position.latitude, area.position.longitude], 13);
+    if (area) fitZone(area);
     else if (fitted.current && zones.length) map.current?.fitBounds(zones.map(zone => [zone.position.latitude, zone.position.longitude]), { padding: [30, 30], maxZoom: 12 });
     // Keep manual zoom/pan when only telemetry or demand refreshes.
   }, [area?.zone_id, area?.position.latitude, area?.position.longitude]);
@@ -358,12 +372,31 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
         reportedPositions.set(marker, L.latLng(position));
         vehiclePins.current.set(vehicle.vehicle_id, marker); added.push(marker);
       }
+      const facilityId = vehicle.telemetry.parked_facility_id;
+      if (facilityId) {
+        const parking = placements?.[vehicle.vehicle_id]?.parking;
+        const confirmed = telemetryFeedHealthy && !vehicle.stale && parking?.facility_id === facilityId;
+        const popup = document.createElement('span');
+        const location = confirmed ? `Parked at ${parking.name}`
+          : `Reported parking: ${facilities.find(facility => facility.facility_id === facilityId)?.name ?? facilityId}`;
+        popup.textContent = `${vehicle.vehicle_id} · ${location}`;
+        if (marker.getPopup()) marker.setPopupContent(popup);
+        else marker.bindPopup(popup);
+      } else if (marker.getPopup()) {
+        marker.unbindPopup();
+      }
       marker.setZIndexOffset(focused ? 1000 : 0);
       if (newObservation) lastConfirmed.current.set(vehicle.vehicle_id, { ...current });
-      marker.off('click').on('click', () => {
-        const dispatch = activeRoutes.find(item => item.vehicle_id === vehicle.vehicle_id);
-        if (dispatch) onSelectDispatch(dispatch.dispatch_id);
-      });
+      const previousClick = dispatchClicks.get(marker);
+      if (previousClick) marker.off('click', previousClick);
+      const dispatch = activeRoutes.find(item => item.vehicle_id === vehicle.vehicle_id);
+      if (dispatch) {
+        const selectDispatch = () => onSelectDispatch(dispatch.dispatch_id);
+        dispatchClicks.set(marker, selectDispatch);
+        marker.on('click', selectDispatch);
+      } else {
+        dispatchClicks.delete(marker);
+      }
     }
     for (const id of vehiclePins.current.keys()) {
       if (!ids.has(id)) {
@@ -375,7 +408,8 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
     }
     removeHiddenPins(group, vehiclePins.current, ids);
     for (const pin of added) group.addLayer(pin);
-  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes, onSelectDispatch, telemetryFeedHealthy]);
+  }, [shownVehicles, visible.vehicles, journey?.vehicle_id, dispatches, activeRoutes,
+    onSelectDispatch, telemetryFeedHealthy, placements, facilities]);
   useEffect(() => {
     const instance = map.current;
     if (!mapVisible || !instance || !focusTarget || appliedFocus.current === focusTarget) return;
@@ -431,7 +465,7 @@ export function SingaporeMap({ zones, vehicles, facilities = [], dispatches = []
       </span></label>
       <button className="map-reset" onClick={() => {
         setFollowEV(false);
-        if (area) map.current?.setView([area.position.latitude, area.position.longitude], 13);
+        if (area) fitZone(area);
         else if (zones.length) map.current?.fitBounds(zones.map(zone => [zone.position.latitude, zone.position.longitude]), { padding: [30, 30], maxZoom: 12 });
         else map.current?.setView([1.35, 103.82], 11);
       }}>Reset view</button>

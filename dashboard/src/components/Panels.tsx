@@ -13,17 +13,49 @@ export function ServiceStatus({ name, resource }: { name: string; resource: Reso
     <small>{time(resource.updatedAt)} SGT</small>
   </span>;
 }
-export function ZoneDetails({ zone, rentalDemandLevel }: { zone: Zone; rentalDemandLevel: string }) {
+export function ZoneDemandStatus({ zone, feedUnavailable }: { zone: Zone; feedUnavailable: boolean }) {
+  if (!feedUnavailable && zone.demand_status === 'FRESH') return null;
+  const status = feedUnavailable ? 'Demand feed unavailable'
+    : zone.demand_status === 'STALE' ? 'Demand expired' : 'No demand observation';
+  return <p className="muted demand-inbound">{status}
+    {zone.rental_demand != null && <> · Last reported {number(zone.rental_demand)}
+      {zone.demand_observed_at && <> at {time(zone.demand_observed_at)} SGT</>}</>}
+    . Awaiting fresh demand for shortage and surplus.</p>;
+}
+
+export function ZoneMetrics({ zone, feedUnavailable, detailed = false }: {
+  zone: Zone; feedUnavailable: boolean; detailed?: boolean;
+}) {
+  const currentDemand = !feedUnavailable && zone.demand_status === 'FRESH';
+  const reading = (value: number | null) => number(feedUnavailable ? null : value);
+  const unavailable = <><span aria-hidden="true">—</span><span className="visually-hidden">Unknown</span></>;
+  const metric = (value: number | null) => value == null ? unavailable : number(value);
+  return <>
+    <dl className={detailed ? 'metrics' : 'demand-figures'}>
+      <div><dt>Rental demand</dt><dd>{metric(currentDemand ? zone.rental_demand : null)}</dd></div>
+      <div><dt>Available EVs</dt><dd>{metric(feedUnavailable ? null : zone.available_evs)}</dd></div>
+      {detailed && <div><dt>Relocating inbound</dt><dd>{metric(feedUnavailable ? null : zone.inbound_relocating_evs)}</dd></div>}
+      <div><dt>Current shortage</dt><dd>{metric(currentDemand ? zone.current_shortage : null)}</dd></div>
+      <div><dt>Projected shortage</dt><dd>{metric(currentDemand ? zone.projected_shortage : null)}</dd></div>
+      {detailed && <div><dt>Current / projected surplus</dt><dd>
+        {zone.current_surplus == null || zone.projected_surplus == null || !currentDemand
+          ? unavailable : `${number(zone.current_surplus)} / ${number(zone.projected_surplus)}`}
+      </dd></div>}
+    </dl>
+    <ZoneDemandStatus zone={zone} feedUnavailable={feedUnavailable}/>
+    <p className="muted demand-inbound">{detailed
+      ? 'Projected supply includes EVs relocating in.'
+      : `Relocating in: ${reading(zone.inbound_relocating_evs)}`} · Pending: {reading(zone.inbound_pending_evs)} · Unconfirmed: {reading(zone.inbound_unconfirmed_evs)}.</p>
+  </>;
+}
+
+export function ZoneDetails({ zone, rentalDemandLevel, feedUnavailable }: {
+  zone: Zone; rentalDemandLevel: string; feedUnavailable: boolean;
+}) {
   return <><div className="section-title"><h2>{zone.name}</h2><Badge value={rentalDemandLevel}/></div>
-    <p className="muted">{zone.zone_id} · {zone.data_quality}</p>
-    <dl className="metrics">
-      <div><dt>Rental demand</dt><dd>{number(zone.rental_demand)}</dd></div>
-      <div><dt>Available EVs</dt><dd>{number(zone.available_evs)}</dd></div>
-      <div><dt>Relocating inbound</dt><dd>{number(zone.inbound_relocating_evs)}</dd></div>
-      <div><dt>Current shortage</dt><dd>{number(zone.current_shortage)}</dd></div>
-      <div><dt>Projected shortage</dt><dd>{number(zone.projected_shortage)}</dd></div>
-      <div><dt>Current / projected surplus</dt><dd>{number(zone.current_surplus)} / {number(zone.projected_surplus)}</dd></div>
-    </dl><p className="muted">Inbound supply is projected, not currently available. Pending: {number(zone.inbound_pending_evs)} · Unconfirmed: {number(zone.inbound_unconfirmed_evs)}.</p></>;
+    <p className="muted">{zone.zone_id} · {feedUnavailable ? 'UNKNOWN' : zone.data_quality}</p>
+    <ZoneMetrics zone={zone} feedUnavailable={feedUnavailable} detailed/>
+  </>;
 }
 export function CandidateDetails({ candidate }: { candidate: Candidate }) {
   return <dl className="candidate-metrics">
@@ -80,13 +112,18 @@ export function DispatchConfirmation({ recommendation, vehicle, expired, onClose
     <div className="actions"><button onClick={onClose} autoFocus>Cancel</button><button className="primary" disabled={expired} onClick={onApprove}>Approve 1 EV</button></div>
   </dialog>;
 }
-export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; initialVehicle?: string }) {
+export function FleetPanel({ vehicles, initialVehicle, unparkedOnly, fleetFeedHealthy, onClearFilter }: {
+  vehicles: Vehicle[]; initialVehicle?: string; unparkedOnly: boolean; fleetFeedHealthy: boolean; onClearFilter: () => void;
+}) {
   const [selected, setSelected] = useState('');
   const [diagnostics, setDiagnostics] = useState(false);
   const vehicle = vehicles.find(item => item.vehicle_id === selected) ?? vehicles.find(item => item.vehicle_id === initialVehicle);
   return <div className="fleet-workspace">
     <section className="panel">
-      <div className="section-title"><h2>Fleet overview</h2><span className="muted">{vehicles.length} vehicles</span></div>
+      <div className="section-title"><h2 id="fleet-overview-title" tabIndex={-1}>
+        {unparkedOnly ? 'Idle EVs without parking' : 'Fleet overview'}
+      </h2>{unparkedOnly ? <button type="button" className="text-button" onClick={onClearFilter}>Show all EVs</button>
+        : <span className="muted">{vehicles.length} vehicles</span>}</div>
       {vehicles.length > 0 ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Fleet vehicle table">
         <table><thead><tr><th>Vehicle</th><th>Location</th><th>SOC</th><th>Availability</th><th>Telemetry</th></tr></thead>
           <tbody>{vehicles.map(v => <tr key={v.vehicle_id} data-testid={`vehicle-${v.vehicle_id}`} data-selected={vehicle?.vehicle_id === v.vehicle_id}>
@@ -99,7 +136,8 @@ export function FleetPanel({ vehicles, initialVehicle }: { vehicles: Vehicle[]; 
             <td><Badge value={v.stale ? 'STALE' : v.connectivity}/><small>Received {time(v.received_at)} SGT</small></td>
           </tr>)}</tbody>
         </table>
-      </div> : <p className="empty">No fleet observations available.</p>}
+      </div> : <p className="empty">{unparkedOnly && fleetFeedHealthy ? 'All reporting idle EVs have parking.'
+        : 'Awaiting current fleet observations.'}</p>}
     </section>
     {vehicle && <section className="panel vehicle-detail" aria-label="Selected vehicle details">
       <div className="section-title"><h2>{vehicle.vehicle_id}</h2><Badge value={vehicle.effective_availability}/></div>

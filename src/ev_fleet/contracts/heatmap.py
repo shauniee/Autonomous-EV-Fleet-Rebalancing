@@ -49,6 +49,16 @@ class HeatMapZone(Model):
     data_quality: Literal["COMPLETE", "DEGRADED", "UNKNOWN"]
 
 
+class ConfirmedParking(Model):
+    facility_id: str
+    name: str
+
+
+class VehiclePlacement(Model):
+    zone_id: str | None
+    parking: ConfirmedParking | None = None
+
+
 class HeatMapResponse(Model):
     generated_at: AwareDatetime
     status: Literal["COMPLETE", "PARTIAL"]
@@ -61,6 +71,8 @@ class HeatMapResponse(Model):
     fleet_snapshot_version: int | None
     fleet_snapshot_at: AwareDatetime | None
     fleet_status: Literal["FRESH", "STALE", "UNAVAILABLE", "INVALID"]
+    vehicle_placements: dict[str, VehiclePlacement] | None = None
+    available_outside_zones: int | None = Field(default=None, ge=0)
     unassigned_evs: int | None = Field(ge=0)
     excluded_stale_evs: int | None = Field(ge=0)
     excluded_low_soc_evs: int | None = Field(ge=0)

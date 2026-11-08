@@ -62,6 +62,7 @@ services:
     ports: ["127.0.0.1:${DEMAND_PORT:-8002}:8000"]
     environment:
       FLEET_URL: http://fleet:8000
+      FACILITIES_URL: http://facilities:8000
       MIN_RESERVE_PCT: ${MIN_RESERVE_PCT:-20}
       DEMAND_SIMULATION_ENABLED: ${DEMAND_SIMULATION_ENABLED:-false}
       DEMAND_RANDOM_SEED: ${DEMAND_RANDOM_SEED:-42}

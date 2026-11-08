@@ -6,7 +6,8 @@ from ev_fleet.contracts.crds import (CrdsDemandSnapshot, CrdsInputs, CrdsPlannin
                                    CrdsRelocationExclusion)
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from ev_fleet.contracts.vehicles import FleetSnapshot
-from ev_fleet.demand.aggregation import assigned_zone, capacity, telemetry_is_fresh
+from ev_fleet.demand.aggregation import capacity, telemetry_is_fresh, vehicle_placements
+from ev_fleet.demand.clients import parking_snapshot
 from ev_fleet.demand.settings import DemandSettings
 from .clients import get_json
 
@@ -79,18 +80,26 @@ def isolate_relocations(fleet, dispatches, zones, stale_ids):
 
 async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, timeout_seconds=12,
                          exclude_dispatch_id=None):
+    policy = DemandSettings.from_env()
     reads = [f"{settings.fleet_url}/api/v1/vehicles",
              f"{settings.demand_url}/api/v1/zones",
              f"{settings.facilities_url}/api/v1/facilities",
              f"{dispatch_url}/api/v1/dispatch-planning-state"]
-    raw = await asyncio.wait_for(
-        asyncio.gather(*(get_json(client, url) for url in reads)), timeout_seconds)
-    fleet = FleetSnapshot.model_validate(raw[0])
+
+    async def read_inputs():
+        raw = await asyncio.gather(*(get_json(client, url) for url in reads))
+        fleet = FleetSnapshot.model_validate(raw[0])
+        parking = None
+        if any(v.telemetry and v.telemetry.parked_facility_id and not v.stale
+               for v in fleet.vehicles):
+            parking = await parking_snapshot(client, settings.facilities_url, policy.fleet_timeout_seconds)
+        return raw, fleet, parking
+
+    raw, fleet, parking = await asyncio.wait_for(read_inputs(), timeout_seconds)
     demand = CrdsDemandSnapshot.model_validate(raw[1])
     facilities = FacilitiesSnapshot.model_validate(raw[2])
     planning = CrdsPlanningSnapshot.model_validate(raw[3])
     now = clock.now()
-    policy = DemandSettings.from_env()
     policy = policy.model_copy(update={"min_reserve_pct": settings.min_reserve_pct,
         "telemetry_max_age_seconds": min(policy.telemetry_max_age_seconds, settings.stale_seconds)})
     stale_ids = {v.vehicle_id for v in fleet.vehicles
@@ -108,7 +117,8 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     # have a Fleet claim, so capacity() does not count them at their origin.
     fleet = fleet.model_copy(update={"vehicles": [v for v in fleet.vehicles if v.vehicle_id not in excluded]})
     planning = planning.model_copy(update={"dispatches": healthy})
-    counts, _, capacity_issues = capacity(fleet, zones, policy, now)
+    placements = vehicle_placements(fleet, zones, policy, now, parking)
+    counts, _, capacity_issues = capacity(fleet, zones, policy, now, placements)
     issues.update(capacity_issues)
     # Dispatch blocks overlapping approvals while acquisition is unresolved.
     # Keep the affected site out of planning until ownership is reconciled.
@@ -125,8 +135,8 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
     if facilities.data_source == "LTA_DATAMALL" and not any(
             f.name == "parking" and f.status == "FRESH" for f in facilities.feeds):
         issues.add("PARKING_FEED_UNAVAILABLE")
-    vehicle_zones = {v.vehicle_id: zone for v in fleet.vehicles
-                     if (zone := assigned_zone(v, zones, policy.zone_radius_km)) is not None}
+    vehicle_zones = {vehicle_id: placement.zone_id for vehicle_id, placement in placements.items()
+                     if placement.zone_id is not None}
     return CrdsInputs(
         evaluated_at=now, fleet=fleet, demand=demand, facilities=facilities, planning=planning,
         traffic=traffic, available_by_zone={z: row["available_evs"] for z, row in counts.items()},

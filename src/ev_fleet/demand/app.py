@@ -7,7 +7,7 @@ from ev_fleet.contracts.demand import Zone, ZoneState, DemandUpdate, ChargingUpd
 from .store import DemandStore, seed
 from .settings import DemandSettings
 from .simulation import DemandSimulator
-from .clients import fleet_snapshot
+from .clients import fleet_snapshot, parking_snapshot
 from .aggregation import compose_heatmap
 from ev_fleet.contracts.heatmap import HeatMapResponse, DemandSimulationStatus
 
@@ -72,10 +72,13 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
                              and zone["demand"]["desired_available_vehicles"] >= threshold]}
 
     async def heat_map_view():
-        # Each read has one demand snapshot and one Fleet snapshot. No cross-service transaction.
+        # Compose point-in-time observations without a cross-service transaction.
         local = await state.composition_snapshot()
-        fleet, error = await fleet_snapshot(app.state.client, config)
-        return compose_heatmap(local, fleet, error, config, state.clock.now())
+        (fleet, error), parking = await asyncio.gather(
+            fleet_snapshot(app.state.client, config),
+            parking_snapshot(app.state.client, config.facilities_url, config.fleet_timeout_seconds),
+        )
+        return compose_heatmap(local, fleet, error, config, state.clock.now(), parking=parking)
 
     @app.get("/api/v1/dashboard/heat-map", response_model=HeatMapResponse)
     async def dashboard_heat_map(response: Response):

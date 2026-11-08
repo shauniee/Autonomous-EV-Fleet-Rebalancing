@@ -238,6 +238,8 @@
 .demand-figures dd { font-size: 20px; line-height: 1.2; font-variant-numeric: tabular-nums; margin: auto 0 0; font-weight: 720; overflow-wrap: anywhere; }
 .inspector-body .metrics > div { display: flex; flex-direction: column; }
 .inspector-body .metrics dd { margin-top: auto; font-variant-numeric: tabular-nums; }
+.fleet-coverage { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; font-size: 12px; }
+.fleet-coverage .text-button { padding: 4px 6px; font-size: inherit; }
 .demand-inbound { margin: 6px 0 0; font-size: 11px; }
 .target-panel .relocation-request { margin: 12px 0 0; padding: 10px 0 0; }
 .target-panel .request-fields { grid-template-columns: minmax(0, 1fr) 84px; align-items: end; gap: 8px; margin: 0; }

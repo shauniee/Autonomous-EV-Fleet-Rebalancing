@@ -92,6 +92,31 @@ describe('dispatcher dashboard', () => {
     expect(within(screen.getByRole('complementary', { name: 'Demand & supply' })).getByText('Low')).toBeVisible();
   });
 
+  it('marks expired demand and opens a filtered list of idle EVs without parking', async () => {
+    const heat = makeHeat();
+    heat.available_outside_zones = 1;
+    heat.zones[0].demand_status = 'STALE';
+    heat.zones[0].demand_observed_at = new Date(Date.now() - 301000).toISOString();
+    const fleet = makeFleet();
+    const unparked = fleet.vehicles[0];
+    fleet.vehicles.push({ ...unparked, vehicle_id: 'ev-parked',
+      telemetry: { ...unparked.telemetry!, parked_facility_id: 'parking-1' } });
+    server({ '/api/demand/heat-map': heat, '/api/fleet/vehicles': fleet });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Unknown/ }));
+    const demand = within(screen.getByRole('region', { name: 'Selected zone demand' }));
+    expect(demand.getByText(/Demand expired.*Last reported 10.*SGT/)).toBeVisible();
+    expect(demand.queryByText('10', { exact: true })).toBeNull();
+    expect(demand.getByText('0', { exact: true })).toBeVisible();
+    expect(screen.getByText(/Available outside zones/)).toHaveTextContent('1');
+    fireEvent.click(screen.getByRole('button', { name: '1 idle EV without parking' }));
+    const table = within(screen.getByRole('region', { name: 'Fleet vehicle table' }));
+    expect(table.getByText('ev-01')).toBeVisible();
+    expect(table.queryByText('ev-parked')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all EVs' }));
+    expect(table.getByText('ev-parked')).toBeVisible();
+  });
+
   it('collects configured demand level changes in Notifications without emitting a toast', async () => {
     const heat = makeHeat();
     heat.zones[1].rental_demand = 3;

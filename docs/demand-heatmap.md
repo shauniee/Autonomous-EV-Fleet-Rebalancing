@@ -56,15 +56,25 @@ SOC is at least MIN_RESERVE_PCT. This is known usable local capacity, not a clai
 that the EV could reach every possible destination. Excluded low-SOC vehicles are
 reported separately; Fleet's own availability and dispatch rules are unchanged.
 
-For a stationary vehicle, prefer a valid `current_zone_id` whose centre is within the
-configured radius of its current coordinates. Otherwise use the nearest zone centre
-within the radius, breaking ties lexicographically by zone ID. Default radius is 2 km.
-Initial simulator nodes therefore count in their seeded zones even before their first
-confirmed arrival. No zone ID is written back to Fleet by aggregation.
+For a parked vehicle, use its facility's zone when fresh idle telemetry matches an
+occupied allocation and is within 50 m of the recorded access point. A pending
+allocation does not confirm parking. Facilities returns the committed allocations
+from `GET /api/v1/vehicle-parking`, including allocations retained after a catalogue
+refresh.
+
+For other vehicles, prefer a valid `current_zone_id` whose centre is within the
+configured radius of the vehicle's coordinates. Otherwise use the nearest centre
+within that radius, breaking ties by zone ID. The default radius is 2 km.
+Initial simulator nodes can therefore count in their seeded zones before their first
+confirmed arrival. Aggregation never writes a zone ID back to Fleet.
 
 These circles are simulation catchments, not official boundaries. Vehicles outside
-all circles, or without telemetry, appear in `unassigned_evs`. An assigned-zone ID is
-only a classification for this response; it does not modify routing or ownership.
+all circles without confirmed parking, or without telemetry, appear in
+`unassigned_evs`. The separate `available_outside_zones` count includes only
+eligible unparked EVs outside all catchments. If an eligible EV reports parking but
+the allocation cannot be verified, the API uses its coordinates and reports
+`PARKING_ASSIGNMENT_UNCONFIRMED`. The dashboard uses `vehicle_placements` from the
+same calculation for its zone filter. Assignments do not modify routing or ownership.
 
 Each claimed EV is classified against its claim's destination, never as available
 at the origin:
@@ -163,7 +173,8 @@ $env:DEMAND_UPDATE_INTERVAL_SECONDS = '30'
 ```
 
 For local use, FLEET_URL defaults to `http://localhost:8001`; Compose supplies
-`http://fleet:8000`. No Fleet dependency is added to Demand readiness/startup.
+`http://fleet:8000`. Compose and Kubernetes set `FACILITIES_URL` for the optional
+parking evidence read. Neither read is required for Demand readiness or startup.
 
 | Variable | Default |
 |---|---:|

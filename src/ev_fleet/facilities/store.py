@@ -246,6 +246,9 @@ class FacilitiesStore:
     def _vehicle_parking(self, vehicle_id):
         entries = [entry for entry in self.holds.values()
                    if entry["receipt"]["vehicle_id"] == vehicle_id]
+        return self._parking_view(vehicle_id, entries)
+
+    def _parking_view(self, vehicle_id, entries):
         occupied = next((entry for entry in entries if entry["status"] == "OCCUPIED"), None)
         parking = None
         access_position_missing = False
@@ -262,6 +265,18 @@ class FacilitiesStore:
         return {"vehicle_id": vehicle_id, "parking": parking,
                 "pending": any(entry["status"] == "RESERVED" for entry in entries),
                 "access_position_missing": access_position_missing}
+
+    async def parking_snapshot(self) -> dict[str, VehicleParking]:
+        # Wait for in-flight persistence within the caller's request timeout.
+        async with self.lock:
+            if not self.repository.ready:
+                raise HTTPException(503, "PARKING_OBSERVATION_UNAVAILABLE")
+            entries_by_vehicle: dict[str, list[dict]] = {}
+            for entry in self.holds.values():
+                if entry["status"] in ("RESERVED", "OCCUPIED"):
+                    entries_by_vehicle.setdefault(entry["receipt"]["vehicle_id"], []).append(entry)
+            return {vehicle_id: VehicleParking.model_validate(self._parking_view(vehicle_id, entries))
+                    for vehicle_id, entries in entries_by_vehicle.items()}
 
     async def vehicle_parking(self, vehicle_id):
         return self._vehicle_parking(vehicle_id)

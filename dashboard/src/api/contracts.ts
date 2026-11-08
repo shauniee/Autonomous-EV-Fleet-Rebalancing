@@ -39,15 +39,22 @@ export interface RoadRoute {
 export interface Zone {
   zone_id: string; name: string; position: Position;
   rental_demand: number | null; demand_level: string; demand_status: string;
+  demand_observed_at?: string | null;
   available_evs: number | null; inbound_relocating_evs: number | null;
   inbound_pending_evs: number | null; inbound_unconfirmed_evs: number | null;
   current_shortage: number | null; projected_shortage: number | null;
   current_surplus: number | null; projected_surplus: number | null;
   hotspot_severity: 'NORMAL' | 'WARNING' | 'CRITICAL' | 'UNKNOWN'; data_quality: string;
 }
+export interface VehiclePlacement {
+  zone_id: string | null;
+  parking: { facility_id: string; name: string } | null;
+}
 export interface HeatMap {
   generated_at: string; demand_snapshot_at: string; fleet_snapshot_at: string | null;
   status: string; issues: string[]; fleet_status: string; zones: Zone[];
+  available_outside_zones?: number | null;
+  vehicle_placements?: Record<string, VehiclePlacement> | null;
   policy?: { medium_demand: number; high_demand: number };
 }
 export interface ChargerAdvice {

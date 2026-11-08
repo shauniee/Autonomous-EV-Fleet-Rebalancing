@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { demandLevel } from '../src/components/DemandThresholds';
 import { FleetPulse } from '../src/components/FleetPulse';
 import { makeDispatch, makeFleet, makeHeat } from './fixtures';
+import type { Zone } from '../src/api/contracts';
 
-const rentalDemandLevel = (zone: Parameters<typeof demandLevel>[0]) =>
-  demandLevel(zone, { moderate: 5, critical: 10 });
+const classifyDemand = (zone: Zone) => demandLevel(zone, { moderate: 5, critical: 10 });
 
 function metric(label: string) {
   const heading = screen.getByText(label);
@@ -130,7 +130,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: fleet, updatedAt }}
       heat={{ data: heat, updatedAt }}
       dispatches={{ data: { dispatches: [unresolved, completed] }, updatedAt }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
 
@@ -151,7 +151,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: makeFleet(), updatedAt: old }}
       heat={{ data: heat, updatedAt: fresh }}
       dispatches={{ data: { dispatches: [] }, error: 'Connection lost', updatedAt: old }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
     expect(metric('Reporting EVs').getByLabelText('Reporting EVs: unavailable')).toHaveTextContent('—');
@@ -169,7 +169,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: makeFleet(), error: 'Connection interrupted', updatedAt }}
       heat={{ data: makeHeat(), error: 'Connection interrupted', updatedAt }}
       dispatches={{ data: { dispatches: [makeDispatch()] }, error: 'Connection interrupted', updatedAt }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
 
@@ -192,7 +192,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: initialFleet, error: 'Connection interrupted', updatedAt: old }}
       heat={{ data: makeHeat(), updatedAt: fresh }}
       dispatches={{ data: { dispatches: [] }, updatedAt: fresh }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
     expect(metric('Reporting EVs').getByText('1')).toBeInTheDocument();
@@ -201,7 +201,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: updatedFleet, updatedAt: fresh }}
       heat={{ data: makeHeat(), updatedAt: fresh }}
       dispatches={{ data: { dispatches: [] }, updatedAt: fresh }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
     expect(metric('Reporting EVs').getByText('0')).toBeInTheDocument();
@@ -218,7 +218,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: fleet, updatedAt }}
       heat={{ data: heat, updatedAt }}
       dispatches={{ data: { dispatches: [] }, updatedAt }}
-      rentalDemandLevel={rentalDemandLevel}
+      rentalDemandLevel={classifyDemand}
       now={now}
     />);
     for (const label of ['Reporting EVs', 'Available EVs', 'Open dispatches', 'Critical zones']) {

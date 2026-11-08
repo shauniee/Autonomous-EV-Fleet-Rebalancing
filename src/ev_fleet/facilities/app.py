@@ -77,6 +77,11 @@ def create_app(store=None, cache=None):
     async def hold(dispatch_id: str):
         return await state.get_hold(dispatch_id)
 
+    @app.get("/api/v1/vehicle-parking", response_model=dict[str, VehicleParking])
+    async def parking_snapshot(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return await state.parking_snapshot()
+
     @app.get("/api/v1/vehicles/{vehicle_id}/parking", response_model=VehicleParking)
     async def vehicle_parking(vehicle_id: str):
         return await state.vehicle_parking(vehicle_id)

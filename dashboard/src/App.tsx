@@ -17,7 +17,7 @@ import { RentalOutlook } from './components/RentalOutlook';
 import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
 import { Badge, number, time } from './components/format';
-import { DispatchConfirmation, FleetPanel, RecommendationPanel, ServiceStatus, ZoneDetails } from './components/Panels';
+import { DispatchConfirmation, FleetPanel, RecommendationPanel, ServiceStatus, ZoneDemandStatus, ZoneDetails, ZoneMetrics } from './components/Panels';
 import { RelocationPanel } from './components/RelocationPanel';
 import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
 
@@ -26,12 +26,14 @@ const batchPendingKey = 'fleet.pending-batch';
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
+  const [now, setNow] = useState(Date.now());
+  const heatUnavailable = !!heat.error || !heat.updatedAt || now - Date.parse(heat.updatedAt) >= 10000;
   const [customThresholds, setCustomThresholds] = useState(readDemandThresholds);
   const defaultThresholds = defaultDemandThresholds(heat.data?.policy);
   const thresholds = customThresholds ?? defaultThresholds;
   const { moderate, critical } = thresholds;
   const rentalDemandLevel = useCallback((zone: HeatMap['zones'][number]) =>
-    heat.error ? 'Unknown' : demandLevel(zone, { moderate, critical }), [heat.error, moderate, critical]);
+    heatUnavailable ? 'Unknown' : demandLevel(zone, { moderate, critical }), [heatUnavailable, moderate, critical]);
   const fleet = usePolling<Fleet>('/api/fleet/dashboard/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
@@ -40,6 +42,7 @@ export default function App() {
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const [operationalTab, setOperationalTab] = useState('dispatch');
+  const [unparkedOnly, setUnparkedOnly] = useState(false);
   const [relocationFocus, setRelocationFocus] = useState<{ id: string; revision: number }>();
   const [compactView, setCompactView] = useState<'dispatch' | 'map'>('dispatch');
   const [demandDetails, setDemandDetails] = useState(false);
@@ -108,7 +111,6 @@ export default function App() {
   const [pendingApprovals, updateApproval] = usePendingApprovals<Approval>(pendingKey, 'recommendation_id');
   const hasPending = pendingApprovals.length + pendingBatches.length > 0;
   const [submitting, setSubmitting] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const recommendationRequest = useRef<AbortController | null>(null);
   const submittingRef = useRef(false);
   const mounted = useRef(true);
@@ -144,8 +146,18 @@ export default function App() {
   const zone = zones.find(z => z.zone_id === selected);
   const current = recommendation && vehicles.find(v => v.vehicle_id === recommendation.selected_vehicle_id);
   const fleetFeedHealthy = !!fleet.updatedAt && !fleet.error && now - Date.parse(fleet.updatedAt) < 4500;
-  const fresh = !!heat.data && !heat.error && !!fleet.data && !fleet.error && heat.data.fleet_status === 'FRESH'
-    && !!heat.updatedAt && now - Date.parse(heat.updatedAt) < 10000 && !!fleet.updatedAt && now - Date.parse(fleet.updatedAt) < 10000;
+  const unparkedIdle = fleetFeedHealthy ? vehicles.filter(v => !v.stale && v.connectivity === 'ONLINE' &&
+    v.telemetry && !v.telemetry.parked_facility_id && !v.telemetry.active_dispatch_id &&
+    v.effective_relocation_state === 'IDLE' && !v.active_claim && !v.active_rental && !v.active_charging_task) : [];
+  const outsideZones = heatUnavailable ? null : heat.data?.available_outside_zones;
+  const parkingUnconfirmed = !heatUnavailable && heat.data?.issues.includes('PARKING_ASSIGNMENT_UNCONFIRMED');
+  function openUnparkedFleet() {
+    setUnparkedOnly(true);
+    setOperationalTab('fleet');
+    requestAnimationFrame(() => document.getElementById('fleet-overview-title')?.focus());
+  }
+  const fresh = !heatUnavailable && heat.data?.fleet_status === 'FRESH'
+    && !!fleet.data && !fleet.error && !!fleet.updatedAt && now - Date.parse(fleet.updatedAt) < 10000;
   const remaining = recommendation ? Math.max(0, Math.ceil((Date.parse(recommendation.expires_at) - now) / 1000)) : 0;
   const batchRemaining = batch ? Math.max(0, Math.ceil((Date.parse(batch.expires_at) - now) / 1000)) : 0;
   const facilitiesFresh = !!facilities.data && !facilities.error && !!facilities.updatedAt
@@ -363,7 +375,8 @@ export default function App() {
             </div>
             <section ref={mapPanel} tabIndex={-1} className="panel map-panel workspace-main" aria-labelledby="map-title">
               <div className="section-title map-title"><h2 id="map-title">Singapore fleet map</h2><span className="muted">{zones.length ? `${zones.length} operating zones` : 'Awaiting zone feed'}</span></div>
-              <SingaporeMap zones={zones} vehicles={vehicles} facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data}
+              <SingaporeMap zones={zones} vehicles={vehicles} placements={heatUnavailable ? null : heat.data?.vehicle_placements}
+                facilities={sites} dispatches={dispatches.data?.dispatches} traffic={traffic.data}
                 telemetryFeedHealthy={fleetFeedHealthy} selected={selected} onSelect={choose} selectedDispatch={selectedDispatch}
                 onSelectDispatch={setSelectedDispatch} focusTarget={mapFocus} rentalDemandLevel={rentalDemandLevel}/>
               {zone && <div className="compact-map-selection">
@@ -386,28 +399,32 @@ export default function App() {
                   : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} ${criticalZones === 1 ? 'zone' : 'zones'} with critical demand` : 'No zones with critical demand')}</span>}
               </div>
               <div className="inspector-body" ref={inspectorBody}>
+                {(outsideZones != null || unparkedIdle.length > 0) &&
+                  <div className="fleet-coverage" aria-label="Fleet coverage">
+                    {outsideZones != null && <span className="muted">Available outside zones <strong>{outsideZones}</strong></span>}
+                    {unparkedIdle.length > 0 && <button type="button" className="text-button" onClick={openUnparkedFleet}>
+                      {unparkedIdle.length} idle {unparkedIdle.length === 1 ? 'EV' : 'EVs'} without parking
+                    </button>}
+                  </div>}
+                {parkingUnconfirmed && <p className="warning demand-inbound">Some parking assignments could not be verified. Zone counts use vehicle position for those EVs.</p>}
                 {!result && !demandDetails && <>
                   <DemandThresholds applied={thresholds} defaults={defaultThresholds} onApply={setCustomThresholds}/>
                   <div className="zone-list" role="group" aria-label="Select target zone">{zones.map(z =>
                     <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}>
                       <strong>{z.name}</strong><Badge value={rentalDemandLevel(z)}/>
-                      <small>{z.current_shortage == null ? 'Shortage unknown' : z.current_shortage ? `${z.current_shortage} short now` : 'No current shortage'}</small>
+                      <small>{heatUnavailable || z.current_shortage == null ? 'Shortage unknown' : z.current_shortage ? `${z.current_shortage} short now` : 'No current shortage'}</small>
                     </button>)}</div>
                   {!zones.length && <p className="empty">Waiting for zone data from Demand Service.</p>}
                   {!!zones.length && !zone && <p className="empty inspector-empty">Choose a zone to see its shortage and request a relocation.</p>}
                 </>}
-                {zone && (demandDetails ? <ZoneDetails zone={zone} rentalDemandLevel={rentalDemandLevel(zone)}/> : <section className="selected-demand" aria-label="Selected zone demand">
+                {zone && (demandDetails ? <ZoneDetails zone={zone} rentalDemandLevel={rentalDemandLevel(zone)}
+                  feedUnavailable={heatUnavailable}/> : <section className="selected-demand" aria-label="Selected zone demand">
                   <div className="section-title"><h3>{zone.name}</h3>{result ? <Badge value={rentalDemandLevel(zone)}/> :
                     <button className="text-button" onClick={() => { setDemandDetails(true); inspectorTitle.current?.focus(); }}>Demand details</button>}</div>
-                  {result ? <p className="muted">Shortage now {number(zone.current_shortage)} · Projected {number(zone.projected_shortage)}</p> : <>
-                    <dl className="demand-figures">
-                      <div><dt>Rental demand</dt><dd>{number(zone.rental_demand)}</dd></div>
-                      <div><dt>Available EVs</dt><dd>{number(zone.available_evs)}</dd></div>
-                      <div><dt>Current shortage</dt><dd>{number(zone.current_shortage)}</dd></div>
-                      <div><dt>Projected shortage</dt><dd>{number(zone.projected_shortage)}</dd></div>
-                    </dl>
-                    <p className="muted demand-inbound">Relocating in: {number(zone.inbound_relocating_evs)} · Pending: {number(zone.inbound_pending_evs)} · Unconfirmed: {number(zone.inbound_unconfirmed_evs)}</p>
-                  </>}
+                  {result ? heatUnavailable || zone.demand_status !== 'FRESH'
+                    ? <ZoneDemandStatus zone={zone} feedUnavailable={heatUnavailable}/>
+                    : <p className="muted">Shortage now {number(zone.current_shortage)} · Projected {number(zone.projected_shortage)}</p>
+                    : <ZoneMetrics zone={zone} feedUnavailable={heatUnavailable}/>}
                 </section>)}
                 {zone && !result && !demandDetails && <section className="relocation-request" aria-label="Relocation request">
                   <div className="request-fields">
@@ -474,7 +491,9 @@ export default function App() {
         </> },
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPulse rentalDemandLevel={rentalDemandLevel} fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
-          <FleetPanel vehicles={vehicles} initialVehicle={twinVehicle?.vehicle_id}/>
+          <FleetPanel vehicles={unparkedOnly ? unparkedIdle : vehicles} unparkedOnly={unparkedOnly} fleetFeedHealthy={fleetFeedHealthy}
+            initialVehicle={unparkedOnly ? unparkedIdle[0]?.vehicle_id : twinVehicle?.vehicle_id}
+            onClearFilter={() => setUnparkedOnly(false)}/>
         </> },
         { id: 'relocations', label: 'Relocations',
           summary: dispatches.updatedAt && !dispatches.error && now - Date.parse(dispatches.updatedAt) < 10000

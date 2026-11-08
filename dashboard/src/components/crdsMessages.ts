@@ -46,6 +46,7 @@ const reasons: Readonly<Record<string, string>> = {
   FLEET_SNAPSHOT_STALE: 'Fleet data is too old. Request a fresh recommendation after the fleet updates.',
   DISPATCH_SNAPSHOT_STALE: 'Current relocation records could not be verified. Try again after Dispatch updates.',
   DEMAND_UNKNOWN_OR_STALE: 'Current demand is unavailable. Request a fresh recommendation after demand data updates.',
+  PARKING_ASSIGNMENT_UNCONFIRMED: 'Some parked EVs could not be assigned to a zone. Request a new assessment after parking data updates.',
   PARKING_FEED_UNAVAILABLE: 'Current parking availability is unavailable. Try again after parking data updates.',
   PENDING_DISPATCH_UNRESOLVED: 'Dispatch could not match a pending relocation to an EV. Check pending approvals.',
   DECISION_DEADLINE: 'The assessment did not finish in time. Try requesting a fresh recommendation.',

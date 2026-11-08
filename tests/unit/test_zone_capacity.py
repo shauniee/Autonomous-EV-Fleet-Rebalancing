@@ -1,10 +1,13 @@
 import asyncio
 from uuid import uuid4
 import pytest
+from ev_fleet.contracts.common import Position
 from ev_fleet.contracts.demand import ZoneState
-from ev_fleet.contracts.vehicles import VehicleState
+from ev_fleet.contracts.facilities import ParkingHoldRequest
+from ev_fleet.contracts.vehicles import TelemetryUpdate, VehicleState
 from ev_fleet.demand.aggregation import assigned_zone
 from ev_fleet.common.travel import distance_km
+from ev_fleet.facilities.catalog import BY_ID
 from tests.demand_heatmap_support import DemandCluster
 
 
@@ -43,6 +46,48 @@ def test_zone_radius_boundary_and_tie(clock):
             assert assigned_zone(vehicle, {"bishan": zone, "a": twin}, 2) == "a"
             vehicle.current_zone_id = "bishan"
             assert assigned_zone(vehicle, {"bishan": zone, "a": twin}, 2) == "bishan"
+    asyncio.run(scenario())
+
+
+def test_confirmed_parking_and_unparked_supply_outside_catchments(clock):
+    async def scenario():
+        async with DemandCluster(clock, facilities_url="http://facilities.test") as cluster:
+            await cluster.vehicle()
+            await cluster.vehicle("ev-2")
+            await cluster.set_demand("bishan", value=3)
+            site = BY_ID["mock-bishan-01"].model_copy(
+                update={"position": Position(latitude=1.31679, longitude=103.80605)})
+            cluster.facilities.catalogue[site.facility_id] = site
+            hold = ParkingHoldRequest(dispatch_id=uuid4(), vehicle_id="ev-1",
+                expected_zone_id=site.zone_id, expected_position=site.position,
+                access_position=site.position)
+            await cluster.facilities.reserve(site.facility_id, hold)
+            await cluster.fleet.telemetry("ev-1", TelemetryUpdate(
+                session_id=cluster.sessions["ev-1"], sequence=2, observed_at=clock.now(),
+                position=site.position, soc_pct=80, availability="AVAILABLE",
+                relocation_state="IDLE", parked_facility_id=site.facility_id))
+            await cluster.telemetry("ev-2", position=site.position)
+            pending = await cluster.heatmap()
+            assert zones(pending)["bishan"]["available_evs"] == 0
+            assert "PARKING_ASSIGNMENT_UNCONFIRMED" in pending["issues"]
+
+            await cluster.facilities.change(hold.dispatch_id, "OCCUPIED")
+            # An occupied hold retains its facility even after a catalogue refresh.
+            cluster.facilities.catalogue.pop(site.facility_id)
+            occupied = await cluster.heatmap()
+            assert occupied["vehicle_placements"]["ev-1"] == {
+                "zone_id": "bishan", "parking": {"facility_id": site.facility_id, "name": site.name}}
+            assert occupied["vehicle_placements"]["ev-2"] == {"zone_id": None, "parking": None}
+            assert occupied["available_outside_zones"] == 1
+            bishan = zones(occupied)["bishan"]
+            assert bishan["available_evs"] == 1
+            assert bishan["current_shortage"] == bishan["projected_shortage"] == 2
+
+            cluster.failures.append({"method": "GET", "path": "/api/v1/vehicle-parking", "action": "offline"})
+            degraded = await cluster.heatmap()
+            assert "PARKING_ASSIGNMENT_UNCONFIRMED" in degraded["issues"]
+            assert degraded["available_outside_zones"] == 1
+            assert zones(degraded)["bishan"]["available_evs"] == 0
     asyncio.run(scenario())
 
 

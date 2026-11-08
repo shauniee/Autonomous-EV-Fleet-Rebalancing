@@ -21,6 +21,7 @@ class DemandSettings(Model):
     high_demand: int = Field(default=10, ge=1)
     fleet_timeout_seconds: float = Field(default=2, gt=0)
     fleet_url: str = "http://localhost:8001"
+    facilities_url: str | None = None
 
     @model_validator(mode="after")
     def ordered_bounds(self):
@@ -33,6 +34,6 @@ class DemandSettings(Model):
     @classmethod
     def from_env(cls):
         names = {field: "DEMAND_" + field.upper() for field in cls.model_fields}
-        names.update(fleet_url="FLEET_URL", min_reserve_pct="MIN_RESERVE_PCT",
+        names.update(fleet_url="FLEET_URL", facilities_url="FACILITIES_URL", min_reserve_pct="MIN_RESERVE_PCT",
                      demand_max_age_seconds="DEMAND_MAX_AGE_SECONDS")
         return cls(**{field: os.environ[name] for field, name in names.items() if name in os.environ})
