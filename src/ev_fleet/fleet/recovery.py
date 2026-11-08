@@ -119,6 +119,7 @@ class SimulatorRecovery:
             raise HTTPException(503, "SIMULATOR_PERSISTENCE_UNCERTAIN") from exc
         store.vehicles[vehicle_id] = staged
         store.version += 1
+        store._publish_committed_state()
         if sample is not None:
             store.cache_telemetry(sample)
 

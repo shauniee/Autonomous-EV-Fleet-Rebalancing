@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnalyticsPanel } from '../../simulation-console/frontend/src/AnalyticsPanel';
 
@@ -51,6 +51,7 @@ describe('simulation analytics observations', () => {
     render(<AnalyticsPanel/>);
 
     await waitFor(() => expect(screen.getByText('3 → 3')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Charts' }));
     expect(screen.getByRole('img', { name: 'Dashboard Pods (observed) history' })).toBeInTheDocument();
     expect(screen.getByText(/Dashboard Pods 1 → 3/)).toBeInTheDocument();
   });
@@ -59,7 +60,30 @@ describe('simulation analytics observations', () => {
     serveSnapshot();
     render(<AnalyticsPanel/>);
 
-    const chart = await screen.findByRole('img', { name: 'HPA CPU (%) history' });
+    await screen.findByText('Workload controls');
+    fireEvent.click(screen.getByRole('button', { name: 'Charts' }));
+    const chart = screen.getByRole('img', { name: 'HPA CPU (%) history' });
     expect(within(chart).getByText('200')).toBeInTheDocument();
+  });
+
+  it('keeps workload, charts and run history in exclusive views with working controls', async () => {
+    serveSnapshot();
+    render(<AnalyticsPanel/>);
+
+    const workload = await screen.findByText('Workload controls');
+    const chart = screen.getByRole('img', { name: 'HPA CPU (%) history', hidden: true });
+    const history = screen.getByText('Recorded experiments');
+    expect(workload).toBeVisible();
+    expect(chart).not.toBeVisible();
+    expect(history).not.toBeVisible();
+    expect(screen.getByRole('button', { name: 'Stop experiment' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Charts' }));
+    expect(workload).not.toBeVisible();
+    expect(chart).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Runs' }));
+    expect(chart).not.toBeVisible();
+    expect(history).toBeVisible();
   });
 });

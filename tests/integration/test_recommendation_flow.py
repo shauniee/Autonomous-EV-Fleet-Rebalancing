@@ -22,7 +22,7 @@ def services(tmp_path):
         for sock in sockets:
             sock.close()
     processes, logs = [], []
-    env = dict(os.environ, DATABASE_URL="", STALE_SECONDS="1", OFFLINE_SECONDS="2", RECOMMENDATION_TTL_SECONDS="1",
+    env = dict(os.environ, DATABASE_URL="", CRDS_MODE="DISABLED", STALE_SECONDS="1", OFFLINE_SECONDS="2", RECOMMENDATION_TTL_SECONDS="1",
                FLEET_URL=f"http://127.0.0.1:{ports[0]}", DEMAND_URL=f"http://127.0.0.1:{ports[1]}")
     try:
         urls = [f"http://127.0.0.1:{port}" for port in ports]

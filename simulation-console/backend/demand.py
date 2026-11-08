@@ -24,7 +24,44 @@ class DemandZone(BaseModel):
     demand: DemandValue | None
 
 
+class DemandSimulationStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool
+    running: bool
+    tick_count: int = Field(ge=0)
+    last_tick_at: str | None
+    last_error: str | None
+    configuration: dict
+    zones: dict
+
+
 router = APIRouter(prefix="/api/probe/v1")
+
+
+async def _simulation_request(request: Request, method: str, path: str):
+    url = request.app.state.service_urls["demand"] + "/api/v1/demand-simulation" + path
+    try:
+        response = await request.app.state.client.request(method, url)
+        response.raise_for_status()
+        return DemandSimulationStatus.model_validate(response.json()).model_dump(mode="json")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, "DEMAND_SIMULATION_CONTROL_REJECTED") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(503, "DEMAND_SIMULATION_CONTROL_UNAVAILABLE") from exc
+    except (ValueError, TypeError, ValidationError) as exc:
+        raise HTTPException(502, "DEMAND_SIMULATION_RESPONSE_INVALID") from exc
+
+
+@router.get("/demand-simulation/status")
+async def simulation_status(request: Request):
+    return await _simulation_request(request, "GET", "")
+
+
+@router.post("/demand-simulation/{action}")
+async def control_simulation(action: str, request: Request):
+    if action not in ("start", "pause"):
+        raise HTTPException(422, "DEMAND_SIMULATION_ACTION_INVALID")
+    return await _simulation_request(request, "POST", f"/{action}")
 
 
 @router.put("/zones/{zone_id}/demand")

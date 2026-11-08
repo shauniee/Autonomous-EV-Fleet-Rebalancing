@@ -653,11 +653,30 @@ describe('CRDS recommendation explanations', () => {
     const result = screen.getByTestId('recommendation');
     expect(result).toHaveTextContent('Assessment unavailable');
     expect(result).toHaveTextContent('could not access the routing service');
-    expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Request fresh recommendation' })).toBeEnabled();
     fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
     expect(result).toHaveTextContent('EVs with incomplete assessments (1)');
     expect(result).toHaveTextContent('ev-02 · The EV is offline.');
     expect(result).not.toHaveTextContent(/ONEMAP_AUTH_FAILED|ROUTE_EVIDENCE_UNAVAILABLE/);
+  });
+
+  it('requests a fresh recommendation from a deferred result', async () => {
+    const deferred = { ...makeRecommendation(), selected_vehicle_id: null,
+      ranked_candidates: [], crds: { ...crds, reason_code: 'DEMAND_UNKNOWN_OR_STALE' } };
+    const fetch = server({ '/api/rebalancing/recommendations': deferred });
+    render(<App/>);
+    await selectAndRecommend();
+
+    const retry = screen.getByRole('button', { name: 'Request fresh recommendation' });
+    expect(retry).toBeEnabled();
+    Object.assign(deferred, makeRecommendation(), {
+      crds: { ...crds, decision: 'MOVE', reason_code: 'USEFUL_SHORTAGE_REDUCTION', approval_allowed: true },
+    });
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/recommendations' && init?.method === 'POST')).toHaveLength(2));
+    expect(await screen.findByRole('button', { name: 'Review dispatch' })).toBeEnabled();
   });
 
   it('renders a readable fallback for an unknown legacy code', async () => {

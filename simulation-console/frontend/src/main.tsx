@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DemandForm } from './DemandForm';
+import { DemandSimulationControl } from './DemandSimulationControl';
 import { TrafficScenariosPanel } from './TrafficScenariosPanel';
 import { RentalPanel } from './RentalPanel';
 import { AnalyticsPanel } from './AnalyticsPanel';
@@ -181,6 +182,7 @@ function App() {
         </div>
         <div className="workspace-content">
           <WorkspacePanel id="demand" active={active}>
+            <DemandSimulationControl />
             <DemandForm
               zones={observations?.zones.data ?? []}
               available={!!observations?.zones.data && !observations.zones.error && !error}

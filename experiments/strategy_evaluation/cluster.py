@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from uuid import uuid4
 import httpx
-from ev_fleet.common.settings import DispatchSettings, Settings
+from ev_fleet.common.settings import CrdsSettings, DispatchSettings, Settings
 from ev_fleet.contracts.demand import ChargingUpdate, DemandUpdate
 from ev_fleet.contracts.vehicles import TelemetryUpdate, VehicleRegistration
 from ev_fleet.demand.app import create_app as demand_app
@@ -77,7 +77,8 @@ class EvaluationCluster:
                          stale_seconds=self.settings.stale_seconds,
                          offline_seconds=self.settings.offline_seconds,
                          recommendation_ttl_seconds=self.settings.recommendation_ttl_seconds),
-                self.client, self.clock, self.strategy),
+                self.client, self.clock, self.strategy,
+                crds_settings=CrdsSettings(mode="DISABLED", dispatch_url="http://dispatch.test")),
             "dispatch.test": dispatch_app(self.settings, self.client, self.clock, background=False),
         }
         self.transports = {host: httpx.ASGITransport(app=app) for host, app in self.apps.items()}

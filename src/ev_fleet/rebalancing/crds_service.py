@@ -37,6 +37,21 @@ class CrdsPlan:
     deadline: float = float("inf")
 
 
+def traffic_identity(traffic):
+    """Return the small version evidence needed by a CRDS fingerprint."""
+    identity = {
+        key: traffic[key]
+        for key in ("source", "mode", "status", "instance_id", "scenario_version")
+        if key in traffic
+    }
+    identity["feeds"] = traffic.get("feeds", {})
+    identity["simulated_events"] = traffic.get("simulated_events", [])
+    observed = traffic.get("live_observations")
+    if observed is not None:
+        identity["live_observations"] = traffic_identity(observed)
+    return identity
+
+
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                    vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
                    expand_age=None):
@@ -49,9 +64,12 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if target is None:
         raise HTTPException(404, "TARGET_NOT_FOUND")
     params = parameters_for(settings)
-    fingerprint = hashlib.sha256(json.dumps(
-        {"inputs": inputs.model_dump(mode="json"), "settings": settings.model_dump(),
-         "model": MODEL_VERSION, "expand_age": expand_age}, sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({
+        "inputs": inputs.model_dump(mode="json", exclude={"traffic"}),
+        "traffic": traffic_identity(inputs.traffic),
+        "settings": settings.model_dump(), "model": MODEL_VERSION,
+        "expand_age": expand_age,
+    }, sort_keys=True).encode()).hexdigest()
     metadata = CrdsMetadata(decision="DEFER", reason_code="INCOMPLETE_INPUTS", parameters=params,
         scenario_model_version=MODEL_VERSION, scenario_count=0, epoch_id=uuid4(), input_fingerprint=fingerprint,
         source_references={"fleet_instance_id": str(inputs.fleet.instance_id),
@@ -247,10 +265,17 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if remaining <= 0:
         return defer("DECISION_DEADLINE")
     try:
-        prepared = await asyncio.wait_for(asyncio.gather(*(prepare_with_evidence(c) for c in candidates)), remaining)
-    except (asyncio.TimeoutError, httpx.HTTPError, ValueError) as exc:
+        results = await asyncio.wait_for(asyncio.gather(
+            *(prepare_with_evidence(c) for c in candidates), return_exceptions=True), remaining)
+    except asyncio.TimeoutError as exc:
         legacy_reason = str(exc) if isinstance(exc, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
         return defer(legacy_reason, route_failure_reason(exc))
+    failures = [item for item in results if isinstance(item, (httpx.HTTPError, ValueError))]
+    prepared = [item for item in results if not isinstance(item, (httpx.HTTPError, ValueError))]
+    if failures and not prepared:
+        failure = failures[0]
+        legacy_reason = str(failure) if isinstance(failure, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
+        return defer(legacy_reason, route_failure_reason(failure))
     moves = []
     for item in prepared:
         if item is not None:

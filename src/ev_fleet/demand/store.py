@@ -25,6 +25,7 @@ class DemandStore:
         self.zones = {}
         self.instance_id = str(uuid4())
         self.version = 0
+        self.simulation_enabled = False
         self.manual_hold_seconds = manual_hold_seconds
         self.repository = repository or SnapshotRepository.from_env("demand")
 
@@ -35,6 +36,7 @@ class DemandStore:
             self.instance_id = payload["instance_id"]
             self.version = payload["version"]
             self.zones = payload["zones"]
+            self.simulation_enabled = payload.get("simulation_enabled", False)
             now, tick = self.clock.now(), self.clock.monotonic()
             for record in self.zones.values():
                 hold_until = record["hold_until"]
@@ -49,7 +51,13 @@ class DemandStore:
     async def persist(self):
         await self.repository.save({"instance_id": self.instance_id,
                                     "version": self.version,
+                                    "simulation_enabled": self.simulation_enabled,
                                     "zones": self.zones})
+
+    async def set_simulation_enabled(self, enabled):
+        async with self.lock:
+            self.simulation_enabled = enabled
+            await self.persist()
 
     def record(self, zone_id):
         if zone_id not in self.zones:

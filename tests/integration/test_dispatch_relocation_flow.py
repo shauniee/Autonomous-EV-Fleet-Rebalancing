@@ -11,7 +11,7 @@ import pytest
 
 @pytest.fixture
 def relocation_cluster(tmp_path):
-    sockets = [socket.socket() for _ in range(4)]
+    sockets = [socket.socket() for _ in range(6)]
     try:
         for sock in sockets:
             sock.bind(("127.0.0.1", 0))
@@ -19,8 +19,9 @@ def relocation_cluster(tmp_path):
     finally:
         for sock in sockets:
             sock.close()
-    urls = [f"http://127.0.0.1:{port}" for port in ports]
-    env = dict(os.environ, DATABASE_URL="", FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2],
+    urls = [f"http://127.0.0.1:{port}" for port in ports[:4]]
+    health_ports = ports[4:]
+    env = dict(os.environ, DATABASE_URL="", CRDS_MODE="DISABLED", FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2],
                RECONCILE_INTERVAL_SECONDS="0.1", STALE_SECONDS="5", OFFLINE_SECONDS="10",
                RECOMMENDATION_TTL_SECONDS="10", ACK_TIMEOUT_SECONDS="3", PROGRESS_TIMEOUT_SECONDS="5")
     processes, logs = [], []
@@ -57,10 +58,12 @@ def relocation_cluster(tmp_path):
                                     "\n".join(path.read_text() for path in tmp_path.glob("*.log")))
                     time.sleep(.05)
             simulators = []
-            for name, zone, soc in [("moving-01", "bishan", "90"), ("moving-02", "tampines", "60")]:
+            for (name, zone, soc), health_port in zip(
+                    [("moving-01", "bishan", "90"), ("moving-02", "tampines", "60")], health_ports):
                 process = start(name, ["-m", "ev_fleet.simulator.cli", "--fleet-url", urls[0], "--dispatch-url", urls[3],
                     "--vehicle-id", name, "--zone", zone, "--soc", soc, "--interval", ".15",
-                    "--poll-interval", ".1", "--tick-seconds", ".05", "--time-scale", "240"])
+                    "--poll-interval", ".1", "--tick-seconds", ".05", "--time-scale", "240",
+                    "--health-port", str(health_port)])
                 simulators.append((name, process))
             # Launch both imports before the first simulator begins its polling
             # loop, then verify registration independently with a host-load-aware

@@ -27,7 +27,12 @@ async def evaluate_candidates(client, settings, epoch_id, futures, moves, parame
     if timeout_seconds <= 0:
         return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
     if settings.execution_mode == "LOCAL":
-        result = evaluate_moves(futures, moves, parameters)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(evaluate_moves, futures, moves, parameters),
+                timeout=timeout_seconds - (perf_counter() - start))
+        except asyncio.TimeoutError:
+            return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
         if perf_counter() - start > timeout_seconds:
             return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
         return done(result)

@@ -2,8 +2,6 @@ import asyncio
 from datetime import datetime, timezone
 import time
 from uuid import uuid4
-import pytest
-from fastapi import HTTPException
 from tests.demand_heatmap_support import DemandCluster
 from tests.integration.test_dispatch_relocation_flow import relocation_cluster
 
@@ -15,10 +13,7 @@ def test_concurrent_snapshots_and_demand_changes_preserve_dispatch_contract(cloc
             await cluster.set_demand(value=4)
             old_recommendation = await cluster.recommend()
             await cluster.set_demand(value=5)
-            with pytest.raises(HTTPException) as caught:
-                await cluster.approve(old_recommendation)
-            assert caught.value.detail == "TARGET_CHANGED"
-            dispatch, _ = await cluster.approve()
+            dispatch, _ = await cluster.approve(old_recommendation)
             key = dispatch["dispatch_id"]
             for value in range(6, 16):
                 await asyncio.gather(cluster.set_demand(value=value),

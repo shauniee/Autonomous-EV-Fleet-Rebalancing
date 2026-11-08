@@ -67,12 +67,13 @@ def dispatch_for(vehicle, observations, clock, *, command=True):
 
 
 async def plan(observations, clock, *, batch=False, worker=False, route_error=None,
-               route_distance=None, traffic=None, **selection):
+               route_error_vehicle=None, route_distance=None, traffic=None, **selection):
     def respond(request):
         if request.url.path == "/api/v1/route-estimates":
-            if route_error:
-                return httpx.Response(503, json={"error": {"code": route_error}})
             body = json.loads(request.content)
+            if route_error and (route_error_vehicle is None
+                                or body["vehicle_id"] == route_error_vehicle):
+                return httpx.Response(503, json={"error": {"code": route_error}})
             fleet = observations["/api/v1/vehicles"]
             vehicle = next(v for v in fleet["vehicles"] if v["vehicle_id"] == body["vehicle_id"])
             origin = vehicle["telemetry"]["position"]
@@ -361,6 +362,59 @@ def test_route_access_defers_without_reporting_eligible_evs_as_rejected(observat
     assert evidence["assessment_reasons"] == ["ROUTING_ACCESS_UNAVAILABLE"]
     assert {row["outcome"] for row in evidence["vehicles"].values()} == {"INCOMPLETE"}
     assert "ONEMAP_AUTH_FAILED" not in json.dumps(evidence)
+
+
+def test_one_unroutable_ev_does_not_block_valid_recommendation(observations, clock):
+    result = asyncio.run(plan(
+        observations,
+        clock,
+        route_error="ONEMAP_ENDPOINT_TOO_FAR",
+        route_error_vehicle="healthy",
+    ))
+
+    assert result.metadata.decision == "MOVE"
+    assert result.evaluation.selected_vehicle_id == "healthy-2"
+    evidence = result.metadata.source_references["decision_evidence"]["vehicles"]
+    assert evidence["healthy"]["outcome"] == "INCOMPLETE"
+    assert evidence["healthy"]["reason"] == "ROAD_ROUTE_NOT_FOUND"
+    assert evidence["healthy"]["facility_id"] == "mock-cbd-01"
+    assert evidence["healthy-2"]["outcome"] == "RECOMMENDED"
+
+
+def test_unavailable_demand_does_not_fingerprint_bulk_traffic(
+        observations, clock, monkeypatch):
+    from ev_fleet.rebalancing import crds_service
+
+    for zone in observations["/api/v1/zones"]["zones"]:
+        zone["demand"] = None
+    traffic = {
+        "source": "LTA_DATAMALL",
+        "status": "FRESH",
+        "generated_at": clock.now().isoformat(),
+        "scenario_version": 0,
+        "feeds": {"speeds": {"status": "FRESH", "observed_at": clock.now().isoformat(),
+                              "count": 144_000, "error": None}},
+        "speeds": [{"bulk": "must not be fingerprinted"}],
+        "_speed_index": {"bulk": [0]},
+        "_speed_display": [],
+        "incidents": [],
+        "roadworks": [],
+        "simulated_events": [],
+    }
+    original_dumps = crds_service.json.dumps
+
+    def assert_compact_fingerprint(value, *args, **kwargs):
+        if isinstance(value, dict) and "inputs" in value:
+            assert "traffic" not in value["inputs"]
+            assert value["traffic"]["feeds"] == traffic["feeds"]
+            assert "speeds" not in value["traffic"]
+            assert "_speed_index" not in value["traffic"]
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(crds_service.json, "dumps", assert_compact_fingerprint)
+    result = asyncio.run(plan(observations, clock, traffic=traffic))
+
+    assert result.metadata.reason_code == "DEMAND_UNKNOWN_OR_STALE"
 
 
 def test_late_batch_defer_discards_provisional_recommendations(observations, clock, monkeypatch):

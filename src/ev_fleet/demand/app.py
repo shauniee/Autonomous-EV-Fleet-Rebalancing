@@ -1,5 +1,4 @@
-import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 import httpx
 from fastapi import Query, Response
 from ev_fleet.common.dashboard_cache import DashboardCache
@@ -22,6 +21,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
     app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('demand', state.instance_id, 1)
     app.state.dashboard_cache = display_cache
+    config.simulation_enabled = False
     simulator = DemandSimulator(state, config)
     app.state.simulator = simulator
     app.state.settings = config
@@ -31,21 +31,15 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
         await state.start()
         if seed_zones and not state.zones:
             await seed(state)
+        await simulator.resume_if_enabled()
         async with httpx.AsyncClient(timeout=config.fleet_timeout_seconds) as owned:
             app.state.client = client or owned
-            task = None
-            if config.simulation_enabled:
-                await simulator.tick()
-                task = asyncio.create_task(simulator.run())
             try:
                 yield
             finally:
                 await display_cache.aclose()
+                await simulator.close()
                 await state.close()
-                if task:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
 
     app.router.lifespan_context = lifespan
 
@@ -103,6 +97,14 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
     @app.get("/api/v1/demand-simulation", response_model=DemandSimulationStatus)
     async def simulation_status():
         return await simulator.status()
+
+    @app.post("/api/v1/demand-simulation/start", response_model=DemandSimulationStatus)
+    async def start_simulation():
+        return await simulator.start()
+
+    @app.post("/api/v1/demand-simulation/pause", response_model=DemandSimulationStatus)
+    async def pause_simulation():
+        return await simulator.pause()
 
     return app
 

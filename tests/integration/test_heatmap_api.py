@@ -1,10 +1,28 @@
 import asyncio
+from copy import deepcopy
 import httpx
 import pytest
 from ev_fleet.demand.app import create_app
 from ev_fleet.demand.settings import DemandSettings
 from ev_fleet.demand.store import DemandStore
 from tests.demand_heatmap_support import DemandCluster
+
+
+class MemorySnapshotRepository:
+    def __init__(self):
+        self.payload = None
+
+    async def start(self):
+        pass
+
+    async def load(self):
+        return deepcopy(self.payload)
+
+    async def save(self, payload):
+        self.payload = deepcopy(payload)
+
+    async def close(self):
+        pass
 
 
 def test_all_zones_response_and_capacity_hotspots_preserve_legacy_api(clock):
@@ -73,18 +91,75 @@ def test_missing_and_stale_demand_are_not_zero(clock):
     asyncio.run(scenario())
 
 
-def test_enabled_lifespan_advances_and_stops_simulation():
+def test_lifespan_starts_paused_and_api_controls_simulation():
     async def scenario():
         app = create_app(settings=DemandSettings(simulation_enabled=True, update_interval_seconds=.02))
         simulator = app.state.simulator
         async with app.router.lifespan_context(app):
-            async def wait_for_ticks():
-                while simulator.tick_count < 3:
-                    await asyncio.sleep(.005)
-            await asyncio.wait_for(wait_for_ticks(), 2)
-            assert simulator.running
-            assert all(zone["demand"] for zone in (await app.state.store.snapshot())["zones"])
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://demand.test") as client:
+                status = (await client.get("/api/v1/demand-simulation")).json()
+                assert status["enabled"] is False and status["running"] is False
+                assert status["tick_count"] == 0
+
+                started = await client.post("/api/v1/demand-simulation/start")
+                assert started.status_code == 200
+                assert started.json()["enabled"] is True
+                assert started.json()["tick_count"] == 1
+                assert all(zone["demand"] for zone in (await app.state.store.snapshot())["zones"])
+
+                before = await app.state.store.snapshot()
+                paused = await client.post("/api/v1/demand-simulation/pause")
+                assert paused.status_code == 200
+                assert paused.json()["enabled"] is False
+                await asyncio.sleep(.03)
+                assert (await app.state.store.snapshot())["zones"] == before["zones"]
         assert not simulator.running
+    asyncio.run(scenario())
+
+
+def test_operator_simulation_choice_survives_service_restart():
+    async def scenario():
+        repository = MemorySnapshotRepository()
+        first_store = DemandStore(repository=repository)
+        first_app = create_app(
+            store=first_store,
+            settings=DemandSettings(update_interval_seconds=60),
+        )
+        async with first_app.router.lifespan_context(first_app):
+            transport = httpx.ASGITransport(app=first_app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://demand.test"
+            ) as client:
+                started = (await client.post("/api/v1/demand-simulation/start")).json()
+                assert started["enabled"] is True
+
+        restarted_store = DemandStore(repository=repository)
+        restarted_app = create_app(
+            store=restarted_store,
+            settings=DemandSettings(update_interval_seconds=60),
+        )
+        async with restarted_app.router.lifespan_context(restarted_app):
+            transport = httpx.ASGITransport(app=restarted_app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://demand.test"
+            ) as client:
+                status = (await client.get("/api/v1/demand-simulation")).json()
+                assert status["enabled"] is True
+                assert status["running"] is True
+                assert status["tick_count"] == 1
+
+                paused = (await client.post("/api/v1/demand-simulation/pause")).json()
+                assert paused["enabled"] is False
+
+        paused_store = DemandStore(repository=repository)
+        paused_app = create_app(
+            store=paused_store,
+            settings=DemandSettings(update_interval_seconds=60),
+        )
+        async with paused_app.router.lifespan_context(paused_app):
+            assert (await paused_app.state.simulator.status())["enabled"] is False
+
     asyncio.run(scenario())
 
 

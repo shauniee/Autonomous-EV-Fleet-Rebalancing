@@ -25,6 +25,7 @@ class FleetStore:
         self.history_cache = {}  # bounded ephemeral-only cache; PostgreSQL is durable
         self.runtime_reports = {}  # Diagnostic only; never part of a durable snapshot.
         self.persistence_uncertain = False
+        self._committed_state = (self.instance_id, self.version, {}, {})
         self.simulator_recovery = SimulatorRecovery(self, recovery_settings)
 
     async def start(self):
@@ -38,6 +39,7 @@ class FleetStore:
                 record.setdefault("control_version", record["state_version"])
                 record.setdefault("simulator_owner", None)
                 record.setdefault("simulator_checkpoint", None)
+                record.setdefault("active_charging_task", None)
             self.charging_tasks = payload.get("charging_tasks", {})
             now, tick = self.clock.now(), self.clock.monotonic()
             for record in self.vehicles.values():
@@ -45,6 +47,7 @@ class FleetStore:
                     received_at = record["received_at"]
                     record["initial_age"] = max(0, (now - received_at).total_seconds())
                     record["received_tick"] = tick
+            self._publish_committed_state()
         else:
             await self.persist()
 
@@ -84,12 +87,21 @@ class FleetStore:
                 await self.repository.save(payload)
             else:
                 await self.repository.save(payload, telemetry_sample=telemetry_sample)
+            self._publish_committed_state()
         except asyncio.CancelledError:
             self.mark_persistence_uncertain()
             raise
         except Exception as exc:
             self.mark_persistence_uncertain()
             raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN") from exc
+
+    def _publish_committed_state(self):
+        self._committed_state = (
+            self.instance_id,
+            self.version,
+            deepcopy(self.vehicles),
+            deepcopy(self.charging_tasks),
+        )
 
     async def register(self, registration):
         async with self.lock:
@@ -252,7 +264,7 @@ class FleetStore:
                 "reported_at": entry["reported_at"], "report_age_seconds": age,
                 "heartbeat_age_seconds": heartbeat_age}
 
-    def view(self, record, *, include_runtime=False):
+    def view(self, record, *, include_runtime=False, charging_tasks=None):
         telemetry = record["telemetry"]
         age = None if telemetry is None else record["initial_age"] + max(
             0, self.clock.monotonic() - record["received_tick"])
@@ -286,7 +298,8 @@ class FleetStore:
                 "telemetry_age_seconds": age, "stale": stale,
                 "active_claim": deepcopy(record["active_claim"]),
                 "active_rental": deepcopy(record["active_rental"]),
-                "active_charging_task": self._public_task(record.get("active_charging_task")),
+                "active_charging_task": self._public_task(
+                    record.get("active_charging_task"), charging_tasks),
                 "current_zone_id": record["current_zone_id"],
                 "effective_relocation_state": ("DISPATCHED" if record["active_claim"] and (
                     not telemetry or telemetry.relocation_state == "IDLE") else
@@ -302,8 +315,8 @@ class FleetStore:
                 "connectivity": "OFFLINE" if age is None or age >= self.settings.offline_seconds else "ONLINE"}
 
 
-    def _public_task(self, task_id):
-        task = self.charging_tasks.get(task_id)
+    def _public_task(self, task_id, tasks=None):
+        task = (self.charging_tasks if tasks is None else tasks).get(task_id)
         return None if task is None else {k: deepcopy(v) for k, v in task.items() if k != "requests"}
 
     async def list_charging_tasks(self):
@@ -580,10 +593,29 @@ class FleetStore:
         async with self.lock:
             return self.view(self.record(vehicle_id))
 
+    @staticmethod
+    def active_snapshot_vehicle(state):
+        """Archive stopped customer-demo identities without deleting their history."""
+        return not (
+            state["vehicle_id"].startswith("customer-ev-")
+            and state["connectivity"] == "OFFLINE"
+            and state["active_claim"] is None
+            and state["active_rental"] is None
+            and state["active_charging_task"] is None
+            and state["effective_relocation_state"] == "IDLE"
+        )
+
     async def snapshot(self, *, include_runtime=False):
-        async with self.lock:
-            self.ensure_consistent()
-            return {"instance_id": self.instance_id, "snapshot_version": self.version,
-                    "snapshot_at": self.clock.now().isoformat(),
-                    "vehicles": [self.view(record, include_runtime=include_runtime)
-                                 for record in self.vehicles.values()]}
+        self.ensure_consistent()
+        if self.lock.locked():
+            instance_id, version, records, charging_tasks = self._committed_state
+        else:
+            instance_id, version = self.instance_id, self.version
+            records, charging_tasks = self.vehicles, self.charging_tasks
+        vehicles = [self.view(record, include_runtime=include_runtime,
+                              charging_tasks=charging_tasks)
+                    for record in records.values()]
+        return {"instance_id": instance_id, "snapshot_version": version,
+                "snapshot_at": self.clock.now().isoformat(),
+                "vehicles": [state for state in vehicles
+                             if self.active_snapshot_vehicle(state)]}

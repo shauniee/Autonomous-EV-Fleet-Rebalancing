@@ -65,7 +65,7 @@ export function RentalPanel({ vehicles, zones, available }: {
       setStatus(next);
       setNotice(action === 'start'
         ? 'Rental simulator is starting. Wait for its six vehicles to register.'
-        : 'Rental simulator is stopping. Existing Fleet records remain visible.');
+        : 'Rental simulator is stopping. Idle customer EVs are archived after they go offline.');
     } catch (e) { setNotice(`Action rejected: ${e instanceof Error ? e.message : 'Unknown error'}`); }
     finally { setBusy(false); }
   }

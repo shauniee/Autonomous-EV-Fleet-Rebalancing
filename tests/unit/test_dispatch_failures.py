@@ -2,7 +2,6 @@ import asyncio
 from uuid import uuid4
 import pytest
 from fastapi import HTTPException
-from ev_fleet.contracts.demand import DemandUpdate
 from tests.dispatch_support import Cluster
 from ev_fleet.contracts.dispatch import CommandAcknowledgement, DispatchEvent
 from ev_fleet.dispatch.service import DispatchService
@@ -10,7 +9,7 @@ from tests.unit.test_persistence import MemoryRepository
 import httpx
 
 
-@pytest.mark.parametrize("failure", ["stale", "offline", "low_soc", "busy", "target_changed", "expired"])
+@pytest.mark.parametrize("failure", ["stale", "offline", "low_soc", "busy", "target_instance_changed", "expired"])
 def test_approval_revalidates_current_state(clock, failure):
     async def scenario():
         async with Cluster(clock, recommendation_ttl=120 if failure in ("stale", "offline") else 10) as cluster:
@@ -20,12 +19,13 @@ def test_approval_revalidates_current_state(clock, failure):
             if failure == "busy": await cluster.telemetry(state="RELOCATING", dispatch_id=uuid4())
             if failure in ("stale", "offline", "expired"):
                 clock.advance({"stale": 15, "offline": 30, "expired": 11}[failure])
-            if failure == "target_changed":
-                await cluster.demand.update("cbd", "demand", DemandUpdate(expected_version=0,
-                    observed_at=clock.now(), desired_available_vehicles=5))
+            if failure == "target_instance_changed":
+                cluster.demand.instance_id = str(uuid4())
             with pytest.raises(HTTPException) as caught:
                 await cluster.approve(rec)
             assert caught.value.status_code == 409
+            if failure == "target_instance_changed":
+                assert caught.value.detail == "TARGET_CHANGED"
             assert (await cluster.fleet.get("ev-1"))["active_claim"] is None
     asyncio.run(scenario())
 

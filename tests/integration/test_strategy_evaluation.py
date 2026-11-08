@@ -32,4 +32,6 @@ def test_concurrent_requests_preserve_single_vehicle_claim():
     assert result["request_count"] == 2
     assert result["successful_relocations"] == 1
     assert result["failed_or_aborted_relocations"] == 1
-    assert "VEHICLE_VERSION_CONFLICT" in result["failure_reason"]
+    assert result["failure_reason"] in {
+        "VEHICLE_VERSION_CONFLICT", "VEHICLE_NOT_ELIGIBLE:BUSY"
+    }

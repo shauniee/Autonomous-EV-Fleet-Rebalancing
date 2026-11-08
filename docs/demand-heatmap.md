@@ -201,15 +201,18 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8002/api/v1/zones/cbd/demand
 
 ## Dispatch integration and limits
 
-Changing demand after recommendation but before approval still causes TARGET_CHANGED;
-request a fresh recommendation. Once approved, a journey's destination/command is
-unchanged by subsequent demand ticks or manual updates. The heat map reflects the
-new demand and observed inbound vehicle. No automatic dispatch, cancellation or
-rerouting is introduced.
+Changing a demand or charging observation after recommendation does not move the
+destination or invalidate operator review. Approval uses the latest observation,
+and active CRDS recommendations receive a fresh benefit assessment before the Fleet
+claim is acquired. A changed zone definition or Demand service instance still causes
+TARGET_CHANGED and requires a fresh recommendation. Once approved, a journey's
+destination/command is unchanged by subsequent demand ticks or manual updates. The
+heat map reflects the new demand and observed inbound vehicle. No automatic dispatch,
+cancellation or rerouting is introduced.
 
-The original 63 tests remain unchanged. New tests cover formulas, boundaries,
-classification, deterministic ticks, concurrency, dependency failure, simulation
-lifecycle and real HTTP demand updates during a moving EV journey. See
+Tests cover formulas, boundaries, classification, deterministic ticks, concurrency,
+dependency failure, approval across observation updates, simulation lifecycle and
+real HTTP demand updates during a moving EV journey. See
 [verification evidence](demand-heatmap-verification.md) for actual outcomes and runtime limits.
 
 This capability remains in-memory, single-worker per state owner, simulation-only and

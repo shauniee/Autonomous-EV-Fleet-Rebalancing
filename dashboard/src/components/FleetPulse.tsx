@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { DispatchList, Fleet, HeatMap, Zone } from '../api/contracts';
 import type { Resource } from '../hooks/usePolling';
 
@@ -21,8 +22,22 @@ function current<T>(resource: Resource<T>, now: number,
     now - Date.parse(resource.updatedAt) < maxAgeMs;
 }
 
-function observationDescription<T>(resource: Resource<T>, liveDescription: string) {
-  return resource.error ? 'Last confirmed observation' : liveDescription;
+function useObservation(value: number | null, resource: Resource<unknown>, now: number,
+                        liveDescription: string) {
+  const [confirmed, setConfirmed] = useState<{ value: number; updatedAt: number }>();
+  const updatedAt = Date.parse(resource.updatedAt ?? '');
+  useEffect(() => {
+    if (value == null || !Number.isFinite(updatedAt)) return;
+    setConfirmed(previous => !previous || updatedAt >= previous.updatedAt ? { value, updatedAt } : previous);
+  }, [value, updatedAt]);
+
+  const observation = value != null && (!confirmed || updatedAt >= confirmed.updatedAt) ?
+    { value, updatedAt } : confirmed;
+  const age = observation ? now - observation.updatedAt : NaN;
+  return {
+    value: observation && age >= 0 && age < MAX_OBSERVATION_AGE_MS ? observation.value : null,
+    description: value == null || resource.error ? 'Last confirmed observation' : liveDescription,
+  };
 }
 
 function Metric({ label, value, description, tone }: {
@@ -48,16 +63,21 @@ export function FleetPulse({ fleet, heat, dispatches, now, rentalDemandLevel }: 
     zones?.filter(zone => rentalDemandLevel(zone) === 'Critical').length ?? null;
   const open = records?.filter(d => !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).length ?? null;
 
+  const reporting = useObservation(online, fleet, now, 'Fresh telemetry');
+  const eligible = useObservation(available, fleet, now, 'Eligible availability state');
+  const unresolved = useObservation(open, dispatches, now, 'Including unresolved outcomes');
+  const hotspots = useObservation(critical, heat, now, 'Demand hotspots');
+
   return <section className="fleet-pulse" aria-labelledby="fleet-pulse-title">
     <div className="fleet-pulse-heading">
       <h2 id="fleet-pulse-title">Operational snapshot</h2>
       <p>Current service observations. Missing data is never shown as zero.</p>
     </div>
     <dl className="fleet-pulse-grid">
-      <Metric label="Reporting EVs" value={online} description={observationDescription(fleet, 'Fresh telemetry')}/>
-      <Metric label="Available EVs" value={available} description={observationDescription(fleet, 'Eligible availability state')} tone="accent"/>
-      <Metric label="Open dispatches" value={open} description={observationDescription(dispatches, 'Including unresolved outcomes')}/>
-      <Metric label="Critical zones" value={critical} description={observationDescription(heat, 'Demand hotspots')} tone={critical ? 'warning' : undefined}/>
+      <Metric label="Reporting EVs" {...reporting}/>
+      <Metric label="Available EVs" {...eligible} tone="accent"/>
+      <Metric label="Open dispatches" {...unresolved}/>
+      <Metric label="Critical zones" {...hotspots} tone={hotspots.value ? 'warning' : undefined}/>
     </dl>
   </section>;
 }

@@ -227,14 +227,25 @@ class DataMallClient:
 
 
 async def refresh_feed(store, provider, name):
-    try:
-        # Pagination and download together have a bounded refresh deadline.
-        records = await asyncio.wait_for(getattr(provider, name)(), timeout=45)
-        now = store.clock.now()
-        max_age = getattr(store.settings, f"{name}_max_age_seconds")
+    async def load_snapshot():
         convert = parking_sites if name == "parking" else charging_sites
-        sites = convert(records, now, max_age)
-        await store.replace_feed(name, sites, now)
+        max_age = getattr(store.settings, f"{name}_max_age_seconds")
+        for attempt in range(2):
+            try:
+                records = await getattr(provider, name)()
+                observed_at = store.clock.now()
+                return convert(records, observed_at, max_age), observed_at
+            except DataMallError as exc:
+                if (name == "parking" and str(exc) == "LTA_DUPLICATE_IDENTITY"
+                        and attempt == 0):
+                    continue
+                raise
+        raise AssertionError("unreachable")
+
+    try:
+        # Pagination, validation and the one clean retry share one deadline.
+        sites, observed_at = await asyncio.wait_for(load_snapshot(), timeout=45)
+        await store.replace_feed(name, sites, observed_at)
     except (DataMallError, asyncio.TimeoutError) as exc:
         code = str(exc) if isinstance(exc, DataMallError) else "LTA_TIMEOUT"
         await store.feed_failed(name, code)

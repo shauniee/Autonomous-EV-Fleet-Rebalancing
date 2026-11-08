@@ -104,3 +104,79 @@ def test_turning_simulation_off_preserves_existing_values(clock):
         assert await simulator.tick() == 0
         assert await store.snapshot() == before
     asyncio.run(scenario())
+
+
+def test_start_and_pause_control_one_simulation_loop(clock):
+    async def scenario():
+        store = DemandStore(clock)
+        await seed(store)
+        simulator = DemandSimulator(store, DemandSettings(
+            update_interval_seconds=.01, min_demand=2, max_demand=2))
+
+        status = await simulator.status()
+        assert status["enabled"] is False and status["running"] is False
+        assert status["tick_count"] == 0
+
+        first, second = await asyncio.gather(simulator.start(), simulator.start())
+        assert first["enabled"] is True and second["enabled"] is True
+        assert first["tick_count"] == second["tick_count"] == 1
+        assert (await simulator.status())["running"] is True
+
+        await simulator.pause()
+        paused = await simulator.status()
+        snapshot = await store.snapshot()
+        assert paused["enabled"] is False and paused["running"] is False
+        await asyncio.sleep(.03)
+        assert await store.snapshot() == snapshot
+
+        resumed = await simulator.start()
+        assert resumed["tick_count"] == 2 and resumed["running"] is True
+        await simulator.close()
+        assert (await simulator.status())["running"] is False
+
+    asyncio.run(scenario())
+
+
+def test_pause_waits_for_an_in_progress_tick(clock, monkeypatch):
+    async def scenario():
+        store = DemandStore(clock)
+        await seed(store)
+        simulator = DemandSimulator(store, DemandSettings(update_interval_seconds=.01))
+        await simulator.start()
+        entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def slow_tick(_simulator):
+            entered.set()
+            await release.wait()
+            completed.set()
+            return 0
+
+        monkeypatch.setattr(store, "simulation_tick", slow_tick)
+        await asyncio.wait_for(entered.wait(), 1)
+        pause = asyncio.create_task(simulator.pause())
+        await asyncio.sleep(0)
+        assert not pause.done()
+        release.set()
+        await asyncio.wait_for(pause, 1)
+        assert completed.is_set()
+        assert (await simulator.status())["running"] is False
+
+    asyncio.run(scenario())
+
+
+def test_failed_initial_tick_leaves_simulation_paused(clock, monkeypatch):
+    async def scenario():
+        store = DemandStore(clock)
+        await seed(store)
+        simulator = DemandSimulator(store, DemandSettings())
+
+        async def fail(_simulator):
+            raise RuntimeError("persistence failed")
+
+        monkeypatch.setattr(store, "simulation_tick", fail)
+        with pytest.raises(RuntimeError, match="persistence failed"):
+            await simulator.start()
+        status = await simulator.status()
+        assert status["enabled"] is False and status["running"] is False
+
+    asyncio.run(scenario())

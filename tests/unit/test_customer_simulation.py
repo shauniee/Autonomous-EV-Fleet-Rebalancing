@@ -1,9 +1,26 @@
 import random
+import asyncio
+from datetime import timedelta
+from uuid import uuid4
+
 import pytest
 
+from ev_fleet.contracts.rentals import RentalStart
+from ev_fleet.contracts.vehicles import TelemetryUpdate, VehicleRegistration
+from ev_fleet.fleet.store import FleetStore
 from ev_fleet.simulations.customer import (
     ZONES, PICKUP_WEIGHTS, RentalMovement, choose_destination, zone_for,
 )
+
+
+async def reporting_vehicle(store, clock, vehicle_id):
+    await store.register(VehicleRegistration(
+        vehicle_id=vehicle_id, battery_capacity_kwh=60,
+        consumption_kwh_per_km=.18))
+    session = await store.session(vehicle_id, uuid4())
+    await store.telemetry(vehicle_id, TelemetryUpdate(
+        session_id=session["session_id"], sequence=1, observed_at=clock.now(),
+        position=ZONES["bishan"], soc_pct=80))
 
 
 def test_scenario_destinations_are_seeded_and_not_same_as_origin():
@@ -82,6 +99,43 @@ def test_customer_ev_relocation_respects_road_speed_cap(traffic_cap, distance):
     motion.advance(60, 30, traffic_speed_cap_kph=traffic_cap)
     assert motion.distance == pytest.approx(distance)
     assert motion.soc_pct == pytest.approx(85 - 100 * distance * .18 / 60)
+
+
+def test_offline_idle_customer_demo_vehicle_is_archived_from_active_snapshots(clock):
+    async def exercise():
+        store = FleetStore(clock=clock)
+        await reporting_vehicle(store, clock, "customer-ev-01")
+        await reporting_vehicle(store, clock, "ev-moving-01")
+        assert {row["vehicle_id"] for row in (await store.snapshot())["vehicles"]} == {
+            "customer-ev-01", "ev-moving-01"}
+
+        clock.advance(store.settings.offline_seconds)
+        active = await store.snapshot(include_runtime=True)
+        assert [row["vehicle_id"] for row in active["vehicles"]] == ["ev-moving-01"]
+        archived = await store.get("customer-ev-01")
+        assert archived["connectivity"] == "OFFLINE"
+        assert archived["effective_availability"] == "UNAVAILABLE"
+
+    asyncio.run(exercise())
+
+
+def test_offline_customer_vehicle_with_active_rental_stays_visible(clock):
+    async def exercise():
+        store = FleetStore(clock=clock)
+        await reporting_vehicle(store, clock, "customer-ev-01")
+        state = await store.get("customer-ev-01")
+        await store.start_rental("customer-ev-01", RentalStart(
+            rental_id=uuid4(), request_id=uuid4(),
+            expected_version=state["state_version"],
+            expected_return_zone_id="cbd",
+            expected_end_at=clock.now() + timedelta(hours=1)))
+
+        clock.advance(store.settings.offline_seconds)
+        active = await store.snapshot()
+        assert [row["vehicle_id"] for row in active["vehicles"]] == ["customer-ev-01"]
+        assert active["vehicles"][0]["active_rental"] is not None
+
+    asyncio.run(exercise())
 
 
 def test_customer_rental_http_lifecycle_and_relocation_exclusion():

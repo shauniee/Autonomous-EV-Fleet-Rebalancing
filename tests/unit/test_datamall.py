@@ -173,6 +173,50 @@ def test_repeated_pagination_is_rejected():
     asyncio.run(scenario())
 
 
+def test_transient_duplicate_parking_snapshot_retries_the_complete_feed(clock):
+    class Provider:
+        calls = 0
+
+        async def parking(self):
+            self.calls += 1
+            if self.calls == 1:
+                return [parking_row(), parking_row()]
+            return [parking_row()]
+
+    async def scenario():
+        store = live_store(clock)
+        provider = Provider()
+        await refresh_feed(store, provider, "parking")
+        snapshot = await store.view()
+        assert provider.calls == 2
+        assert len(snapshot.facilities) == 1
+        assert snapshot.feeds[0].status == "FRESH"
+        assert snapshot.feeds[0].error_code is None
+
+    asyncio.run(scenario())
+
+
+def test_persistent_duplicate_parking_snapshot_still_fails_closed(clock):
+    class Provider:
+        calls = 0
+
+        async def parking(self):
+            self.calls += 1
+            return [parking_row(), parking_row()]
+
+    async def scenario():
+        store = live_store(clock)
+        provider = Provider()
+        await refresh_feed(store, provider, "parking")
+        snapshot = await store.view()
+        assert provider.calls == 2
+        assert snapshot.facilities == []
+        assert snapshot.feeds[0].status == "ERROR"
+        assert snapshot.feeds[0].error_code == "LTA_DUPLICATE_IDENTITY"
+
+    asyncio.run(scenario())
+
+
 def test_refresh_failure_retains_last_observation_then_excludes_stale_data(clock):
     async def scenario():
         store = live_store(clock)

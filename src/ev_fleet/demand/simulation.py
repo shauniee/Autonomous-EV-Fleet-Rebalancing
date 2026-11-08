@@ -11,6 +11,9 @@ class DemandSimulator:
         self.last_tick_at = None
         self.last_error = None
         self.running = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._task = None
+        self._stop_event = asyncio.Event()
 
     def next_value(self, current):
         cfg = self.settings
@@ -26,7 +29,13 @@ class DemandSimulator:
         try:
             while self.settings.simulation_enabled:
                 # Startup performs the initial tick before serving. Subsequent ticks wait.
-                await asyncio.sleep(self.settings.update_interval_seconds)
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), self.settings.update_interval_seconds)
+                except asyncio.TimeoutError:
+                    pass
+                if self._stop_event.is_set() or not self.settings.simulation_enabled:
+                    break
                 try:
                     await self.tick()
                     self.last_error = None
@@ -35,6 +44,50 @@ class DemandSimulator:
                     logging.exception("demand simulation tick failed")
         finally:
             self.running = False
+
+    async def _start(self, persist_choice):
+        async with self._lifecycle_lock:
+            if self._task is not None and not self._task.done():
+                return await self.status()
+            self.settings.simulation_enabled = True
+            self._stop_event = asyncio.Event()
+            try:
+                await self.tick()
+                if persist_choice:
+                    await self.store.set_simulation_enabled(True)
+            except Exception:
+                self.settings.simulation_enabled = False
+                self._stop_event.set()
+                raise
+            self.running = True
+            self._task = asyncio.create_task(self.run())
+            return await self.status()
+
+    async def start(self):
+        return await self._start(persist_choice=True)
+
+    async def resume_if_enabled(self):
+        if not self.store.simulation_enabled:
+            return await self.status()
+        return await self._start(persist_choice=False)
+
+    async def _stop(self, persist_choice):
+        async with self._lifecycle_lock:
+            self.settings.simulation_enabled = False
+            task, self._task = self._task, None
+            self._stop_event.set()
+            if task is not None and not task.done():
+                await task
+            self.running = False
+            if persist_choice:
+                await self.store.set_simulation_enabled(False)
+            return await self.status()
+
+    async def pause(self):
+        return await self._stop(persist_choice=True)
+
+    async def close(self):
+        await self._stop(persist_choice=False)
 
     async def status(self):
         snapshot = await self.store.composition_snapshot()

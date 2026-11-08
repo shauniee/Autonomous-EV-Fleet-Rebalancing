@@ -225,7 +225,15 @@ class DispatchService:
         target, fleet = await asyncio.gather(
             request_json(self.client, "GET", f"{self.settings.demand_url}/api/v1/zones/{recommendation.target.zone_id}", model=ZoneState),
             request_json(self.client, "GET", f"{self.settings.fleet_url}/api/v1/vehicles", model=FleetSnapshot))
-        if target != recommendation.target:
+        # Demand and charging observations are expected to change while an
+        # operator reviews a recommendation. They do not move the destination.
+        # Reject only when the zone definition/source itself changed; the
+        # current observations are assessed below (and CRDS revalidates the
+        # move's benefit before a claim is acquired).
+        if (target.instance_id != recommendation.target.instance_id
+                or target.zone_id != recommendation.target.zone_id
+                or target.name != recommendation.target.name
+                or target.position != recommendation.target.position):
             raise HTTPException(409, "TARGET_CHANGED")
         if fleet.instance_id != recommendation.fleet_snapshot.instance_id:
             raise HTTPException(409, "FLEET_INSTANCE_CHANGED")

@@ -3,8 +3,9 @@ from contextlib import AsyncExitStack
 from unittest.mock import patch
 from tests.routing_fixture import fixture_driving_route
 from uuid import uuid4
+import os
 import httpx
-from ev_fleet.common.settings import Settings, DispatchSettings
+from ev_fleet.common.settings import Settings, DispatchSettings, CrdsSettings
 from ev_fleet.contracts.vehicles import VehicleRegistration, TelemetryUpdate
 from ev_fleet.contracts.dispatch import DispatchApproval
 from ev_fleet.fleet.store import FleetStore
@@ -39,10 +40,13 @@ class Cluster:
             "ev_fleet.dispatch.service.driving_route", new=fixture_driving_route))
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(self.route))
         await self.stack.enter_async_context(self.client)
+        crds = (CrdsSettings.from_env() if "CRDS_MODE" in os.environ
+                else CrdsSettings(mode="DISABLED", dispatch_url="http://dispatch.test"))
         self.apps = {"fleet.test": fleet_app(self.fleet), "demand.test": demand_app(self.demand),
             "rebalancing.test": rebalancing_app(Settings(fleet_url=self.config.fleet_url,
                 demand_url=self.config.demand_url, facilities_url=self.config.facilities_url,
-                recommendation_ttl_seconds=self.recommendation_ttl), self.client, self.clock),
+                recommendation_ttl_seconds=self.recommendation_ttl), self.client, self.clock,
+                crds_settings=crds),
             "dispatch.test": dispatch_app(self.config, self.client, self.clock, background=False),
             "facilities.test": facilities_app(self.facilities)}
         self.transports = {host: httpx.ASGITransport(app=app) for host, app in self.apps.items()}
