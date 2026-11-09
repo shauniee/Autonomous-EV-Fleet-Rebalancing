@@ -22,7 +22,8 @@ class SetupLocalTests(unittest.TestCase):
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", str(setup),
             ]
-            subprocess.run(command, check=True, capture_output=True, text=True, timeout=90)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             venv_python = project / ".venv" / "Scripts" / "python.exe"
             using_process = subprocess.Popen(
                 [str(venv_python), "-c", "import time; time.sleep(60)"],

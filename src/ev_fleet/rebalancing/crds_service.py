@@ -125,8 +125,9 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if inputs.issues:
         return defer(",".join(inputs.issues))
     try:
-        futures = build_futures(inputs, target_zone_id, settings, expand_age=expand_age,
-                                min_reserve_pct=policy.min_reserve_pct)
+        futures = await asyncio.to_thread(
+            build_futures, inputs, target_zone_id, settings, expand_age=expand_age,
+            min_reserve_pct=policy.min_reserve_pct)
     except ValueError as exc:
         return defer(str(exc), "INCOMPLETE_INPUTS")
     metadata.scenario_count = len(futures)
@@ -225,7 +226,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                         or estimate.origin != vehicle.telemetry.position):
                     raise ValueError("ROUTE_ESTIMATE_IDENTITY_CHANGED")
                 route = estimate.route
-            evaluation = assess_traffic([p.model_dump() for p in route.geometry],
+            evaluation = await asyncio.to_thread(
+                assess_traffic, [p.model_dump() for p in route.geometry],
                 route.distance_km, route.duration_seconds, traffic, inputs.evaluated_at)
             if evaluation["blocked"]:
                 return VehicleDecision(outcome="EXCLUDED", reason="ROAD_ROUTE_BLOCKED",
@@ -250,8 +252,9 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             modeled_route = route if route.traffic_assessment is not None else route.model_copy(update={
                 "duration_seconds": evaluation["estimated_duration_seconds"] or route.duration_seconds,
                 "traffic_assessment": evaluation})
-            minutes = travel_minutes(modeled_route, traffic, inputs.evaluated_at,
-                                     time_scale=settings.simulation_time_scale)
+            minutes = await asyncio.to_thread(
+                travel_minutes, modeled_route, traffic, inputs.evaluated_at,
+                time_scale=settings.simulation_time_scale)
             origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
             outcomes = {}
             for future in futures:

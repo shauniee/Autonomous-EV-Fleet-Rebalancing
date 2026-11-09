@@ -17,7 +17,7 @@ if [[ "$mode" != "--connect-only" ]]; then
     command -v "$tool" >/dev/null || { echo "Required command missing: $tool" >&2; exit 1; }
   done
   python3 scripts/render_facilities_secret.py --check .env
-  python3 scripts/render_facilities_secret.py --routing --check .env
+  python3 scripts/render_facilities_secret.py --routing --file-only --check .env
   traffic_settings=$(python3 scripts/render_facilities_secret.py --traffic-config .env | python3 -c '
 import json
 import sys
@@ -37,7 +37,7 @@ print(settings["TRAFFIC_SOURCE"], settings["TRAFFIC_SIMULATION_ENABLED"])
   kubectl --context docker-desktop apply -f k8s/namespace.yaml
   kubectl --context docker-desktop wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
   python3 scripts/render_facilities_secret.py .env | kubectl --context docker-desktop apply -f -
-  python3 scripts/render_facilities_secret.py --routing .env | kubectl --context docker-desktop apply -f -
+  python3 scripts/render_facilities_secret.py --routing --file-only .env | kubectl --context docker-desktop apply -f -
   python3 scripts/render_facilities_secret.py --traffic-control .env | kubectl --context docker-desktop apply -f -
   # Apply the traffic settings with the new pod templates so consumers start
   # with the configured provider on their first rollout.

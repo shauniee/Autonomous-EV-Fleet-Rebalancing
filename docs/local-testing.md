@@ -10,7 +10,7 @@ Then run this from VS Code PowerShell:
 
 The runner runs the full local Python pytest suite, dashboard Vitest tests and dashboard TypeScript build, and simulation console TypeScript build. It automatically runs npm ci when a frontend node_modules directory is absent. It exits 0 on success, nonzero on the first failure, with console [PASS]/[FAIL] only; no XML or HTML report file.
 
-The script temporarily removes TELEMETRY_TEST_DATABASE_URL so default backend tests cannot use an existing PostgreSQL connection. The dedicated PostgreSQL test will be skipped by pytest unless a disposable database is explicitly provisioned.
+Pytest clears inherited deployment settings before it collects tests. Its subprocess fixtures use isolated loopback endpoints and ephemeral service state. The PostgreSQL telemetry check requires an explicit `--telemetry-postgres` flag and `TELEMETRY_TEST_DATABASE_URL` for a disposable `twin_history_test` database on a numeric loopback address and port. The infrastructure workflow provisions this database for the telemetry job.
 
 ## Full infrastructure verification
 

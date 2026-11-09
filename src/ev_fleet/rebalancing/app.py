@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from uuid import uuid4, UUID
 import os
@@ -54,9 +54,12 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
 
     @asynccontextmanager
     async def lifespan(app):
-        await store.start()
-        await batch_store.start()
-        try:
+        async with AsyncExitStack() as cleanup:
+            for state in (store, batch_store):
+                state.repository.enable_recovery_exit()
+                cleanup.callback(state.repository.disable_recovery_exit)
+                cleanup.push_async_callback(state.close)
+                await state.start()
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
                 app.state.client = client or owned
                 # In Redis mode Rebalancing NEVER calls the LTA API. A separate,
@@ -85,9 +88,6 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                         await asyncio.gather(traffic_task, return_exceptions=True)
                     if isinstance(monitor, RedisTrafficReader):
                         await monitor.aclose()
-        finally:
-            await store.close()
-            await batch_store.close()
 
     app.router.lifespan_context = lifespan
 
@@ -232,8 +232,9 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
         # rather than fetching a sampled 800-link map feed and guessing locally.
         traffic = app.state.traffic_scenarios.merged_snapshot(
             app.state.traffic_monitor.cached_snapshot())
-        return assess_traffic([p.model_dump() for p in body.geometry],
-                              body.distance_km, body.duration_seconds, traffic, clock.now())
+        return await asyncio.to_thread(
+            assess_traffic, [p.model_dump() for p in body.geometry],
+            body.distance_km, body.duration_seconds, traffic, clock.now())
 
     @app.get("/api/v1/traffic/cache-status")
     async def traffic_cache_status():

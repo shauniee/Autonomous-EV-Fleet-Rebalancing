@@ -4,9 +4,11 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from uuid import uuid4
 import httpx
 import pytest
+from scripts.isolated_test_environment import service_test_environment
 
 
 @pytest.fixture
@@ -21,7 +23,9 @@ def relocation_cluster(tmp_path):
             sock.close()
     urls = [f"http://127.0.0.1:{port}" for port in ports[:4]]
     health_ports = ports[4:]
-    env = dict(os.environ, DATABASE_URL="", CRDS_MODE="DISABLED", FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2],
+    env = service_test_environment(Path(__file__).resolve().parents[2],
+               FLEET_URL=urls[0], DEMAND_URL=urls[1], REBALANCING_URL=urls[2], DISPATCH_URL=urls[3],
+               ROUTING_PROVIDER="ONEMAP", ONEMAP_ACCESS_TOKEN="offline-test-fixture",
                RECONCILE_INTERVAL_SECONDS="0.1", STALE_SECONDS="5", OFFLINE_SECONDS="10",
                RECOMMENDATION_TTL_SECONDS="10", ACK_TIMEOUT_SECONDS="3", PROGRESS_TIMEOUT_SECONDS="5")
     processes, logs = [], []

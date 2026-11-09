@@ -12,11 +12,15 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments, [string]$Fail
     if ($LASTEXITCODE -ne 0) { throw $FailureMessage }
 }
 
-function Test-Python([string]$Executable) {
+function Test-Python([string]$Executable, [switch]$RequireWindowsVenvLayout) {
     if (-not (Test-Path -LiteralPath $Executable)) { return $false }
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $Executable
-    $startInfo.Arguments = '-c "import sys"'
+    $startInfo.Arguments = if ($RequireWindowsVenvLayout) {
+        '-c "import pathlib, sysconfig; raise SystemExit(pathlib.Path(sysconfig.get_path(''scripts'')).name.lower() != ''scripts'')"'
+    } else {
+        '-c "import sys"'
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -47,7 +51,9 @@ function Test-SystemPythonCandidate([string]$Candidate) {
     if ($candidatePath.IndexOf('\WindowsApps\', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
         return $false
     }
-    return Test-Python $candidatePath
+    # POSIX-layout interpreters on Windows can run Python but create bin/python
+    # environments that this Windows setup and its callers cannot use.
+    return Test-Python $candidatePath -RequireWindowsVenvLayout
 }
 
 function Resolve-SystemPython {
@@ -163,7 +169,13 @@ if (Test-Path -LiteralPath $requirements) {
     throw "Neither requirements.txt nor pyproject.toml exists at the project root."
 }
 
-$expectedHash = (Get-FileHash -LiteralPath $dependencySource -Algorithm SHA256).Hash
+$hasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $digest = $hasher.ComputeHash([IO.File]::ReadAllBytes($dependencySource))
+    $expectedHash = [BitConverter]::ToString($digest).Replace("-", "")
+} finally {
+    $hasher.Dispose()
+}
 $installedHash = if (Test-Path -LiteralPath $markerPath) {
     (Get-Content -LiteralPath $markerPath -Raw).Trim()
 } else {

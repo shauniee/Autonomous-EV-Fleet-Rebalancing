@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+from threading import Event
 from time import perf_counter
 
 import httpx
@@ -27,12 +28,17 @@ async def evaluate_candidates(client, settings, epoch_id, futures, moves, parame
     if timeout_seconds <= 0:
         return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
     if settings.execution_mode == "LOCAL":
+        stop = Event()
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(evaluate_moves, futures, moves, parameters),
+                asyncio.to_thread(evaluate_moves, futures, moves, parameters, cancelled=stop.is_set),
                 timeout=timeout_seconds - (perf_counter() - start))
         except asyncio.TimeoutError:
             return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
+        finally:
+            # Cancelling to_thread only cancels the awaiter. The scoring loop
+            # must stop itself so abandoned requests release the CPU.
+            stop.set()
         if perf_counter() - start > timeout_seconds:
             return done(CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE"))
         return done(result)
@@ -82,10 +88,16 @@ async def evaluate_candidates(client, settings, epoch_id, futures, moves, parame
                 stats["retries"] += 1
                 await asyncio.sleep(.05)
 
+    pending = [asyncio.create_task(request(url, task)) for url, task in tasks]
     try:
-        replies = await asyncio.wait_for(asyncio.gather(*(request(url, task) for url, task in tasks)), timeout_seconds)
+        replies = await asyncio.wait_for(asyncio.gather(*pending), timeout_seconds)
     except (asyncio.TimeoutError, httpx.HTTPError, ValueError):
         return done(CrdsEvaluation(decision="DEFER", reason_code="WORKER_RESULTS_INCOMPLETE"))
+    finally:
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
     grouped = {}
     for reply in replies:
         for gain in reply.ranked_candidates:

@@ -58,15 +58,15 @@ spec:
               path: /health/live
               port: http
             periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
-              cpu: 50m
-              memory: 96Mi
+              cpu: 250m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: 1000m
+              memory: 512Mi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -209,21 +209,21 @@ spec:
               path: /health/ready
               port: http
             periodSeconds: 5
-            timeoutSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health/live
               port: http
             periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
-              cpu: 50m
+              cpu: 250m
               memory: 128Mi
             limits:
-              cpu: 500m
+              cpu: 1000m
               memory: 512Mi
 ---
 apiVersion: apps/v1

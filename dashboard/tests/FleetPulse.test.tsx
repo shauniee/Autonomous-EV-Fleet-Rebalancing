@@ -24,7 +24,7 @@ describe('operational dashboard snapshot', () => {
       fleet: { data: makeFleet(), updatedAt },
       heat: { data: makeHeat(), updatedAt },
       dispatches: { data: { dispatches: [makeDispatch()] }, updatedAt },
-      rentalDemandLevel,
+      rentalDemandLevel: classifyDemand,
       now,
     };
     const view = render(<FleetPulse {...props}/>);
@@ -49,12 +49,12 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: makeFleet(), updatedAt }}
       heat={{ data: makeHeat(), updatedAt }}
       dispatches={{ data: { dispatches: [makeDispatch()] }, updatedAt }}
-      rentalDemandLevel={rentalDemandLevel} now={Date.now()}/>);
+      rentalDemandLevel={classifyDemand} now={Date.now()}/>);
     const missingSnapshot = () => <FleetPulse
       fleet={{ error: 'Connection interrupted' }}
       heat={{ error: 'Connection interrupted' }}
       dispatches={{ error: 'Connection interrupted' }}
-      rentalDemandLevel={rentalDemandLevel} now={Date.now()}/>;
+      rentalDemandLevel={classifyDemand} now={Date.now()}/>;
 
     vi.advanceTimersByTime(1000);
     view.rerender(missingSnapshot());
@@ -84,7 +84,7 @@ describe('operational dashboard snapshot', () => {
       fleet={{ data: makeFleet(), updatedAt }}
       heat={{ data: makeHeat(), updatedAt }}
       dispatches={{ data: { dispatches: [makeDispatch()] }, updatedAt }}
-      rentalDemandLevel={rentalDemandLevel} now={Date.now()}/>);
+      rentalDemandLevel={classifyDemand} now={Date.now()}/>);
     vi.advanceTimersByTime(120000);
     const fresh = new Date().toISOString();
     const emptyFleet = { ...makeFleet(), vehicles: [] };
@@ -93,7 +93,7 @@ describe('operational dashboard snapshot', () => {
       fleet: { data: emptyFleet, updatedAt: fresh },
       heat: { data: partialHeat, updatedAt: fresh },
       dispatches: { error: 'Connection interrupted' },
-      rentalDemandLevel,
+      rentalDemandLevel: classifyDemand,
       now: Date.now(),
     };
     view.rerender(<FleetPulse {...props}/>);

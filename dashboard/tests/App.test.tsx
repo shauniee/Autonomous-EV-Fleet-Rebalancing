@@ -702,7 +702,7 @@ describe('CRDS recommendation explanations', () => {
     await selectAndRecommend();
     const result = screen.getByTestId('recommendation');
     expect(result).toHaveTextContent('Assessment unavailable');
-    expect(result).toHaveTextContent('could not access the routing service');
+    expect(result).toHaveTextContent('OneMap routing credentials were rejected or are missing.');
     expect(screen.getByRole('button', { name: 'Request fresh recommendation' })).toBeEnabled();
     fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
     expect(result).toHaveTextContent('EVs with incomplete assessments (1)');

@@ -34,13 +34,43 @@ try {
     Require-Tool "npm.cmd"
     $prefix = if ($python -eq "py") { @("-3") } else { @() }
 
-    # Never accidentally aim the PostgreSQL integration test at a live DB.
-    $oldDatabase = [Environment]::GetEnvironmentVariable("TELEMETRY_TEST_DATABASE_URL", "Process")
-    [Environment]::SetEnvironmentVariable("TELEMETRY_TEST_DATABASE_URL", $null, "Process")
+    # Isolate local Python tests from configured PostgreSQL databases.
+    # Never accidentally run default tests against the live EV Fleet database.
+
+    $oldDatabase = [Environment]::GetEnvironmentVariable(
+        "TELEMETRY_TEST_DATABASE_URL", "Process"
+    )
+
+    $oldDatabaseUrl = [Environment]::GetEnvironmentVariable(
+        "DATABASE_URL", "Process"
+    )
+    $oldPytestOptions = [Environment]::GetEnvironmentVariable("PYTEST_ADDOPTS", "Process")
+
     try {
-        Run-Checked "Python backend tests" $python ($prefix + @("-m", "pytest", "-q"))
+        # Temporarily remove database URLs for the default Python test suite.
+        [Environment]::SetEnvironmentVariable(
+            "TELEMETRY_TEST_DATABASE_URL", $null, "Process"
+        )
+
+        [Environment]::SetEnvironmentVariable(
+            "DATABASE_URL", $null, "Process"
+        )
+        [Environment]::SetEnvironmentVariable("PYTEST_ADDOPTS", $null, "Process")
+
+        Run-Checked "Python backend tests" $python (
+            $prefix + @("-m", "pytest", "-q")
+        )
+
     } finally {
-        [Environment]::SetEnvironmentVariable("TELEMETRY_TEST_DATABASE_URL", $oldDatabase, "Process")
+        # Restore the original environment even if tests fail.
+        [Environment]::SetEnvironmentVariable(
+            "TELEMETRY_TEST_DATABASE_URL", $oldDatabase, "Process"
+        )
+
+        [Environment]::SetEnvironmentVariable(
+            "DATABASE_URL", $oldDatabaseUrl, "Process"
+        )
+        [Environment]::SetEnvironmentVariable("PYTEST_ADDOPTS", $oldPytestOptions, "Process")
     }
 
     if (-not (Test-Path "dashboard/node_modules")) {

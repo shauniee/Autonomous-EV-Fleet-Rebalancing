@@ -15,7 +15,7 @@ def test_local_evaluation_allows_another_coroutine_to_run(
 ) -> None:
     started, release, finished = Event(), Event(), Event()
 
-    def blocking_evaluate(futures, moves, parameters):
+    def blocking_evaluate(futures, moves, parameters, **kwargs):
         started.set()
         release.wait(timeout=1)
         finished.set()
@@ -43,10 +43,16 @@ def test_local_evaluation_allows_another_coroutine_to_run(
 def test_local_evaluation_returns_deadline_before_blocking_work_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    release, finished = Event(), Event()
+    release, finished, cancelled = Event(), Event(), Event()
 
-    def blocking_evaluate(futures, moves, parameters):
-        release.wait(timeout=1)
+    def blocking_evaluate(futures, moves, parameters, **kwargs):
+        stop = kwargs.get("cancelled", lambda: False)
+        for _ in range(100):
+            if stop():
+                cancelled.set()
+                break
+            if release.wait(timeout=.01):
+                break
         finished.set()
         return CrdsEvaluation(decision="HOLD", reason_code="NO_USEFUL_MOVE")
 
@@ -59,7 +65,7 @@ def test_local_evaluation_returns_deadline_before_blocking_work_finishes(
                 CrdsParameters(), timeout_seconds=.01)
             assert result.decision == "DEFER"
             assert result.reason_code == "DECISION_DEADLINE"
-            assert not finished.is_set(), "deadline waited for blocking evaluation"
+            assert await asyncio.to_thread(cancelled.wait, .5), "timed-out evaluator kept running"
             assert stats["mode"] == "LOCAL"
         finally:
             release.set()

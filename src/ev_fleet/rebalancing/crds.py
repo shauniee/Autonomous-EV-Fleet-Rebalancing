@@ -5,6 +5,7 @@ must be included at its modeled origin throughout those baseline trajectories.
 EVs outside all demand zones have no origin-zone stock to debit. Future
 generation and integration with Fleet eligibility are separate responsibilities.
 """
+from collections.abc import Callable
 from math import ceil, fsum
 
 from ev_fleet.contracts.crds import (
@@ -12,8 +13,17 @@ from ev_fleet.contracts.crds import (
     CrdsEvaluation,
     CrdsFuture,
     CrdsMove,
+    CrdsMoveOutcome,
     CrdsParameters,
+    CrdsZoneTrajectory,
 )
+
+
+def _arrival_slot(outcome: CrdsMoveOutcome, parameters: CrdsParameters) -> int:
+    ready_minutes = outcome.arrival_minutes + outcome.availability_delay_minutes
+    if ready_minutes >= parameters.horizon_minutes:
+        return parameters.slot_count
+    return ceil(ready_minutes / parameters.slot_minutes)
 
 
 def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -> CrdsFuture:
@@ -21,7 +31,6 @@ def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -
     for trajectory in future.zones.values():
         if len(trajectory.desired_stock) != parameters.slot_count:
             raise ValueError("future trajectories must match the configured horizon")
-    arrival_slot = parameters.slot_count
     if (move.target_zone_id not in future.zones
             or move.origin_zone_id is not None and move.origin_zone_id not in future.zones):
         raise ValueError("move origin and target must exist in the future")
@@ -30,17 +39,14 @@ def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -
     if move.origin_zone_id is not None and any(
             stock < 1 for stock in future.zones[move.origin_zone_id].usable_stock):
         raise ValueError("baseline origin stock must include the candidate EV in every slot")
-    outcome = move.outcomes[future.future_id]
-    ready_minutes = outcome.arrival_minutes + outcome.availability_delay_minutes
-    if ready_minutes < parameters.horizon_minutes:
-        arrival_slot = ceil(ready_minutes / parameters.slot_minutes)
+    arrival = _arrival_slot(move.outcomes[future.future_id], parameters)
     zones = {}
     for zone_id, trajectory in future.zones.items():
         usable = list(trajectory.usable_stock)
         if zone_id == move.origin_zone_id:
             usable = [stock - 1 for stock in usable]
         if zone_id == move.target_zone_id:
-            usable = [stock + int(slot >= arrival_slot) for slot, stock in enumerate(usable)]
+            usable = [stock + int(slot >= arrival) for slot, stock in enumerate(usable)]
         zones[zone_id] = trajectory.model_copy(update={"usable_stock": usable})
     return future.model_copy(update={"zones": zones})
 
@@ -63,8 +69,22 @@ def shortage_score(future: CrdsFuture, parameters: CrdsParameters) -> float:
     return fsum(shortage_by_zone(future, parameters, weighted=True).values())
 
 
+def _zone_deltas(trajectory: CrdsZoneTrajectory, priority_pct: int):
+    """Prefix counts for one departure and one arrival's marginal effects."""
+    departure = [(0, 0)]
+    arrival = [(0, 0)]
+    for desired, usable in zip(trajectory.desired_stock, trajectory.usable_stock):
+        priority = (desired * priority_pct + 99) // 100
+        raw, extra = departure[-1]
+        departure.append((raw + (usable <= desired), extra + (usable <= priority)))
+        raw, extra = arrival[-1]
+        arrival.append((raw + (usable < desired), extra + (usable < priority)))
+    return departure, arrival
+
+
 def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
-                   parameters: CrdsParameters | None = None) -> CrdsEvaluation:
+                   parameters: CrdsParameters | None = None, *,
+                   cancelled: Callable[[], bool] | None = None) -> CrdsEvaluation:
     """Rank supplied moves by G and select one only above the useful-gain threshold.
 
     Missing or inconsistent coverage yields DEFER, never a partial minimum.
@@ -84,8 +104,19 @@ def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
     zones = set(futures[0].zones)
     if any(set(future.zones) != zones for future in futures):
         return CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_ZONE_COVERAGE")
-    baselines = {future.future_id: shortage_score(future, parameters) for future in futures}
+    deltas = {}
+    for future in futures:
+        if cancelled is not None and cancelled():
+            return CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE")
+        if any(len(t.desired_stock) != parameters.slot_count for t in future.zones.values()):
+            raise ValueError("future trajectories must match the configured horizon")
+        deltas[future.future_id] = {
+            zone: _zone_deltas(t, parameters.priority_coverage_pct)
+            for zone, t in future.zones.items()
+        }
     for move in moves:
+        if cancelled is not None and cancelled():
+            return CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE")
         if set(move.outcomes) != future_ids:
             return CrdsEvaluation(decision="DEFER", reason_code="MOVE_FUTURES_MISMATCH")
         if (move.target_zone_id not in zones
@@ -96,19 +127,35 @@ def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
             return CrdsEvaluation(decision="DEFER", reason_code="INCONSISTENT_ORIGIN_STOCK")
 
     ranked = []
+    zone_order = sorted(zones)
     for move in moves:
+        if cancelled is not None and cancelled():
+            return CrdsEvaluation(decision="DEFER", reason_code="DECISION_DEADLINE")
         gains = []
+        origin, target = move.origin_zone_id, move.target_zone_id
         for future in futures:
-            relocated = apply_move(future, parameters, move)
-            gain = baselines[future.future_id] - shortage_score(relocated, parameters)
-            gains.append((gain, future, relocated))
-        gain, worst, relocated = min(gains, key=lambda row: (row[0], row[1].future_id))
-        before = shortage_by_zone(worst, parameters)
-        after = shortage_by_zone(relocated, parameters)
+            by_zone = deltas[future.future_id]
+            arrival = _arrival_slot(move.outcomes[future.future_id], parameters)
+            lost = lost_priority = gained = gained_priority = 0
+            if origin is not None:
+                departures, _ = by_zone[origin]
+                # A move within one zone restores the same EV on arrival.
+                lost, lost_priority = departures[arrival if origin == target else -1]
+            if origin != target:
+                _, arrivals = by_zone[target]
+                gained = arrivals[-1][0] - arrivals[arrival][0]
+                gained_priority = arrivals[-1][1] - arrivals[arrival][1]
+            gain = parameters.slot_minutes * (gained + gained_priority - lost - lost_priority)
+            gains.append((gain, future.future_id, lost, gained))
+        gain, worst, lost, gained = min(gains)
+        changes = dict.fromkeys(zone_order, 0)
+        if origin is not None:
+            changes[origin] = lost * parameters.slot_minutes
+        changes[target] -= gained * parameters.slot_minutes
         ranked.append(CrdsCandidateGain(
             vehicle_id=move.vehicle_id, facility_id=move.facility_id,
-            worst_case_gain_vehicle_minutes=gain, worst_case_future_id=worst.future_id,
-            shortage_changes_by_zone={zone: after[zone] - before[zone] for zone in sorted(zones)},
+            worst_case_gain_vehicle_minutes=gain, worst_case_future_id=worst,
+            shortage_changes_by_zone=changes,
             worst_case_energy_required_kwh=max(
                 outcome.energy_required_kwh for outcome in move.outcomes.values())))
     ranked.sort(key=lambda row: (-row.worst_case_gain_vehicle_minutes,

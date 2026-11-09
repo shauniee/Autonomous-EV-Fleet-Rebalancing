@@ -92,13 +92,13 @@ function Render-EnvArtifact([hashtable]$Python, [string[]]$Mode = @(), [switch]$
 }
 
 function Apply-RenderedSecret([string]$Manifest, [string]$Name) {
-    $Manifest | & kubectl apply -f -
+    $Manifest | & kubectl --context docker-desktop apply -f -
     if ($LASTEXITCODE -ne 0) { throw "Unable to apply Kubernetes Secret '$Name'." }
 }
 
 function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
     if ($Kind -eq "statefulset") {
-        $replicaText = (& kubectl -n ev-fleet get statefulset $Name -o jsonpath='{.spec.replicas}') -join ""
+        $replicaText = (& kubectl --context docker-desktop -n ev-fleet get statefulset $Name -o jsonpath='{.spec.replicas}') -join ""
         if ($LASTEXITCODE -ne 0) {
             throw "Unable to inspect StatefulSet '$Name' before waiting for its rollout."
         }
@@ -113,15 +113,15 @@ function Wait-Rollout([string]$Kind, [string]$Name, [int]$Seconds = 300) {
         }
     }
     Write-Host "Waiting up to $Seconds seconds for $Kind/$Name..."
-    & kubectl -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
+    & kubectl --context docker-desktop -n ev-fleet rollout status "$Kind/$Name" "--timeout=${Seconds}s"
     if ($LASTEXITCODE -ne 0) {
         if ($Kind -eq "statefulset" -and $Name -eq "postgres") {
             Write-Warning "PostgreSQL did not become ready: check the app DB and Pod-network password authentication before restarting Fleet. Recent PostgreSQL logs:"
-            & kubectl -n ev-fleet logs postgres-0 -c postgres --tail=35
+            & kubectl --context docker-desktop -n ev-fleet logs postgres-0 -c postgres --tail=35
             Write-Warning "PostgreSQL PVC has NOT been deleted or reset."
         }
-        & kubectl -n ev-fleet get "$Kind/$Name" -o wide
-        & kubectl -n ev-fleet get pods -l "app.kubernetes.io/name=$Name" -o wide
+        & kubectl --context docker-desktop -n ev-fleet get "$Kind/$Name" -o wide
+        & kubectl --context docker-desktop -n ev-fleet get pods -l "app.kubernetes.io/name=$Name" -o wide
         throw "Rollout failed: $Kind/$Name"
     }
 }
@@ -130,14 +130,14 @@ function Assert-ExistingPostgresHealthy {
     # The Pod IP from Kubernetes is authoritative. The old hostname -i probe
     # can return a different address and fail even when Postgres readiness works.
     # A missing database or authentication rule MUST still fail closed.
-    $namespace = (& kubectl get namespace ev-fleet --ignore-not-found -o name) -join ""
+    $namespace = (& kubectl --context docker-desktop get namespace ev-fleet --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the ev-fleet namespace." }
     if (-not $namespace) { return } # Fresh install.
-    $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
+    $postgres = (& kubectl --context docker-desktop -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect PostgreSQL StatefulSet." }
     if (-not $postgres) { return } # Fresh install.
 
-    $podIp = (& kubectl -n ev-fleet get pod postgres-0 -o jsonpath='{.status.podIP}') -join ""
+    $podIp = (& kubectl --context docker-desktop -n ev-fleet get pod postgres-0 -o jsonpath='{.status.podIP}') -join ""
     if ($LASTEXITCODE -ne 0 -or -not $podIp) {
         throw "PostgreSQL preflight cannot find the postgres-0 Pod IP. Inspect: kubectl -n ev-fleet get pods -o wide. No storage was changed."
     }
@@ -153,7 +153,7 @@ function Assert-ExistingPostgresHealthy {
     $sqlCheck = 'PGPASSWORD=$POSTGRES_PASSWORD PGCONNECT_TIMEOUT=5 psql -X -qAt -w -h __POD_IP__ -U $POSTGRES_USER -d $POSTGRES_DB -c SELECT/**/1'
     $sqlCheck = $sqlCheck.Replace('__POD_IP__', $podIp)
     Write-Host "Testing PostgreSQL TCP authentication to Pod IP $podIp (read-only)..." -ForegroundColor Cyan
-    $sqlOutput = (& kubectl -n ev-fleet exec postgres-0 -c postgres -- sh -c $sqlCheck) -join ""
+    $sqlOutput = (& kubectl --context docker-desktop -n ev-fleet exec postgres-0 -c postgres -- sh -c $sqlCheck) -join ""
     if ($LASTEXITCODE -ne 0) {
         throw "PostgreSQL Pod-IP preflight failed. The psql or kubectl diagnostic above identifies the actual problem (for example wrong POSTGRES_PASSWORD, missing database or pg_hba.conf rule). The interactive -W test uses a manually typed password and does NOT verify that the Secret's POSTGRES_PASSWORD matches. Check the current Kubernetes Secret and persistent database credentials without exposing passwords. No PVC data was changed."
     }
@@ -165,23 +165,23 @@ function Assert-ExistingPostgresHealthy {
 
 function Assert-SafeToRedeploy {
     # Simulator physical journey state is process-local. Never roll it mid-flight.
-    $namespace = (& kubectl get namespace ev-fleet --ignore-not-found -o name) -join ""
+    $namespace = (& kubectl --context docker-desktop get namespace ev-fleet --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the existing ev-fleet namespace." }
     if (-not $namespace) { return } # First deployment.
 
-    $rentalReplicas = (& kubectl -n ev-fleet get deployment customer-rental-demo --ignore-not-found -o jsonpath='{.spec.replicas}') -join ""
+    $rentalReplicas = (& kubectl --context docker-desktop -n ev-fleet get deployment customer-rental-demo --ignore-not-found -o jsonpath='{.spec.replicas}') -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect customer-rental-demo." }
     if ($rentalReplicas -and [int]$rentalReplicas -gt 0) {
         throw "Deployment blocked: customer-rental-demo is running. Finish rentals/relocations and pause it from the Simulation Console before redeploying."
     }
 
-    $activeJob = (& kubectl -n ev-fleet get job customer-rental-simulation --ignore-not-found -o jsonpath='{.status.active}') -join ""
+    $activeJob = (& kubectl --context docker-desktop -n ev-fleet get job customer-rental-simulation --ignore-not-found -o jsonpath='{.status.active}') -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the customer rental Job." }
     if ($activeJob -and [int]$activeJob -gt 0) {
         throw "Deployment blocked: the customer rental Job is active. Let it finish before redeploying."
     }
 
-    $fleetExists = (& kubectl -n ev-fleet get deployment fleet --ignore-not-found -o name) -join ""
+    $fleetExists = (& kubectl --context docker-desktop -n ev-fleet get deployment fleet --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect the Fleet deployment." }
     if ($fleetExists) {
         # Read-only, fail-closed check from the current Fleet Pod; no port-forward needed.
@@ -209,7 +209,7 @@ if busy:
 print("Fleet confirms no active rentals, relocations or charging.")
 '@
         $encodedProbe = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($probe))
-        & kubectl -n ev-fleet exec deployment/fleet -- python -c "import base64;exec(base64.b64decode('$encodedProbe'))"
+        & kubectl --context docker-desktop -n ev-fleet exec deployment/fleet -- python -c "import base64;exec(base64.b64decode('$encodedProbe'))"
         if ($LASTEXITCODE -ne 0) {
             throw "Deployment aborted: Fleet is unavailable or has active EV work. Do not restart simulator ownership while a journey may be in progress."
         }
@@ -223,16 +223,13 @@ if ($ConnectOnly -and ($SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) {
 if ($CheckPostgresOnly -and ($ConnectOnly -or $SetupMetricsServer -or $AllowInsecureLocalKubeletTls)) { throw '-CheckPostgresOnly cannot be combined with other startup modes.' }
 if ($FreshBoot -and ($ConnectOnly -or $CheckPostgresOnly)) { throw '-FreshBoot cannot be combined with -ConnectOnly or -CheckPostgresOnly.' }
 
-& kubectl config use-context docker-desktop
-if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Kubernetes context 'docker-desktop' is unavailable." }
-
-$nodeReady = & kubectl get node docker-desktop -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}"
+$nodeReady = & kubectl --context docker-desktop get node docker-desktop -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}"
 if ($LASTEXITCODE -ne 0 -or $nodeReady -ne "True") {
     throw "Docker Desktop Kubernetes is not Ready. Enable it in Docker Desktop settings and retry."
 }
 
 if ($CheckPostgresOnly) {
-    $postgres = (& kubectl -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
+    $postgres = (& kubectl --context docker-desktop -n ev-fleet get statefulset postgres --ignore-not-found -o name) -join ""
     if ($LASTEXITCODE -ne 0 -or -not $postgres) { throw "No existing PostgreSQL StatefulSet to check in namespace ev-fleet." }
     Assert-ExistingPostgresHealthy
     Write-Host "PostgreSQL-only check passed. No images, Pods, or persistent volumes were changed." -ForegroundColor Green
@@ -262,7 +259,7 @@ if ($ConnectOnly) {
     # is piped directly to kubectl later; it is never written to disk or logged.
     $python = Resolve-Python
     $facilitiesSecret = Render-EnvArtifact $python -FileOnly:$FreshBoot
-    $routingSecret = Render-EnvArtifact $python @("--routing") -FileOnly:$FreshBoot
+    $routingSecret = Render-EnvArtifact $python @("--routing") -FileOnly
     $trafficControlSecret = Render-EnvArtifact $python @("--traffic-control") -FileOnly:$FreshBoot
     $trafficConfigPatch = Render-EnvArtifact $python @("--traffic-config") -FileOnly:$FreshBoot
 
@@ -312,32 +309,32 @@ if ($ConnectOnly) {
         # This patch contains only the provider/enable flags, never credentials.
         # A file avoids Windows PowerShell 5.1 altering nested JSON quotes.
         [IO.File]::WriteAllText($trafficPatchFile, $trafficConfigPatch + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-        & kubectl apply -f .\k8s\namespace.yaml
+        & kubectl --context docker-desktop apply -f .\k8s\namespace.yaml
         if ($LASTEXITCODE -ne 0) { throw "Namespace creation failed." }
-        & kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
+        & kubectl --context docker-desktop wait --for=jsonpath='{.status.phase}'=Active namespace/ev-fleet --timeout=60s
         if ($LASTEXITCODE -ne 0) { throw "Namespace did not become active." }
         # Server validation catches strategic-merge conflicts with existing
         # objects (for example value versus valueFrom) that client validation
         # cannot see. This request does not persist any resources.
-        & kubectl apply --dry-run=server -f $manifestFile
+        & kubectl --context docker-desktop apply --dry-run=server -f $manifestFile
         if ($LASTEXITCODE -ne 0) { throw "Rendered manifest server validation failed; nothing else applied." }
-        & kubectl apply -f $manifestFile
+        & kubectl --context docker-desktop apply -f $manifestFile
         if ($LASTEXITCODE -ne 0) { throw "Kubernetes apply failed. Inspect Pod images and events before retrying." }
 
         Apply-RenderedSecret $facilitiesSecret "ev-fleet-facilities"
         Apply-RenderedSecret $routingSecret "ev-fleet-routing"
         Apply-RenderedSecret $trafficControlSecret "ev-fleet-traffic-control"
-        & kubectl -n ev-fleet patch configmap ev-fleet-config --type merge --patch-file $trafficPatchFile
+        & kubectl --context docker-desktop -n ev-fleet patch configmap ev-fleet-config --type merge --patch-file $trafficPatchFile
         if ($LASTEXITCODE -ne 0) { throw "Unable to apply the traffic provider configuration." }
 
         if ($FreshBoot) {
             # The optional finite rental Job is not part of the base deployment.
             # Once complete, remove its terminal Pod so fresh boot leaves only
             # Pods created from the newly built application images.
-            & kubectl -n ev-fleet delete job customer-rental-simulation --ignore-not-found --wait=true
+            & kubectl --context docker-desktop -n ev-fleet delete job customer-rental-simulation --ignore-not-found --wait=true
             if ($LASTEXITCODE -ne 0) { throw "Unable to remove the completed customer rental Job during fresh boot." }
             foreach ($workload in @("statefulset/postgres", "deployment/redis")) {
-                & kubectl -n ev-fleet rollout restart $workload
+                & kubectl --context docker-desktop -n ev-fleet rollout restart $workload
                 if ($LASTEXITCODE -ne 0) { throw "Unable to restart $workload during fresh boot." }
             }
         }
@@ -349,7 +346,7 @@ if ($ConnectOnly) {
             "deployment/simulation-console", "deployment/ev-moving-01",
             "deployment/ev-moving-02", "statefulset/ev-moving-extra"
         )) {
-            & kubectl -n ev-fleet rollout restart $workload
+            & kubectl --context docker-desktop -n ev-fleet rollout restart $workload
             if ($LASTEXITCODE -ne 0) { throw "Unable to restart $workload after integration settings changed." }
         }
     } finally {
@@ -366,10 +363,10 @@ if ($ConnectOnly) {
         Wait-Rollout deployment $deployment
     }
     Wait-Rollout statefulset ev-moving-extra 420
-    & kubectl -n ev-fleet get hpa dashboard
+    & kubectl --context docker-desktop -n ev-fleet get hpa dashboard
     if ($LASTEXITCODE -ne 0) { throw "Dashboard HPA resource is missing." }
 
-    $notReady = & kubectl -n ev-fleet get pods --field-selector=status.phase!=Running -o name
+    $notReady = & kubectl --context docker-desktop -n ev-fleet get pods --field-selector=status.phase!=Running -o name
     if ($LASTEXITCODE -ne 0) { throw "Unable to read Pod status." }
     if ($notReady) { throw "Some Pods are not running: "+ ($notReady -join ", ") }
     Write-Host "Kubernetes has rolled out the $tag images. Checking dashboard tunnels..." -ForegroundColor Green
@@ -389,12 +386,12 @@ $simulationJob = $null
 if (Test-LocalEndpoint "http://127.0.0.1:8080/health") {
     Write-Host "Reusing operator dashboard at port 8080."
 } else {
-    $dashboardJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/dashboard 8080:80 }
+    $dashboardJob = Start-Job -ScriptBlock { kubectl --context docker-desktop -n ev-fleet port-forward service/dashboard 8080:80 }
 }
 if (Test-LocalEndpoint "http://127.0.0.1:8090/health/live") {
     Write-Host "Reusing simulation dashboard at port 8090."
 } else {
-    $simulationJob = Start-Job -ScriptBlock { kubectl -n ev-fleet port-forward service/simulation-console 8090:8090 }
+    $simulationJob = Start-Job -ScriptBlock { kubectl --context docker-desktop -n ev-fleet port-forward service/simulation-console 8090:8090 }
 }
 
 try {

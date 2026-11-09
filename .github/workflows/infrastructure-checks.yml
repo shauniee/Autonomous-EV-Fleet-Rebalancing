@@ -34,7 +34,7 @@ jobs:
       - name: Verify transactional telemetry history in a disposable Postgres
         env:
           TELEMETRY_TEST_DATABASE_URL: postgresql://twin_test:twin_test@127.0.0.1:5432/twin_history_test
-        run: python -m pytest tests/integration/test_telemetry_postgres.py -q
+        run: python -m pytest tests/integration/test_telemetry_postgres.py --telemetry-postgres -q
 
   backend:
     runs-on: ubuntu-latest
@@ -79,26 +79,35 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    env:
+      COMPOSE_DISABLE_ENV_FILE: "1"
+      COMPOSE_FILE: compose.yaml:tests/compose.smoke.yaml
+      COMPOSE_PROJECT_NAME: ev-fleet-smoke-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - name: Build and start live Compose demonstration
         run: |
           docker compose --profile relocation up --build -d --wait \
-            fleet demand rebalancing dispatch facilities ev-moving-01 ev-moving-02 dashboard
+            fleet demand rebalancing dispatch facilities ev-01 ev-02 ev-moving-01 ev-moving-02 dashboard
       - name: Verify live parking-aware batch approval
         run: |
+          export SMOKE_ORIGIN="http://$(docker compose --profile relocation port dashboard 80)"
           python - <<'PY'
+          from datetime import datetime, timezone
           import json
+          import os
           import time
           import urllib.request
           from uuid import uuid4
 
-          origin = 'http://127.0.0.1:8080'
-          def request(path, body=None):
+          origin = os.environ['SMOKE_ORIGIN']
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+          def request(path, body=None, method=None):
               data = json.dumps(body).encode() if body is not None else None
               headers = {'Content-Type': 'application/json'} if data else {}
-              req = urllib.request.Request(origin + path, data=data, headers=headers)
-              with urllib.request.urlopen(req, timeout=8) as res:
+              req = urllib.request.Request(origin + path, data=data, headers=headers, method=method)
+              with opener.open(req, timeout=8) as res:
                   return json.load(res)
 
           for attempt in range(45):
@@ -106,13 +115,24 @@ jobs:
                   fleet = request('/api/fleet/vehicles')
                   available = [v for v in fleet['vehicles']
                                if v['effective_availability'] == 'AVAILABLE']
-                  if len(available) >= 2:
+                  if len(available) == 4:
                       break
               except Exception:
                   pass
               time.sleep(1)
           else:
-              raise AssertionError('Two fresh moving EVs were not available for smoke test')
+              raise AssertionError('Two moving EVs and two donor reserves did not become available')
+
+          # Demand simulation starts paused. Give CRDS a fresh, deterministic
+          # demand snapshot through the same API the operator uses.
+          demand = request('/api/demand/zones?include_fixed_targets=true')
+          for zone in demand['zones']:
+              zone_id = zone['zone_id']
+              request(f'/api/demand/zones/{zone_id}/demand', {
+                  'expected_version': zone['demand_version'],
+                  'observed_at': datetime.now(timezone.utc).isoformat(),
+                  'desired_available_vehicles': 12 if zone_id == 'cbd' else 0,
+              }, method='PUT')
 
           sites = request('/api/facilities/facilities?zone_id=cbd')
           assert sites['data_source'] == 'MOCK'
@@ -134,4 +154,4 @@ jobs:
           docker compose --profile relocation logs --tail 35
       - name: Clean up containers
         if: always()
-        run: docker compose --profile relocation down -v
+        run: docker compose --profile relocation down

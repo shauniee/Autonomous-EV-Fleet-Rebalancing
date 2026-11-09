@@ -1,0 +1,52 @@
+# Test-only additions to compose.yaml. No production database or route provider.
+services:
+  redis:
+    tmpfs: [/data]
+  fleet:
+    ports: !reset []
+    environment:
+      DATABASE_URL: ""
+  # Keep one available EV at each donor zone even in the shifted-demand
+  # future. At the reserve floor these fixtures cannot be sent on a journey.
+  ev-01:
+    command: [python, -m, ev_fleet.simulator.cli, --fleet-url, "http://fleet:8000", --vehicle-id, ev-01, --zone, bishan, --soc, "20"]
+  ev-02:
+    command: [python, -m, ev_fleet.simulator.cli, --fleet-url, "http://fleet:8000", --vehicle-id, ev-02, --zone, tampines, --soc, "20"]
+  demand:
+    ports: !reset []
+    environment:
+      DEMAND_SIMULATION_ENABLED: "false"
+  traffic-collector:
+    environment:
+      TRAFFIC_SOURCE: DISABLED
+      LTA_DATAMALL_ACCOUNT_KEY: ""
+  rebalancing:
+    ports: !reset []
+    environment:
+      CRDS_MODE: ACTIVE
+      CRDS_EXECUTION_MODE: LOCAL
+      TRAFFIC_SOURCE: DISABLED
+      TRAFFIC_SIMULATION_ENABLED: "false"
+      TRAFFIC_SIMULATION_CONTROL_KEY: ""
+  facilities:
+    ports: !reset []
+    environment:
+      DATABASE_URL: ""
+      FACILITIES_SOURCE: MOCK
+      LTA_DATAMALL_ACCOUNT_KEY: ""
+  dispatch:
+    ports: !reset []
+    command: [uvicorn, "tests.stubbed_dispatch_app:app", --host, "0.0.0.0", --port, "8000"]
+    volumes:
+      - ./tests:/opt/test-fixtures/tests:ro
+    environment:
+      PYTHONPATH: /opt/test-fixtures
+      DATABASE_URL: ""
+      CRDS_MODE: ACTIVE
+      ROUTING_PROVIDER: ONEMAP
+      ONEMAP_ACCESS_TOKEN: offline-test-fixture
+      OSRM_ROUTING_URL: ""
+      TRAFFIC_SOURCE: DISABLED
+      TRAFFIC_SIMULATION_ENABLED: "false"
+  dashboard:
+    ports: !override ["127.0.0.1::80"]

@@ -1,7 +1,6 @@
 """Isolated real backend for Playwright; no existing service state is touched."""
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -9,16 +8,19 @@ import sys
 import time
 
 import httpx
+from isolated_test_environment import service_test_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 children = []
 
 
 def main():
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"),
-           "FLEET_URL": "http://127.0.0.1:18001", "DEMAND_URL": "http://127.0.0.1:18002",
-           "REBALANCING_URL": "http://127.0.0.1:18003", "DEMAND_SIMULATION_ENABLED": "false",
-           "RECOMMENDATION_TTL_SECONDS": "10"}
+    env = service_test_environment(
+        ROOT, FLEET_URL="http://127.0.0.1:18001", DEMAND_URL="http://127.0.0.1:18002",
+        REBALANCING_URL="http://127.0.0.1:18003", DISPATCH_URL="http://127.0.0.1:18004",
+        FACILITIES_URL="http://127.0.0.1:18006", ROUTING_PROVIDER="ONEMAP",
+        ONEMAP_ACCESS_TOKEN="offline-test-fixture", RECOMMENDATION_TTL_SECONDS="10",
+    )
     logs = ROOT / "dashboard" / "test-results" / "backend"
     logs.mkdir(parents=True, exist_ok=True)
     handles = []
@@ -37,13 +39,20 @@ def main():
         with httpx.Client(timeout=2, trust_env=False) as client:
             # Refuse to reuse a server belonging to a different run.
             import socket
-            for port in range(18001, 18006):
+            for port in range(18001, 18009):
                 with socket.socket() as sock:
                     sock.bind(("127.0.0.1", port))
-            for offset, service in enumerate(["fleet", "demand", "rebalancing", "dispatch"]):
-                start(service, ["-m", "uvicorn", f"ev_fleet.{service}.app:app", "--host", "127.0.0.1", "--port", str(18001 + offset)])
+            services = [
+                ("fleet", 18001, "ev_fleet.fleet.app:app"),
+                ("demand", 18002, "ev_fleet.demand.app:app"),
+                ("rebalancing", 18003, "ev_fleet.rebalancing.app:app"),
+                ("dispatch", 18004, "tests.stubbed_dispatch_app:app"),
+                ("facilities", 18006, "ev_fleet.facilities.app:app"),
+            ]
+            for name, port, module in services:
+                start(name, ["-m", "uvicorn", module, "--host", "127.0.0.1", "--port", str(port)])
             deadline = time.monotonic() + 40
-            for port in range(18001, 18005):
+            for _, port, _ in services:
                 while True:
                     try:
                         client.get(f"http://127.0.0.1:{port}/health/ready").raise_for_status()
@@ -56,10 +65,13 @@ def main():
             zone = client.get(zone_url).json()
             client.put(zone_url + "/demand", json={"expected_version": zone["demand_version"],
                        "observed_at": datetime.now(timezone.utc).isoformat(), "desired_available_vehicles": 12}).raise_for_status()
-            for name, zone in [("ev-browser-01", "bishan"), ("ev-browser-02", "tampines")]:
+            for health_port, (name, zone) in enumerate(
+                [("ev-browser-01", "bishan"), ("ev-browser-02", "tampines")], start=18007
+            ):
                 start(name, ["-m", "ev_fleet.simulator.cli", "--fleet-url", env["FLEET_URL"],
                             "--dispatch-url", "http://127.0.0.1:18004", "--vehicle-id", name, "--zone", zone,
-                            "--soc", "90", "--time-scale", "60", "--interval", "0.5"])
+                            "--soc", "90", "--time-scale", "60", "--interval", "0.5",
+                            "--health-port", str(health_port)])
             deadline = time.monotonic() + 20
             while True:
                 vehicles = client.get(env["FLEET_URL"] + "/api/v1/vehicles").json()["vehicles"]

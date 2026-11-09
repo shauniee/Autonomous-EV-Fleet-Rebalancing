@@ -253,8 +253,9 @@ spec:
               path: /health/live
               port: health
             periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            # Parallel startup of the extra fleet shares the local node's CPU.
+            timeoutSeconds: 10
+            failureThreshold: 8
           # Local coordination readiness is separate from physical freshness
           # and dispatch eligibility, including supervised recovery waits.
           readinessProbe:

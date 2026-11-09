@@ -6,6 +6,6 @@ export default defineConfig({
   webServer: [
     { command: `"${process.platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python'}" scripts/dashboard_test_server.py`, cwd: '..', url: 'http://127.0.0.1:18005', timeout: 90000, reuseExistingServer: false },
     { command: 'npm run dev -- --port 15173', url: 'http://127.0.0.1:15173', reuseExistingServer: false,
-      env: { FLEET_URL: 'http://127.0.0.1:18001', DEMAND_URL: 'http://127.0.0.1:18002', REBALANCING_URL: 'http://127.0.0.1:18003', DISPATCH_URL: 'http://127.0.0.1:18004' } },
+      env: { FLEET_URL: 'http://127.0.0.1:18001', DEMAND_URL: 'http://127.0.0.1:18002', REBALANCING_URL: 'http://127.0.0.1:18003', DISPATCH_URL: 'http://127.0.0.1:18004', FACILITIES_URL: 'http://127.0.0.1:18006' } },
   ],
 });

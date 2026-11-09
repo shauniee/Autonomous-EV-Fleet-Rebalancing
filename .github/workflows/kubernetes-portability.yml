@@ -48,6 +48,12 @@ jobs:
               assert env['TRAFFIC_SOURCE']['valueFrom']['configMapKeyRef'] == {
                   'name': 'ev-fleet-config', 'key': 'TRAFFIC_SOURCE'
               }, name
+          rebalancing = objects['Deployment', 'rebalancing']['spec']['template']['spec']['containers'][0]
+          assert rebalancing['resources']['limits']['cpu'] == '1000m'
+          assert rebalancing['readinessProbe']['httpGet']['path'] == '/health/ready'
+          assert rebalancing['livenessProbe']['httpGet']['path'] == '/health/live'
+          assert rebalancing['readinessProbe']['timeoutSeconds'] == 5
+          assert rebalancing['livenessProbe']['timeoutSeconds'] == 5
           facilities = objects['Deployment', 'facilities']['spec']['template']['spec']['containers'][0]
           assert facilities['startupProbe']['failureThreshold'] * facilities['startupProbe']['periodSeconds'] >= 240
           assert facilities['startupProbe']['timeoutSeconds'] >= 5

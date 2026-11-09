@@ -129,7 +129,6 @@ services:
       fleet: {condition: service_healthy}
   facilities:
     <<: *backend
-    profiles: [relocation]
     command: ["uvicorn", "ev_fleet.facilities.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${FACILITIES_PORT:-8005}:8000"]
     environment:
@@ -142,7 +141,6 @@ services:
       LTA_CHARGING_MAX_AGE_SECONDS: ${LTA_CHARGING_MAX_AGE_SECONDS:-900}
   dispatch:
     <<: *backend
-    profiles: [relocation]
     command: ["uvicorn", "ev_fleet.dispatch.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     ports: ["127.0.0.1:${DISPATCH_PORT:-8004}:8000"]
     environment:

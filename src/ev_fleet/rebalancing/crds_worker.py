@@ -11,7 +11,7 @@ def create_app():
     app = base_app("CRDS Evaluator")
 
     @app.post("/api/v1/crds/evaluate", response_model=CrdsTaskResult)
-    async def evaluate(task: CrdsEvaluationTask):
+    def evaluate(task: CrdsEvaluationTask):
         if task.input_fingerprint != task_fingerprint(task):
             raise HTTPException(422, "CRDS_INPUT_FINGERPRINT_MISMATCH")
         try:
