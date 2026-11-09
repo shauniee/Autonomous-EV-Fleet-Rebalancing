@@ -79,6 +79,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPo
 For the complete procedure and troubleshooting, see
 [Local Kubernetes deployment](docs/kubernetes-local.md).
 
+Before a relocation demonstration on **each** Windows computer, follow the
+[local demo readiness checklist](docs/local-demo-readiness.md). The default
+`ROUTING_PROVIDER=SIMULATED` is intentionally dashboard-only: it cannot
+provide the verified OneMap road geometry needed by the current Dispatch
+approval path. The operator dashboard now reports routing configuration
+without revealing tokens.
+
 ## Local Python environment
 
 `scripts/setup-local.ps1` is called automatically during a full Windows Kubernetes
