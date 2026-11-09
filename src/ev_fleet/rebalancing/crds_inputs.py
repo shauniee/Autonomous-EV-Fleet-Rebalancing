@@ -11,7 +11,7 @@ from ev_fleet.contracts.crds import (CrdsDemandSnapshot, CrdsInputs, CrdsPlannin
                                    CrdsRelocationExclusion)
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from ev_fleet.contracts.vehicles import FleetSnapshot
-from ev_fleet.demand.aggregation import capacity, telemetry_is_fresh, vehicle_placements
+from ev_fleet.demand.aggregation import capacity, demand_is_current, telemetry_is_fresh, vehicle_placements
 from ev_fleet.demand.clients import parking_snapshot
 from ev_fleet.demand.settings import DemandSettings
 from .clients import get_json
@@ -131,7 +131,7 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
                          exclude_dispatch_id=None):
     policy = DemandSettings.from_env()
     reads = [f"{settings.fleet_url}/api/v1/vehicles",
-             f"{settings.demand_url}/api/v1/zones",
+             f"{settings.demand_url}/api/v1/zones?include_fixed_targets=true",
              f"{settings.facilities_url}/api/v1/facilities",
              f"{dispatch_url}/api/v1/dispatch-planning-state"]
 
@@ -178,8 +178,9 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
         issues.add("FLEET_SNAPSHOT_STALE")
     if not -5 <= (now - planning.observed_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
         issues.add("DISPATCH_SNAPSHOT_STALE")
+    fixed_targets = set(demand.fixed_demand_zone_ids)
     for zone in zones.values():
-        if zone.demand is None or not -5 <= (now - zone.demand.observed_at).total_seconds() < policy.demand_max_age_seconds:
+        if not demand_is_current(zone, policy, now, fixed=zone.zone_id in fixed_targets):
             issues.add("DEMAND_UNKNOWN_OR_STALE")
     if facilities.data_source == "LTA_DATAMALL" and not any(
             f.name == "parking" and f.status == "FRESH" for f in facilities.feeds):

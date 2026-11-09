@@ -6,7 +6,7 @@ from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajecto
 from .crds_routes import travel_minutes
 
 
-MODEL_VERSION = "crds-futures-v5"
+MODEL_VERSION = "crds-futures-v6"
 
 
 def parameters_for(settings):
@@ -16,20 +16,13 @@ def parameters_for(settings):
                           priority_coverage_pct=20)
 
 
-def observation_age(inputs):
-    times = [zone.demand.observed_at for zone in inputs.demand.zones if zone.demand]
-    times.extend(v.telemetry.observed_at for v in inputs.fleet.vehicles if v.telemetry)
-    return max((max(0, (inputs.evaluated_at - t).total_seconds()) for t in times), default=0)
-
-
-def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budget_seconds=0,
-                  min_reserve_pct=20):
+def build_futures(inputs, target_zone_id, settings, *, expand_age=True, min_reserve_pct=20):
     """Keep base profiles and append age profiles within one frozen input package."""
     if inputs.issues:
         raise ValueError("incomplete planning observations: " + ",".join(inputs.issues))
     params = parameters_for(settings)
-    zones = {z.zone_id: z for z in inputs.demand.zones}
-    if target_zone_id not in zones or any(z.demand is None for z in zones.values()):
+    demands = {zone.zone_id: zone.demand for zone in inputs.demand.zones if zone.demand is not None}
+    if target_zone_id not in demands or len(demands) != len(inputs.demand.zones):
         raise ValueError("missing target or demand")
     profiles = [("nominal", 0, 0, 0, False),
                 ("demand_shift", settings.demand_step, 0, 0, False),
@@ -38,15 +31,19 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
                 ("delayed_inbound", 0, 0, settings.journey_delay_minutes, False),
                 ("combined", settings.demand_step, settings.return_delay_minutes,
                  settings.journey_delay_minutes, True)]
-    levels = min(settings.max_age_levels, int((observation_age(inputs) + age_budget_seconds) // settings.age_step_seconds)) if expand_age else 0
+    fixed_targets = set(inputs.demand.fixed_demand_zone_ids)
+    dynamic_demand_age = max(0, max(
+        ((inputs.evaluated_at - demand.observed_at).total_seconds()
+         for zone_id, demand in demands.items() if zone_id not in fixed_targets), default=0))
+    levels = min(settings.max_age_levels, int(dynamic_demand_age // settings.age_step_seconds)) if expand_age else 0
     for level in range(1, levels + 1):
-        profiles.append((f"age_{level}", settings.demand_step * level,
-                         settings.return_delay_minutes * level,
-                         settings.journey_delay_minutes * level, True))
+        # Older demand only adds uncertainty about demand. Routes and returns
+        # already have their own delay scenarios.
+        profiles.append((f"age_{level}", settings.demand_step * level, 0, 0, False))
     futures = []
     vehicles = {v.vehicle_id: v for v in inputs.fleet.vehicles}
     for future_id, shift, return_delay, journey_delay, omit_returns in profiles:
-        stock = {z: [inputs.available_by_zone[z]] * params.slot_count for z in zones}
+        stock = {z: [inputs.available_by_zone[z]] * params.slot_count for z in demands}
 
         def credit(zone_id, minutes):
             if zone_id not in stock:
@@ -87,9 +84,13 @@ def build_futures(inputs, target_zone_id, settings, *, expand_age=True, age_budg
                 minutes = max(params.slot_minutes,
                               (rental.expected_end_at - inputs.evaluated_at).total_seconds() / 60)
                 credit(rental.expected_return_zone_id, minutes + return_delay)
-        futures.append(CrdsFuture(future_id=future_id, zones={
-            z: CrdsZoneTrajectory(
-                desired_stock=[max(0, zones[z].demand.desired_available_vehicles +
-                                   (-shift if z == target_zone_id else shift))] * params.slot_count,
-                usable_stock=stock[z]) for z in zones}))
+        age_profile = future_id.startswith("age_")
+        trajectories = {}
+        for zone_id, demand in demands.items():
+            desired = demand.desired_available_vehicles
+            if not age_profile or zone_id not in fixed_targets:
+                desired += -shift if zone_id == target_zone_id else shift
+            trajectories[zone_id] = CrdsZoneTrajectory(
+                desired_stock=[max(0, desired)] * params.slot_count, usable_stock=stock[zone_id])
+        futures.append(CrdsFuture(future_id=future_id, zones=trajectories))
     return futures

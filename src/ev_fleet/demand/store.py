@@ -108,10 +108,19 @@ class DemandStore:
         async with self.lock:
             return self.view(self.record(zone_id))
 
-    async def snapshot(self):
+    def fixed_demand_zone_ids(self) -> list[str]:
+        if self.simulation_enabled:
+            return []
+        return sorted(key for key, record in self.zones.items()
+                      if record["demand"] is not None and record["demand_source"] == "MANUAL")
+
+    async def snapshot(self, *, include_fixed_targets: bool = False):
         async with self.lock:
-            return {"snapshot_at": self.clock.now().isoformat(), "instance_id": self.instance_id,
-                    "zones": [self.view(record) for record in self.zones.values()]}
+            return {
+                "snapshot_at": self.clock.now().isoformat(), "instance_id": self.instance_id,
+                "zones": [self.view(record) for record in self.zones.values()],
+                **({"fixed_demand_zone_ids": self.fixed_demand_zone_ids()} if include_fixed_targets else {}),
+            }
 
     def provenance(self, record):
         active = record["hold_tick"] is not None and self.clock.monotonic() < record["hold_tick"]
@@ -123,6 +132,7 @@ class DemandStore:
         async with self.lock:
             return {"snapshot_at": self.clock.now(), "instance_id": self.instance_id,
                     "zones": [self.view(record) for record in self.zones.values()],
+                    "fixed_demand_zone_ids": self.fixed_demand_zone_ids(),
                     "provenance": {key: self.provenance(record) for key, record in self.zones.items()}}
 
     async def simulation_tick(self, simulator):

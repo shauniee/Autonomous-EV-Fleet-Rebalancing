@@ -94,6 +94,7 @@ class CrdsDemandSnapshot(Model):
     instance_id: UUID
     snapshot_at: AwareDatetime
     zones: list[ZoneState]
+    fixed_demand_zone_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def unique_zones(self):

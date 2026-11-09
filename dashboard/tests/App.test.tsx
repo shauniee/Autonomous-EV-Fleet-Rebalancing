@@ -746,7 +746,7 @@ describe('CRDS recommendation explanations', () => {
       assignments: [{ recommendation_id: 'rec-1', vehicle_id: 'ev-01', facility_id: 'cbd-01', facility_name: 'CBD parking' }],
       crds: { ...crds, decision: 'MOVE', approval_allowed: true, worst_case_gain_vehicle_minutes: 12,
         source_references: { decision_evidence: {
-          version: 1, assessment_reasons: ['USEFUL_SHORTAGE_REDUCTION'], batch_stop_reasons: ['BATCH_PARKING_LIMIT'],
+          version: 1, assessment_reasons: ['USEFUL_SHORTAGE_REDUCTION', 'PARTIAL_ROUTE_COVERAGE'], batch_stop_reasons: ['BATCH_PARKING_LIMIT'],
           vehicles: {},
         } } },
     } });
@@ -757,6 +757,7 @@ describe('CRDS recommendation explanations', () => {
     const result = await screen.findByTestId('batch-recommendation');
     expect(result).toHaveTextContent('1 of 3 EVs recommended');
     expect(result).toHaveTextContent('used the remaining parking spaces');
+    expect(result).toHaveTextContent('Some routes could not be verified');
     expect(result).not.toHaveTextContent('CAPACITY_OR_STOCK_LIMIT');
     expect(screen.getByRole('button', { name: 'Review dispatch' })).toBeEnabled();
   });

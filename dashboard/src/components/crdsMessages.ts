@@ -39,6 +39,7 @@ const reasons: Readonly<Record<string, string>> = {
   ROUTING_NOT_CONFIGURED: 'Road routing is not configured. Set ROUTING_PROVIDER=ONEMAP and ONEMAP_ACCESS_TOKEN in this computer’s .env, then restart the local deployment. No EV was dispatched.',
   ROUTING_ACCESS_UNAVAILABLE: 'OneMap routing credentials were rejected or are missing. Check or renew ONEMAP_ACCESS_TOKEN in .env, then restart the local deployment.',
   ROUTE_LOOKUP_TIMEOUT: 'Route verification did not finish in time. Try requesting a fresh recommendation.',
+  PARTIAL_ROUTE_COVERAGE: 'Some routes could not be verified. The recommendation covers only EVs with completed route checks.',
   ROUTE_EVIDENCE_UNAVAILABLE: 'CRDS could not verify the road routes. Try requesting a fresh recommendation.',
   ROUTE_ORIGIN_CHANGED: 'The EV’s location changed before the route could be verified.',
   ROUTE_ESTIMATE_IDENTITY_CHANGED: 'The vehicle or its location changed during the route check.',

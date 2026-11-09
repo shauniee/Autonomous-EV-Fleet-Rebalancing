@@ -55,7 +55,7 @@ def availability_reason(vehicle: VehicleState) -> str:
     return "UNAVAILABLE"
 
 
-def route_failure_reason(error: Exception) -> str:
+def route_failure_reason(error: BaseException) -> str:
     if isinstance(error, (httpx.TimeoutException, asyncio.TimeoutError)):
         return "ROUTE_LOOKUP_TIMEOUT"
     if isinstance(error, httpx.HTTPStatusError):

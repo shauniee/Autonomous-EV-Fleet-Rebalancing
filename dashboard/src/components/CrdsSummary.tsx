@@ -20,11 +20,12 @@ export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batch
   const singleBlocker = excluded.length > 0 && excluded.every(row => row.reason === excluded[0].reason)
     ? excluded[0].reason : null;
   const assessment = evidence?.assessment_reasons ?? result.reason_code.split(',');
+  const partialRoutes = assessment.includes('PARTIAL_ROUTE_COVERAGE');
   const batchReasons = evidence?.batch_stop_reasons.length ? evidence.batch_stop_reasons : batchStop ? [batchStop] : [];
   const messages = result.decision === 'HOLD' && assessment.includes('NO_ELIGIBLE_RELOCATIONS') && singleBlocker
-    ? [...assessment, singleBlocker] : assessment;
+    ? [...assessment, singleBlocker] : assessment.filter(reason => reason !== 'PARTIAL_ROUTE_COVERAGE');
   const stopMessages = [...new Set(batchReasons
-    .filter(reason => !messages.includes(reason)).map(reason => crdsMessage(reason)))];
+    .filter(reason => !assessment.includes(reason) && !messages.includes(reason)).map(reason => crdsMessage(reason)))];
   const label = result.decision === 'MOVE' ? 'Recommended'
     : result.decision === 'HOLD' ? 'No move recommended' : 'Assessment unavailable';
 
@@ -35,6 +36,7 @@ export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batch
         ? 'The proposed moves improve the modeled fleet coverage score, even in the least favorable scenario checked.'
         : [...new Set(messages.map(code => crdsMessage(code)))].join(' ')}
     </p>
+    {partialRoutes && <p className="warning" role="status">{crdsMessage('PARTIAL_ROUTE_COVERAGE')}</p>}
     {result.decision !== 'DEFER' && stopMessages.length > 0 &&
       <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">

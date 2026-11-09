@@ -36,6 +36,13 @@ def demand_level(value, settings):
     return "HIGH" if value >= settings.high_demand else "MEDIUM" if value >= settings.medium_demand else "LOW"
 
 
+def demand_is_current(zone: ZoneState, settings: DemandSettings, now: datetime, *, fixed: bool) -> bool:
+    if zone.demand is None:
+        return False
+    age = (now - zone.demand.observed_at).total_seconds()
+    return age >= -5 and (fixed or age < settings.demand_max_age_seconds)
+
+
 def assigned_zone(vehicle: VehicleState, zones: Mapping[str, ZoneState],
                   radius: float) -> str | None:
     if vehicle.telemetry is None:
@@ -157,6 +164,7 @@ def capacity(
 
 def compose_heatmap(demand, fleet, error, settings, now, *, parking=None):
     zones = {zone.zone_id: zone for zone in (ZoneState.model_validate(item) for item in demand["zones"])}
+    fixed_targets = set(demand.get("fixed_demand_zone_ids", ()))
     issues = {error} if error else set()
     fleet_status = "INVALID" if error == "FLEET_INVALID_RESPONSE" else "UNAVAILABLE" if fleet is None else "FRESH"
     if fleet is not None:
@@ -182,7 +190,7 @@ def compose_heatmap(demand, fleet, error, settings, now, *, parking=None):
     for key, zone in sorted(zones.items()):
         observation = zone.demand
         value = observation.desired_available_vehicles if observation else None
-        fresh = observation is not None and -5 <= (now - observation.observed_at).total_seconds() < settings.demand_max_age_seconds
+        fresh = demand_is_current(zone, settings, now, fixed=key in fixed_targets)
         status = "FRESH" if fresh else "STALE" if observation else "MISSING"
         if not fresh:
             issues.add(f"DEMAND_{status}:{key}")

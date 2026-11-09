@@ -68,10 +68,13 @@ def dispatch_for(vehicle, observations, clock, *, command=True):
 
 
 async def plan(observations, clock, *, batch=False, worker=False, route_error=None,
-               route_error_vehicle=None, route_distance=None, traffic=None, **selection):
-    def respond(request):
+               route_error_vehicle=None, route_distance=None, traffic=None,
+               route_hook=None, deadline_seconds=30, **selection):
+    async def respond(request):
         if request.url.path == "/api/v1/route-estimates":
             body = json.loads(request.content)
+            if route_hook is not None:
+                await route_hook(body["vehicle_id"])
             if route_error and (route_error_vehicle is None
                                 or body["vehicle_id"] == route_error_vehicle):
                 return httpx.Response(503, json={"error": {"code": route_error}})
@@ -94,7 +97,7 @@ async def plan(observations, clock, *, batch=False, worker=False, route_error=No
             return httpx.Response(200, json=reply.model_dump(mode="json"))
         return httpx.Response(200, json=observations[request.url.path])
 
-    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test",
+    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test", deadline_seconds=deadline_seconds,
         execution_mode="HTTP" if worker else "LOCAL",
         worker_urls=["http://worker1.test", "http://worker2.test"] if worker else [])
     policy = Settings()
@@ -387,7 +390,7 @@ def test_batch_explains_parking_limit_and_keeps_child_evidence_scoped(observatio
     assert list(child["vehicles"]) == ["healthy"]
 
 
-def test_empty_cbd_gets_four_evs_with_all_zones_short(clock, monkeypatch):
+def test_empty_cbd_gets_four_evs_with_aged_manual_targets(clock, monkeypatch):
     monkeypatch.setenv("CRDS_MODE", "ACTIVE")
     monkeypatch.setenv("DISPATCH_URL", "http://dispatch.test")
 
@@ -398,10 +401,12 @@ def test_empty_cbd_gets_four_evs_with_all_zones_short(clock, monkeypatch):
             cluster.facilities.catalogue[site.facility_id] = site.model_copy(update={"parking_available": 4})
             stocks = {"bishan": 3, "cbd": 0, "jurong-east": 0, "punggol": 1,
                       "tampines": 5, "woodlands": 11}
-            for zone_id, stock in stocks.items():
+            for zone_id in stocks:
                 await cluster.demand.update(zone_id, "demand", DemandUpdate(expected_version=0,
                     observed_at=clock.now(),
                     desired_available_vehicles=21 if zone_id in ("cbd", "punggol", "tampines") else 12))
+            clock.advance(600)
+            for zone_id, stock in stocks.items():
                 zone = await cluster.demand.get(zone_id)
                 for index in range(stock):
                     vehicle_id = f"{zone_id}-{index}"
@@ -413,6 +418,7 @@ def test_empty_cbd_gets_four_evs_with_all_zones_short(clock, monkeypatch):
             batch = response.json()
             assert batch["recommended_count"] == 4
             score = batch["crds"]
+            assert score["scenario_count"] == 6
             assert score["worst_case_gain_vehicle_minutes"] > 1
             assert sum(score["shortage_changes_by_zone"].values()) > 0
             assert score["source_references"]["decision_evidence"]["vehicles"]["punggol-0"]["reason"] == (
@@ -424,6 +430,25 @@ def test_empty_cbd_gets_four_evs_with_all_zones_short(clock, monkeypatch):
             assert len(approval["items"]) == 4
 
     asyncio.run(scenario())
+
+
+def test_dynamic_demand_age_stresses_only_dynamic_targets_and_never_delays_routes(observations, clock):
+    snapshot = observations["/api/v1/zones"]
+    donor, target = snapshot["zones"]
+    snapshot["fixed_demand_zone_ids"] = ["cbd"]
+    target["demand"]["observed_at"] = (clock.now() - timedelta(seconds=600)).isoformat()
+    fresh = asyncio.run(plan(observations, clock))
+    assert len(fresh.futures) == 6
+
+    donor["demand"]["observed_at"] = (clock.now() - timedelta(seconds=90)).isoformat()
+    aged = asyncio.run(plan(observations, clock))
+    worst_age = next(future for future in aged.futures if future.future_id == "age_3")
+    assert worst_age.zones["bishan"].desired_stock[0] == 3
+    assert worst_age.zones["cbd"].desired_stock[0] == target["demand"]["desired_available_vehicles"]
+    assert aged.moves
+    for move in aged.moves:
+        assert move.outcomes["age_3"] == move.outcomes["nominal"]
+        assert move.outcomes["delayed_inbound"].arrival_minutes > move.outcomes["nominal"].arrival_minutes
 
 
 def test_batch_keeps_last_donor_ev_even_when_target_still_needs_coverage(observations, clock):
@@ -475,6 +500,44 @@ def test_one_unroutable_ev_does_not_block_valid_recommendation(observations, clo
     assert evidence["healthy"]["reason"] == "ROAD_ROUTE_NOT_FOUND"
     assert evidence["healthy"]["facility_id"] == "mock-cbd-01"
     assert evidence["healthy-2"]["outcome"] == "RECOMMENDED"
+
+
+@pytest.mark.parametrize("target_demand", [0, 21])
+def test_route_cutoff_keeps_verified_results_and_cancels_pending_lookups(observations, clock, target_demand):
+    fleet = observations["/api/v1/vehicles"]["vehicles"]
+    fleet[1]["telemetry"]["position"] = {"latitude": 1.4, "longitude": 103.85}
+    fleet.extend(deepcopy(fleet[0]) | {"vehicle_id": f"donor-{index}"} for index in range(3))
+    zones = observations["/api/v1/zones"]["zones"]
+    zones[0]["demand"]["desired_available_vehicles"] = 12
+    zones[1]["demand"]["desired_available_vehicles"] = target_demand
+    started, cancelled = [], set()
+
+    async def check_route(vehicle_id):
+        started.append(vehicle_id)
+        if vehicle_id == "healthy-2":
+            return
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.add(vehicle_id)
+            raise
+
+    _, (children, metadata, reason) = asyncio.run(plan(
+        observations, clock, batch=True, route_hook=check_route, deadline_seconds=.25))
+    assert started[0] == "healthy-2"
+    assert cancelled == set(started[1:]) and len(cancelled) == 4
+    evidence = metadata.source_references["decision_evidence"]
+    timed_out = {row["reason"] for identifier, row in evidence["vehicles"].items() if identifier != "healthy-2"}
+    assert timed_out == {"ROUTE_LOOKUP_TIMEOUT"}
+    if target_demand:
+        assert metadata.decision == "MOVE" and metadata.approval_allowed
+        assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy-2"]
+        assert reason == "PARTIAL_ROUTE_COVERAGE"
+        assert "PARTIAL_ROUTE_COVERAGE" in evidence["assessment_reasons"]
+    else:
+        assert metadata.decision == "DEFER" and not metadata.approval_allowed and not children
+        assert evidence["assessment_reasons"] == ["ROUTE_LOOKUP_TIMEOUT"]
+        assert evidence["vehicles"]["healthy-2"]["outcome"] == "NOT_SELECTED"
 
 
 def test_unavailable_demand_does_not_fingerprint_bulk_traffic(
