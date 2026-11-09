@@ -275,7 +275,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     # assessment HOLD; an unverified candidate may still be viable.
     failures = [item for item in results if isinstance(item, BaseException)]
     prepared = [item for item in results if not isinstance(item, BaseException)]
-    if failures and not any(item is not None for item in prepared):
+    if failures and not any(isinstance(item, tuple) for item in prepared):
         failure = failures[0]
         legacy_reason = str(failure) if isinstance(failure, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
         return defer(legacy_reason, route_failure_reason(failure))
