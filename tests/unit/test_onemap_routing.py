@@ -42,3 +42,24 @@ def test_simulator_follows_road_corner_using_route_duration_and_distance():
     moving.advance(150, 30)
     assert moving.position == destination and moving.state == "ARRIVED"
     assert moving.soc_pct == pytest.approx(79.4)
+
+
+def test_routing_configuration_distinguishes_dashboard_only_from_configured_onemap():
+    from ev_fleet.dispatch.routing import routing_configuration
+
+    disabled = routing_configuration(RoutingSettings())
+    assert disabled == {
+        "provider": "SIMULATED", "configured": False,
+        "reason_code": "ONEMAP_ROUTE_REQUIRED",
+    }
+    missing = routing_configuration(RoutingSettings(provider="ONEMAP"))
+    assert missing["configured"] is False
+    assert missing["reason_code"] == "ONEMAP_TOKEN_MISSING"
+
+    whitespace = routing_configuration(RoutingSettings(provider="ONEMAP", access_token="  "))
+    assert whitespace == missing
+
+    enabled = routing_configuration(
+        RoutingSettings(provider="ONEMAP", access_token="example-private-token"))
+    assert enabled == {"provider": "ONEMAP", "configured": True, "reason_code": None}
+    assert "example-private-token" not in str(enabled)
