@@ -6,7 +6,7 @@ from fastapi import Header, Request
 from fastapi.responses import JSONResponse
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
-from .routing import road_match_spawn
+from .routing import road_match_spawn, routing_configuration
 from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
 from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
 from .service import DispatchService
@@ -40,6 +40,12 @@ def create_app(settings=None, client=None, clock=None, background=True):
                 await service.close()
 
     app.router.lifespan_context = lifespan
+
+    @app.get("/api/v1/routing/status")
+    async def routing_status():
+        # Read-only setup signal for operators. A configured token is not proof
+        # of provider reachability; actual road routes are checked per request.
+        return routing_configuration(app.state.service.routing)
 
     @app.post("/api/v1/road-matches")
     async def match_idle_spawn(position: Position):
