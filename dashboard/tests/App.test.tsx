@@ -13,7 +13,9 @@ function server(overrides: Record<string, unknown> = {}) {
   const responses: Record<string, unknown> = {
     '/api/demand/heat-map': makeHeat(), '/api/fleet/vehicles': makeFleet(),
     '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
-    '/api/dispatch/dispatches': { dispatches: [] }, '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/dispatch/dispatches': { dispatches: [] },
+    '/api/dispatch/routing/status': { provider: 'ONEMAP', configured: true, reason_code: null },
+    '/api/rebalancing/recommendations': makeRecommendation(),
     '/api/dispatch/dispatches/dispatch-1/recovery': {
       dispatch_id: 'dispatch-1', status: 'BLOCKED', reason_code: 'CHECKPOINT_UNAVAILABLE', can_resume: false,
       operation: null, blockers: [], evidence: { checkpoint_source: 'NONE', checkpoint_at: null },
@@ -41,6 +43,29 @@ function openNotifications() {
   return within(screen.getByRole('region', { name: 'Notifications' }));
 }
 describe('dispatcher dashboard', () => {
+  it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {
+    const fetch = server({
+      '/api/dispatch/routing/status': {
+        provider: 'SIMULATED', configured: false, reason_code: 'ONEMAP_ROUTE_REQUIRED',
+      },
+    });
+    render(<App/>);
+    const status = await screen.findByRole('status', { name: 'Road routing setup' });
+    expect(status).toHaveTextContent('Road routing is not configured for dispatch.');
+    expect(status).toHaveTextContent('ROUTING_PROVIDER=ONEMAP');
+    expect(status).toHaveTextContent('ONEMAP_ACCESS_TOKEN');
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled();
+    expect(fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/dispatch/dispatches' && init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('does not claim routing is unavailable when the backend reports a configured provider', async () => {
+    server(); render(<App/>);
+    await screen.findByRole('button', { name: /CBD Critical/ });
+    expect(screen.queryByRole('status', { name: 'Road routing setup' })).not.toBeInTheDocument();
+  });
+
   it('requires explicit confirmation to end a relocation and sends the reviewed revision', async () => {
     const path = '/api/dispatch/dispatches/dispatch-1/resolution';
     const fetch = server({
