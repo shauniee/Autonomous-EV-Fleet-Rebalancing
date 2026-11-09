@@ -29,3 +29,28 @@ def test_approval_poll_ack_and_errors_through_http(clock):
             assert len(listing.json()["dispatches"]) == 1
             assert (await client.get("http://dispatch.test/health/ready")).status_code == 200
     asyncio.run(scenario())
+
+
+def test_route_setup_is_readable_but_never_exposes_tokens(clock, monkeypatch):
+    async def scenario():
+        monkeypatch.setenv("ROUTING_PROVIDER", "SIMULATED")
+        monkeypatch.delenv("ONEMAP_ACCESS_TOKEN", raising=False)
+        async with Cluster(clock) as cluster:
+            response = await cluster.client.get("http://dispatch.test/api/v1/routing/status")
+            assert response.status_code == 200
+            assert response.json() == {
+                "provider": "SIMULATED", "configured": False,
+                "reason_code": "ONEMAP_ROUTE_REQUIRED",
+            }
+
+        monkeypatch.setenv("ROUTING_PROVIDER", "ONEMAP")
+        monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", "private-test-value")
+        async with Cluster(clock) as cluster:
+            response = await cluster.client.get("http://dispatch.test/api/v1/routing/status")
+            assert response.status_code == 200
+            assert response.json() == {
+                "provider": "ONEMAP", "configured": True, "reason_code": None,
+            }
+            assert "private-test-value" not in response.text
+
+    asyncio.run(scenario())
