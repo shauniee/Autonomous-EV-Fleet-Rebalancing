@@ -174,9 +174,8 @@ export function DemandForm({
             <summary>How demand updates work</summary>
             <p className="description">
               This input sets a supply target without generating API traffic, creating vehicles,
-              starting rentals, or approving relocations. A new timestamp is sent only when you apply. Demand can expire, and the
-              app’s demand simulator may replace it after its manual hold. Inputs are
-              never reapplied automatically.
+              starting rentals, or approving relocations. Manual targets stay valid while demand simulation is paused.
+              When it runs, the simulator can replace a target after its manual hold. Generated demand can expire.
             </p>
           </details>
         </div>

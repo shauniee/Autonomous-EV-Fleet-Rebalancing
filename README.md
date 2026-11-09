@@ -132,7 +132,8 @@ the map must not invent vehicle motion when telemetry is missing.
    for predictable manual values. Select all six zones and apply a fresh
    desired-supply value of **0**; then select **CBD** alone and apply a larger
    target (for example, **12**). This creates *simulated* high demand, not a
-   real observation. CRDS requires fresh demand in **every** zone.
+   real observation. While the simulator is paused, manually set targets stay
+   valid until updated. CRDS still needs a valid target in every zone.
 2. In the **Operator Dashboard → Dispatch**, confirm Fleet, Demand and Facilities
    observations are available. Select **CBD** on the map or zone list and
    request a recommendation. Inspect **Evidence** if the result is HOLD/DEFER.
@@ -272,6 +273,9 @@ eligible moves across declared futures, ranks their minimum fleet-wide shortage
 reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires
 operator approval and fresh revalidation. Execution defaults to LOCAL, so the
 optional HTTP workers are not required. The existing CHARGE workflow is preserved.
+
+Older generated demand can widen the demand scenarios while it remains valid.
+CRDS models route and return delays separately from demand age.
 
 Set `CRDS_MODE=ADVISORY` to review CRDS recommendations without permitting their
 dispatch, or `CRDS_MODE=DISABLED` to select the legacy weighted policy. Its score is:

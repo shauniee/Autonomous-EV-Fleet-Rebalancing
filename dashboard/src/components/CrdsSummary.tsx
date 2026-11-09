@@ -20,11 +20,12 @@ export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batch
   const singleBlocker = excluded.length > 0 && excluded.every(row => row.reason === excluded[0].reason)
     ? excluded[0].reason : null;
   const assessment = evidence?.assessment_reasons ?? result.reason_code.split(',');
+  const partialRoutes = assessment.includes('PARTIAL_ROUTE_COVERAGE');
   const batchReasons = evidence?.batch_stop_reasons.length ? evidence.batch_stop_reasons : batchStop ? [batchStop] : [];
   const messages = result.decision === 'HOLD' && assessment.includes('NO_ELIGIBLE_RELOCATIONS') && singleBlocker
-    ? [...assessment, singleBlocker] : assessment;
+    ? [...assessment, singleBlocker] : assessment.filter(reason => reason !== 'PARTIAL_ROUTE_COVERAGE');
   const stopMessages = [...new Set(batchReasons
-    .filter(reason => !messages.includes(reason)).map(reason => crdsMessage(reason)))];
+    .filter(reason => !assessment.includes(reason) && !messages.includes(reason)).map(reason => crdsMessage(reason)))];
   const label = result.decision === 'MOVE' ? 'Recommended'
     : result.decision === 'HOLD' ? 'No move recommended' : 'Assessment unavailable';
 
@@ -32,13 +33,14 @@ export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batch
     <strong>{label}</strong>
     <p className="recommendation-reason" role={result.decision === 'DEFER' ? 'status' : undefined}>
       {result.decision === 'MOVE' && batchStop !== undefined
-        ? 'The proposed moves reduce the modeled EV shortfall across the fleet, even in the least favorable scenario checked.'
+        ? 'The proposed moves improve the modeled fleet coverage score, even in the least favorable scenario checked.'
         : [...new Set(messages.map(code => crdsMessage(code)))].join(' ')}
     </p>
+    {partialRoutes && <p className="warning" role="status">{crdsMessage('PARTIAL_ROUTE_COVERAGE')}</p>}
     {result.decision !== 'DEFER' && stopMessages.length > 0 &&
       <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">
-      <div><dt>Minimum modeled shortage reduction</dt><dd>{number(result.worst_case_gain_vehicle_minutes, ' vehicle-minutes')}</dd></div>
+      <div><dt>Minimum modeled coverage gain</dt><dd>{number(result.worst_case_gain_vehicle_minutes, ' points')}</dd></div>
       <div><dt>Arrival estimate</dt><dd>{number(result.arrival_minutes_min)}–{number(result.arrival_minutes_max)} min</dd></div>
     </dl>}
     {excluded.length > 0 && <p>{excluded.length} {excluded.length === 1 ? 'EV was' : 'EVs were'} excluded. Open Evidence to see why.</p>}
@@ -62,7 +64,7 @@ export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; o
             <> {row.arrival_soc_pct < 0 ? 'The EV is expected to run out of battery before arrival.'
               : `Estimated battery on arrival ${number(row.arrival_soc_pct, '%')}.`}
               {' '}Required reserve {number(row.reserve_pct, '%')}.</>}
-          {row.gain_vehicle_minutes != null && <> Minimum modeled benefit {number(row.gain_vehicle_minutes, ' vehicle-minutes')}.</>}
+          {row.gain_vehicle_minutes != null && <> Minimum modeled benefit {number(row.gain_vehicle_minutes, ' points')}.</>}
           {row.origin_shortage_increase != null &&
             <> Shortage in the origin zone increases by {number(row.origin_shortage_increase, ' vehicle-minutes')} in this scenario.</>}
           {row.dispatch_ids.map(dispatch => onRelocation &&
@@ -80,9 +82,12 @@ export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; o
     {sites > 0 && <p>CRDS excluded {sites} {sites === 1 ? 'site' : 'sites'} while destination reservations are unconfirmed.</p>}
     {result.decision !== 'DEFER' && <>
       <h4>Modeled effect on EV supply</h4>
-      <p className="muted">One vehicle-minute means being short one EV for one minute. CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes and recommends moves only above {number(result.parameters.minimum_gain_vehicle_minutes, ' vehicle-minutes')} of minimum benefit.</p>
+      <p className="muted">CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes and recommends moves only above {number(result.parameters.minimum_gain_vehicle_minutes, ' points')} of minimum benefit.
+        {(result.parameters.priority_coverage_pct ?? 0) > 0 &&
+          <> Missing EVs count double up to the first {result.parameters.priority_coverage_pct}% of demand, rounded up to a whole EV.</>}
+      </p>
       {Object.keys(result.shortage_changes_by_zone).length > 0 && <>
-        <p className="muted">In the least favorable scenario, positive values show more shortage and negative values show less.</p>
+        <p className="muted">Unweighted shortage changes in the lowest-scoring scenario. Positive values show more shortage and negative values show less.</p>
         <dl className="candidate-metrics">{Object.entries(result.shortage_changes_by_zone).map(([zone, change]) =>
           <div key={zone}><dt>{zone}</dt><dd>{number(change, ' vehicle-minutes')}</dd></div>)}</dl>
       </>}

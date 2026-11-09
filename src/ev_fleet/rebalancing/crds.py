@@ -46,15 +46,21 @@ def apply_move(future: CrdsFuture, parameters: CrdsParameters, move: CrdsMove) -
 
 
 def shortage_by_zone(future: CrdsFuture, parameters: CrdsParameters,
-                     move: CrdsMove | None = None) -> dict[str, float]:
-    """Return J by zone without changing the caller's trajectories."""
+                     move: CrdsMove | None = None, *, weighted: bool = False) -> dict[str, float]:
+    """Calculate shortage, optionally counting unmet priority coverage twice."""
     if any(len(t.desired_stock) != parameters.slot_count for t in future.zones.values()):
         raise ValueError("future trajectories must match the configured horizon")
     if move is not None:
         future = apply_move(future, parameters, move)
-    return {zone: parameters.slot_minutes * fsum(max(0, desired - usable)
+    priority_pct = parameters.priority_coverage_pct if weighted else 0
+    return {zone: parameters.slot_minutes * fsum(
+            max(0, desired - usable) + max(0, (desired * priority_pct + 99) // 100 - usable)
             for desired, usable in zip(t.desired_stock, t.usable_stock))
             for zone, t in future.zones.items()}
+
+
+def shortage_score(future: CrdsFuture, parameters: CrdsParameters) -> float:
+    return fsum(shortage_by_zone(future, parameters, weighted=True).values())
 
 
 def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
@@ -78,7 +84,7 @@ def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
     zones = set(futures[0].zones)
     if any(set(future.zones) != zones for future in futures):
         return CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_ZONE_COVERAGE")
-    baselines = {future.future_id: shortage_by_zone(future, parameters) for future in futures}
+    baselines = {future.future_id: shortage_score(future, parameters) for future in futures}
     for move in moves:
         if set(move.outcomes) != future_ids:
             return CrdsEvaluation(decision="DEFER", reason_code="MOVE_FUTURES_MISMATCH")
@@ -93,15 +99,16 @@ def evaluate_moves(futures: list[CrdsFuture], moves: list[CrdsMove],
     for move in moves:
         gains = []
         for future in futures:
-            baseline = baselines[future.future_id]
-            relocated = shortage_by_zone(future, parameters, move)
-            changes = {zone: relocated[zone] - baseline[zone] for zone in sorted(zones)}
-            gains.append((-fsum(changes.values()), future.future_id, changes))
-        gain, future_id, changes = min(gains, key=lambda row: (row[0], row[1]))
+            relocated = apply_move(future, parameters, move)
+            gain = baselines[future.future_id] - shortage_score(relocated, parameters)
+            gains.append((gain, future, relocated))
+        gain, worst, relocated = min(gains, key=lambda row: (row[0], row[1].future_id))
+        before = shortage_by_zone(worst, parameters)
+        after = shortage_by_zone(relocated, parameters)
         ranked.append(CrdsCandidateGain(
             vehicle_id=move.vehicle_id, facility_id=move.facility_id,
-            worst_case_gain_vehicle_minutes=gain, worst_case_future_id=future_id,
-            shortage_changes_by_zone=changes,
+            worst_case_gain_vehicle_minutes=gain, worst_case_future_id=worst.future_id,
+            shortage_changes_by_zone={zone: after[zone] - before[zone] for zone in sorted(zones)},
             worst_case_energy_required_kwh=max(
                 outcome.energy_required_kwh for outcome in move.outcomes.values())))
     ranked.sort(key=lambda row: (-row.worst_case_gain_vehicle_minutes,

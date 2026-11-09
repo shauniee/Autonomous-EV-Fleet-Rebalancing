@@ -24,7 +24,7 @@ export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation
           <>{number(item.traffic_assessment.estimated_duration_seconds / 60, ' min')}
             {item.traffic_assessment.blocked ? ' · Route blocked' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
           </> : 'Unknown'}</td>
-        <td>{item.crds_gain ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(item.score)}</td>
+        <td>{item.crds_gain ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' points') : number(item.score)}</td>
       </tr>)}</tbody>
     </table></div> : <p className="muted">No vehicle-to-facility assignments were proposed.</p> },
       { id: 'evidence', label: 'Evidence', content: <>
@@ -48,7 +48,7 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
     <div className="eyebrow">Explicit dispatcher approval</div>
     <h2 id="batch-title">Confirm {batch.recommended_count} EV {batch.recommended_count === 1 ? 'relocation' : 'relocations'}</h2>
     <p>{batch.target_zone_id.toUpperCase()} · {batch.unfulfilled_count} unfulfilled of {batch.requested_count} requested</p>
-    {batch.crds && <p>The proposed plan reduces modeled shortage by at least {number(batch.crds.worst_case_gain_vehicle_minutes)} vehicle-minutes across the declared futures. Each approved move is assessed again against the already accepted moves.</p>}
+    {batch.crds && <p>The proposed plan improves modeled fleet coverage by at least {number(batch.crds.worst_case_gain_vehicle_minutes, ' points')} across the scenarios. Each move is assessed again on approval.</p>}
     <ol>{batch.assignments.map(a => <li key={a.recommendation_id}>{a.vehicle_id} → {a.facility_name} · {a.requires_charging ? 'charging' : 'parking'}</li>)}</ol>
     {batch.assignments.some(a => a.requires_charging) && <p className="muted">Ground-team cable connection is assumed after arrival. Charging is simulated automatically to 80%; there is no separate plug-in confirmation.</p>}
     <p className="muted">The backend rechecks each vehicle and holds a space within this simulation before claiming that EV. Partial approval is possible. Public parking and charging spaces are not reserved.</p>

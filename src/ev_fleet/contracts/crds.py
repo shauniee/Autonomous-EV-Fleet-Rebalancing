@@ -16,6 +16,7 @@ class CrdsParameters(Model):
     horizon_minutes: int = Field(default=30, gt=0)
     slot_minutes: int = Field(default=1, gt=0)
     minimum_gain_vehicle_minutes: float = Field(default=1, ge=0)
+    priority_coverage_pct: int = Field(default=0, ge=0, le=100)
 
     @model_validator(mode="after")
     def whole_slots(self):
@@ -66,6 +67,7 @@ class CrdsMove(Model):
 class CrdsCandidateGain(Model):
     vehicle_id: str
     facility_id: str
+    # Historical wire name. The score may weight minutes below priority coverage.
     worst_case_gain_vehicle_minutes: float
     worst_case_future_id: str
     # Positive change is added shortage; negative change is shortage relief.
@@ -92,6 +94,7 @@ class CrdsDemandSnapshot(Model):
     instance_id: UUID
     snapshot_at: AwareDatetime
     zones: list[ZoneState]
+    fixed_demand_zone_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def unique_zones(self):
@@ -174,7 +177,7 @@ class CrdsRevalidationResult(Model):
 
 class CrdsEvaluationTask(Model):
     epoch_id: UUID
-    model_version: Literal["crds-engine-v1"] = "crds-engine-v1"
+    model_version: Literal["crds-engine-v2"] = "crds-engine-v2"
     input_fingerprint: str
     parameters: CrdsParameters
     futures: list[CrdsFuture] = Field(min_length=1, max_length=64)
@@ -183,7 +186,7 @@ class CrdsEvaluationTask(Model):
 
 class CrdsTaskResult(Model):
     epoch_id: UUID
-    model_version: Literal["crds-engine-v1"]
+    model_version: Literal["crds-engine-v2"]
     input_fingerprint: str
     future_ids: list[str]
     evaluation: CrdsEvaluation

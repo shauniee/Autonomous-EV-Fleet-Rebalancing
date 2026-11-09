@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from ev_fleet.common.settings import CrdsSettings, Settings
 from ev_fleet.contracts.demand import DemandUpdate
+from ev_fleet.contracts.dispatch import BatchApproval
 from ev_fleet.facilities.catalog import BY_ID
 from ev_fleet.rebalancing.crds import evaluate_moves
 from ev_fleet.contracts.crds import CrdsEvaluation, CrdsEvaluationTask, CrdsTaskResult
@@ -67,10 +68,13 @@ def dispatch_for(vehicle, observations, clock, *, command=True):
 
 
 async def plan(observations, clock, *, batch=False, worker=False, route_error=None,
-               route_error_vehicle=None, route_distance=None, traffic=None, **selection):
-    def respond(request):
+               route_error_vehicle=None, route_distance=None, traffic=None,
+               route_hook=None, deadline_seconds=30, **selection):
+    async def respond(request):
         if request.url.path == "/api/v1/route-estimates":
             body = json.loads(request.content)
+            if route_hook is not None:
+                await route_hook(body["vehicle_id"])
             if route_error and (route_error_vehicle is None
                                 or body["vehicle_id"] == route_error_vehicle):
                 return httpx.Response(503, json={"error": {"code": route_error}})
@@ -93,14 +97,60 @@ async def plan(observations, clock, *, batch=False, worker=False, route_error=No
             return httpx.Response(200, json=reply.model_dump(mode="json"))
         return httpx.Response(200, json=observations[request.url.path])
 
-    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test",
+    config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test", deadline_seconds=deadline_seconds,
         execution_mode="HTTP" if worker else "LOCAL",
         worker_urls=["http://worker1.test", "http://worker2.test"] if worker else [])
+    policy = Settings()
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        result = await plan_one(client, Settings(), config, clock, traffic or {}, "cbd", **selection)
+        result = await plan_one(client, policy, config, clock, traffic or {}, "cbd",
+                                for_batch=batch, **selection)
         if batch:
-            return result, await plan_batch(result, 5, client, config, clock)
+            return result, await plan_batch(result, 5, client, config, clock, policy=policy)
         return result
+
+
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize("refresh", ["heartbeat", "stale", "moved", "soc_changed", "control_changed"])
+def test_long_route_lookup_confirms_current_selected_telemetry(observations, clock, monkeypatch, batch, refresh):
+    from ev_fleet.rebalancing import crds_service
+
+    fleet = observations["/api/v1/vehicles"]
+    for vehicle in fleet["vehicles"]:
+        vehicle["telemetry"]["position"] = {"latitude": 1.4, "longitude": 103.85}
+    evaluate = crds_service.evaluate_candidates
+
+    async def evaluate_after_route_lookup(*args, **kwargs):
+        if clock.monotonic() == 0:
+            clock.advance(16)
+            fleet.update(snapshot_at=clock.now().isoformat(), snapshot_version=2)
+            if refresh != "stale":
+                for vehicle in fleet["vehicles"]:
+                    vehicle.update(received_at=clock.now().isoformat(), state_version=2)
+                    vehicle["telemetry"].update(observed_at=clock.now().isoformat(), sequence=2)
+            changed = fleet["vehicles"][1 if batch else 0]
+            if refresh == "moved":
+                changed["telemetry"]["position"]["latitude"] += .01
+            elif refresh == "soc_changed":
+                changed["telemetry"]["soc_pct"] -= 1
+            elif refresh == "control_changed":
+                changed["control_version"] = 2
+        return await evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(crds_service, "evaluate_candidates", evaluate_after_route_lookup)
+    result = asyncio.run(plan(observations, clock, batch=batch))
+    if batch:
+        _, (children, metadata, _) = result
+        assert len(children) == (2 if refresh == "heartbeat" else 0)
+        defer_reason = "STALE_AFTER_BATCH_PLANNING"
+    else:
+        metadata = result.metadata
+        defer_reason = "STALE_AFTER_ROUTE_LOOKUP"
+
+    if refresh == "heartbeat":
+        assert metadata.decision == "MOVE" and metadata.approval_allowed
+    else:
+        assert metadata.decision == "DEFER" and not metadata.approval_allowed
+        assert metadata.reason_code == defer_reason
 
 
 @pytest.mark.parametrize("failure", ["stale", "offline", "missing", "observation_age", "transport_age"])
@@ -340,6 +390,77 @@ def test_batch_explains_parking_limit_and_keeps_child_evidence_scoped(observatio
     assert list(child["vehicles"]) == ["healthy"]
 
 
+def test_empty_cbd_gets_four_evs_with_aged_manual_targets(clock, monkeypatch):
+    monkeypatch.setenv("CRDS_MODE", "ACTIVE")
+    monkeypatch.setenv("DISPATCH_URL", "http://dispatch.test")
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            # Give the nearest mock site room for four so this exercises coverage policy.
+            site = cluster.facilities.catalogue["mock-cbd-03"]
+            cluster.facilities.catalogue[site.facility_id] = site.model_copy(update={"parking_available": 4})
+            stocks = {"bishan": 3, "cbd": 0, "jurong-east": 0, "punggol": 1,
+                      "tampines": 5, "woodlands": 11}
+            for zone_id in stocks:
+                await cluster.demand.update(zone_id, "demand", DemandUpdate(expected_version=0,
+                    observed_at=clock.now(),
+                    desired_available_vehicles=21 if zone_id in ("cbd", "punggol", "tampines") else 12))
+            clock.advance(600)
+            for zone_id, stock in stocks.items():
+                zone = await cluster.demand.get(zone_id)
+                for index in range(stock):
+                    vehicle_id = f"{zone_id}-{index}"
+                    await cluster.vehicle(vehicle_id)
+                    await cluster.telemetry(vehicle_id, position=zone["position"])
+            response = await cluster.client.post("http://rebalancing.test/api/v1/batch-recommendations",
+                json={"target_zone_id": "cbd", "quantity": 4})
+            assert response.status_code == 201, response.text
+            batch = response.json()
+            assert batch["recommended_count"] == 4
+            score = batch["crds"]
+            assert score["scenario_count"] == 6
+            assert score["worst_case_gain_vehicle_minutes"] > 1
+            assert sum(score["shortage_changes_by_zone"].values()) > 0
+            assert score["source_references"]["decision_evidence"]["vehicles"]["punggol-0"]["reason"] == (
+                "DONOR_SERVICE_FLOOR")
+
+            approval = await cluster.dispatch.approve_batch(BatchApproval(
+                request_id=uuid4(), batch_recommendation_id=batch["batch_recommendation_id"]))
+            assert approval["status"] == "APPROVED", approval
+            assert len(approval["items"]) == 4
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_demand_age_stresses_only_dynamic_targets_and_never_delays_routes(observations, clock):
+    snapshot = observations["/api/v1/zones"]
+    donor, target = snapshot["zones"]
+    snapshot["fixed_demand_zone_ids"] = ["cbd"]
+    target["demand"]["observed_at"] = (clock.now() - timedelta(seconds=600)).isoformat()
+    fresh = asyncio.run(plan(observations, clock))
+    assert len(fresh.futures) == 6
+
+    donor["demand"]["observed_at"] = (clock.now() - timedelta(seconds=90)).isoformat()
+    aged = asyncio.run(plan(observations, clock))
+    worst_age = next(future for future in aged.futures if future.future_id == "age_3")
+    assert worst_age.zones["bishan"].desired_stock[0] == 3
+    assert worst_age.zones["cbd"].desired_stock[0] == target["demand"]["desired_available_vehicles"]
+    assert aged.moves
+    for move in aged.moves:
+        assert move.outcomes["age_3"] == move.outcomes["nominal"]
+        assert move.outcomes["delayed_inbound"].arrival_minutes > move.outcomes["nominal"].arrival_minutes
+
+
+def test_batch_keeps_last_donor_ev_even_when_target_still_needs_coverage(observations, clock):
+    observations["/api/v1/zones"]["zones"][0]["demand"]["desired_available_vehicles"] = 1
+    observations["/api/v1/zones"]["zones"][1]["demand"]["desired_available_vehicles"] = 21
+    _, (children, metadata, reason) = asyncio.run(plan(observations, clock, batch=True, worker=True))
+    assert len(children) == 1
+    assert reason == "CAPACITY_OR_STOCK_LIMIT"
+    evidence = metadata.source_references["decision_evidence"]
+    assert evidence["batch_stop_reasons"] == ["BATCH_ORIGIN_STOCK_LIMIT"]
+
+
 def test_requested_ev_missing_and_road_reserve_are_distinct_exclusions(observations, clock):
     missing = asyncio.run(plan(observations, clock, vehicle_id="unknown"))
     assert missing.metadata.decision == "HOLD"
@@ -379,6 +500,44 @@ def test_one_unroutable_ev_does_not_block_valid_recommendation(observations, clo
     assert evidence["healthy"]["reason"] == "ROAD_ROUTE_NOT_FOUND"
     assert evidence["healthy"]["facility_id"] == "mock-cbd-01"
     assert evidence["healthy-2"]["outcome"] == "RECOMMENDED"
+
+
+@pytest.mark.parametrize("target_demand", [0, 21])
+def test_route_cutoff_keeps_verified_results_and_cancels_pending_lookups(observations, clock, target_demand):
+    fleet = observations["/api/v1/vehicles"]["vehicles"]
+    fleet[1]["telemetry"]["position"] = {"latitude": 1.4, "longitude": 103.85}
+    fleet.extend(deepcopy(fleet[0]) | {"vehicle_id": f"donor-{index}"} for index in range(3))
+    zones = observations["/api/v1/zones"]["zones"]
+    zones[0]["demand"]["desired_available_vehicles"] = 12
+    zones[1]["demand"]["desired_available_vehicles"] = target_demand
+    started, cancelled = [], set()
+
+    async def check_route(vehicle_id):
+        started.append(vehicle_id)
+        if vehicle_id == "healthy-2":
+            return
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.add(vehicle_id)
+            raise
+
+    _, (children, metadata, reason) = asyncio.run(plan(
+        observations, clock, batch=True, route_hook=check_route, deadline_seconds=.25))
+    assert started[0] == "healthy-2"
+    assert cancelled == set(started[1:]) and len(cancelled) == 4
+    evidence = metadata.source_references["decision_evidence"]
+    timed_out = {row["reason"] for identifier, row in evidence["vehicles"].items() if identifier != "healthy-2"}
+    assert timed_out == {"ROUTE_LOOKUP_TIMEOUT"}
+    if target_demand:
+        assert metadata.decision == "MOVE" and metadata.approval_allowed
+        assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy-2"]
+        assert reason == "PARTIAL_ROUTE_COVERAGE"
+        assert "PARTIAL_ROUTE_COVERAGE" in evidence["assessment_reasons"]
+    else:
+        assert metadata.decision == "DEFER" and not metadata.approval_allowed and not children
+        assert evidence["assessment_reasons"] == ["ROUTE_LOOKUP_TIMEOUT"]
+        assert evidence["vehicles"]["healthy-2"]["outcome"] == "NOT_SELECTED"
 
 
 def test_unavailable_demand_does_not_fingerprint_bulk_traffic(
@@ -435,7 +594,7 @@ def test_late_batch_defer_discards_provisional_recommendations(observations, clo
         monkeypatch.setattr(crds_service, "evaluate_candidates", evaluate_with_late_failure)
         config = CrdsSettings(mode="ACTIVE", dispatch_url="http://dispatch.test")
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))) as client:
-            children, metadata, reason = await plan_batch(initial, 3, client, config, clock)
+            children, metadata, reason = await plan_batch(initial, 3, client, config, clock, policy=Settings())
         assert calls == 2 and not children
         assert reason == "WORKER_RESULTS_INCOMPLETE" and not metadata.approval_allowed
         evidence = metadata.source_references["decision_evidence"]

@@ -145,7 +145,8 @@ export interface CrdsMetadata {
     excluded_facility_ids?: string[];
     decision_evidence?: CrdsDecisionEvidence;
   };
-  parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number };
+  parameters: { horizon_minutes: number; slot_minutes: number; minimum_gain_vehicle_minutes: number;
+    priority_coverage_pct?: number };
 }
 export interface Recommendation {
   recommendation_id: string; expires_at: string; created_at: string;

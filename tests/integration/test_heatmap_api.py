@@ -75,19 +75,27 @@ def test_fleet_failure_returns_unknown_capacity_not_zero(clock, failure, expecte
     asyncio.run(scenario())
 
 
-def test_missing_and_stale_demand_are_not_zero(clock):
+def test_paused_manual_targets_stay_current_while_generated_demand_expires(clock):
     async def scenario():
         async with DemandCluster(clock, demand_max_age_seconds=10) as cluster:
             await cluster.vehicle()
             view = await cluster.heatmap()
             assert all(row["rental_demand"] is None and row["hotspot_severity"] == "UNKNOWN" for row in view["zones"])
+            base = "http://demand.test/api/v1"
+            assert (await cluster.client.post(f"{base}/demand-simulation/start")).status_code == 200
             await cluster.set_demand(value=5)
+            planning_url = f"{base}/zones?include_fixed_targets=true"
+            assert (await cluster.client.get(planning_url)).json()["fixed_demand_zone_ids"] == []
+            assert (await cluster.client.post(f"{base}/demand-simulation/pause")).status_code == 200
             clock.advance(10)
             await cluster.telemetry()
             view = await cluster.heatmap()
             cbd = next(row for row in view["zones"] if row["zone_id"] == "cbd")
-            assert cbd["rental_demand"] == 5 and cbd["demand_status"] == "STALE"
-            assert cbd["current_shortage"] is None and cbd["demand_level"] == "UNKNOWN"
+            assert cbd["rental_demand"] == 5 and cbd["demand_status"] == "FRESH"
+            assert cbd["current_shortage"] == 5
+            assert all(row["demand_status"] == "STALE" for row in view["zones"] if row["zone_id"] != "cbd")
+            assert (await cluster.client.get(planning_url)).json()["fixed_demand_zone_ids"] == ["cbd"]
+            assert "fixed_demand_zone_ids" not in (await cluster.client.get(f"{base}/zones")).json()
     asyncio.run(scenario())
 
 

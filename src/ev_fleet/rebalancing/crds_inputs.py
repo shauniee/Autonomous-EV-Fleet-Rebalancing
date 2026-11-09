@@ -2,17 +2,66 @@
 import asyncio
 from collections import Counter, defaultdict
 
+import httpx
+from fastapi import HTTPException
+
+from ev_fleet.common.clock import Clock
+from ev_fleet.common.settings import Settings
 from ev_fleet.contracts.crds import (CrdsDemandSnapshot, CrdsInputs, CrdsPlanningSnapshot,
                                    CrdsRelocationExclusion)
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
 from ev_fleet.contracts.vehicles import FleetSnapshot
-from ev_fleet.demand.aggregation import capacity, telemetry_is_fresh, vehicle_placements
+from ev_fleet.demand.aggregation import capacity, demand_is_current, telemetry_is_fresh, vehicle_placements
 from ev_fleet.demand.clients import parking_snapshot
 from ev_fleet.demand.settings import DemandSettings
 from .clients import get_json
 
 
 ACTIVE_JOURNEY_STATES = {"PENDING", "SENT", "ACKNOWLEDGED", "IN_PROGRESS", "ARRIVAL_PENDING"}
+
+
+async def selected_vehicles_are_current(
+    client: httpx.AsyncClient, settings: Settings, clock: Clock, original: FleetSnapshot,
+    vehicle_ids: set[str], deadline: float,
+) -> bool:
+    """Confirm that newer heartbeats still support the frozen route and score."""
+    policy = DemandSettings.from_env()
+    policy.telemetry_max_age_seconds = min(policy.telemetry_max_age_seconds, settings.stale_seconds)
+    selected = {v.vehicle_id: v for v in original.vehicles if v.vehicle_id in vehicle_ids}
+    if selected.keys() != vehicle_ids:
+        return False
+    now = clock.now()
+    if all(telemetry_is_fresh(v, original, policy, now) for v in selected.values()):
+        return True
+
+    remaining = deadline - clock.monotonic()
+    if remaining <= 0:
+        return False
+    try:
+        raw = await asyncio.wait_for(get_json(client, f"{settings.fleet_url}/api/v1/vehicles"),
+                                     min(remaining, policy.fleet_timeout_seconds))
+        current = FleetSnapshot.model_validate(raw)
+    except (asyncio.TimeoutError, HTTPException, httpx.HTTPError, ValueError):
+        return False
+
+    now = clock.now()
+    if (current.instance_id != original.instance_id or current.snapshot_version < original.snapshot_version
+            or not -5 <= (now - current.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds):
+        return False
+    latest = {v.vehicle_id: v for v in current.vehicles}
+    for vehicle_id, before in selected.items():
+        after = latest.get(vehicle_id)
+        if (after is None or before.telemetry is None or after.telemetry is None
+                or not telemetry_is_fresh(after, current, policy, now)
+                or after.effective_availability != "AVAILABLE"
+                or after.control_version != before.control_version
+                or after.current_zone_id != before.current_zone_id
+                or after.battery_capacity_kwh != before.battery_capacity_kwh
+                or after.consumption_kwh_per_km != before.consumption_kwh_per_km
+                or after.telemetry.position != before.telemetry.position
+                or after.telemetry.soc_pct != before.telemetry.soc_pct):
+            return False
+    return True
 
 
 def journey_matches(dispatch, vehicle, fleet_id, zones):
@@ -82,7 +131,7 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
                          exclude_dispatch_id=None):
     policy = DemandSettings.from_env()
     reads = [f"{settings.fleet_url}/api/v1/vehicles",
-             f"{settings.demand_url}/api/v1/zones",
+             f"{settings.demand_url}/api/v1/zones?include_fixed_targets=true",
              f"{settings.facilities_url}/api/v1/facilities",
              f"{dispatch_url}/api/v1/dispatch-planning-state"]
 
@@ -129,8 +178,9 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
         issues.add("FLEET_SNAPSHOT_STALE")
     if not -5 <= (now - planning.observed_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
         issues.add("DISPATCH_SNAPSHOT_STALE")
+    fixed_targets = set(demand.fixed_demand_zone_ids)
     for zone in zones.values():
-        if zone.demand is None or not -5 <= (now - zone.demand.observed_at).total_seconds() < policy.demand_max_age_seconds:
+        if not demand_is_current(zone, policy, now, fixed=zone.zone_id in fixed_targets):
             issues.add("DEMAND_UNKNOWN_OR_STALE")
     if facilities.data_source == "LTA_DATAMALL" and not any(
             f.name == "parking" and f.status == "FRESH" for f in facilities.feeds):

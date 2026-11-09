@@ -50,8 +50,8 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
         return await state.create(body)
 
     @app.get("/api/v1/zones")
-    async def zones():
-        return await state.snapshot()
+    async def zones(include_fixed_targets: bool = False):
+        return await state.snapshot(include_fixed_targets=include_fixed_targets)
 
     @app.get("/api/v1/zones/{zone_id}", response_model=ZoneState)
     async def zone(zone_id: str):
@@ -85,7 +85,7 @@ def create_app(store=None, seed_zones=True, settings=None, client=None, cache=No
     @app.get("/api/v1/dashboard/heat-map", response_model=HeatMapResponse)
     async def dashboard_heat_map(response: Response):
         result, status = await display_cache.get_or_compute(
-            f"heat-map:{state.version}", heat_map_view, HeatMapResponse)
+            f"heat-map:{state.version}:{state.simulation_enabled}", heat_map_view, HeatMapResponse)
         response.headers["X-Dashboard-Cache"] = status
         return result
 
