@@ -63,6 +63,8 @@ def route_failure_reason(error: Exception) -> str:
             code = error.response.json()["error"]["code"]
         except (ValueError, KeyError, TypeError):
             return "ROUTE_EVIDENCE_UNAVAILABLE"
+        if code == "ONEMAP_ROUTE_REQUIRED":
+            return "ROUTING_NOT_CONFIGURED"
         if code in ("ONEMAP_AUTH_FAILED", "ONEMAP_TOKEN_MISSING"):
             return "ROUTING_ACCESS_UNAVAILABLE"
         if code in ("ONEMAP_NO_ROUTE", "ONEMAP_ORIGIN_NOT_ON_ROAD",
