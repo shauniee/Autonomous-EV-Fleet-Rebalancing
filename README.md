@@ -264,12 +264,10 @@ kilometres, energy in kWh and state of charge as a percentage.
 
 ### EV selection
 
-Rebalancing excludes vehicles with missing or stale telemetry, offline connectivity,
-an active claim or rental, insufficient predicted arrival charge, or another
-conflicting operation. Eligible vehicles receive an explainable score:
-Rebalancing first excludes EVs with missing/stale telemetry, offline connectivity,
-unavailability, an active relocation or claim, or insufficient predicted arrival
-SOC. CRDS is the default rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
+Rebalancing excludes EVs with missing or stale telemetry, offline connectivity,
+unavailability, a rental or active relocation/claim, insufficient predicted
+arrival charge, or another conflicting operation. CRDS is the default
+rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
 eligible moves across declared futures, ranks their minimum fleet-wide shortage
 reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires
 operator approval and fresh revalidation. Execution defaults to LOCAL, so the
@@ -285,9 +283,10 @@ dispatch, or `CRDS_MODE=DISABLED` to select the legacy weighted policy. Its scor
 10% charging suitability
 ```
 
-The highest score wins, followed by deterministic tie-breaks. A nearest-eligible-EV
-strategy exists only as an experimental comparison; the application uses the
-energy-aware strategy.
+In this **legacy weighted policy**, the highest score wins, followed by
+deterministic tie-breaks. A nearest-eligible-EV strategy exists only as an
+experimental comparison; **default CRDS** instead evaluates the minimum
+fleet-wide shortage reduction across its declared scenarios.
 
 ### Rentals and charging
 
@@ -375,7 +374,11 @@ Available optional integrations include:
 - [OneMap road routing](docs/onemap-routing.md)
 - live or simulated traffic settings documented in `.env.example`
 
-The default system remains fully simulated when these integrations are disabled.
+The demand, telemetry and map demonstrations work with simulated inputs when
+optional observation feeds are disabled. However, the current Dispatch path
+requires an explicit verified **OneMap road route** before relocation approval.
+The default `SIMULATED` routing setting does **not** permit a complete
+relocation demonstration.
 
 ## Simulation analytics and HPA observability
 
