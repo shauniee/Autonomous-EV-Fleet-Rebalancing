@@ -23,6 +23,11 @@ import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, r
 
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
+interface RoutingConfiguration {
+  provider: 'SIMULATED' | 'ONEMAP';
+  configured: boolean;
+  reason_code: string | null;
+}
 export default function App() {
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const heat = usePolling<HeatMap>('/api/demand/heat-map');
@@ -36,6 +41,8 @@ export default function App() {
     heatUnavailable ? 'Unknown' : demandLevel(zone, { moderate, critical }), [heatUnavailable, moderate, critical]);
   const fleet = usePolling<Fleet>('/api/fleet/dashboard/vehicles', 1000);
   const dispatches = usePolling<DispatchList>('/api/dispatch/dispatches');
+  // "Configured" deliberately does not claim that OneMap accepted the token.
+  const routing = usePolling<RoutingConfiguration>('/api/dispatch/routing/status', 30000);
   const facilities = usePolling<FacilitiesSnapshot>('/api/facilities/facilities', 10000);
   const chargingAdvice = usePolling<ChargingAdvice>('/api/rebalancing/charging-advice', 10000);
   const traffic = usePolling<TrafficSnapshot>('/api/rebalancing/traffic/conditions', 5000);
@@ -362,10 +369,17 @@ export default function App() {
         </details>
         <Notifications open={notificationsOpen} onOpenChange={setNotificationsOpen} active={activeNotifications}
           history={activity} onClear={() => setActivity([])}/>
-        <button className="refresh-action" onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); chargingAdvice.refresh(); traffic.refresh(); }}>Refresh now</button>
+        <button className="refresh-action" onClick={() => { heat.refresh(); fleet.refresh(); dispatches.refresh(); facilities.refresh(); chargingAdvice.refresh(); traffic.refresh(); routing.refresh(); }}>Refresh now</button>
       </div>
     </header>
     <main>
+      {routing.data && !routing.data.configured && <section className="warning routing-setup" role="status" aria-label="Road routing setup">
+        <strong>Road routing is not configured for dispatch.</strong>
+        <p>Demand, vehicles and the map can still be viewed, but this computer cannot verify the road routes needed for EV relocation.</p>
+        <p>In this computer's <code>.env</code>, set <code>ROUTING_PROVIDER=ONEMAP</code> and a valid
+          {' '}<code>ONEMAP_ACCESS_TOKEN</code>, then run a normal Kubernetes startup (not ConnectOnly).
+          A saved token does not guarantee the route provider is reachable.</p>
+      </section>}
       <OperationalTabs activeTab={operationalTab} onTabChange={setOperationalTab} tabs={[
         { id: 'dispatch', label: 'Dispatch', content: <>
           <div className="workspace" data-compact-view={compactView}>
