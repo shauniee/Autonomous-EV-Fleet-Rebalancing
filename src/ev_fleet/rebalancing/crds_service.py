@@ -252,7 +252,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         vehicle, site, _ = candidate
         try:
             prepared = await prepare(candidate)
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as exc:
             vehicles[vehicle.vehicle_id] = VehicleDecision(
                 outcome="INCOMPLETE", reason=route_failure_reason(exc), facility_id=site.facility_id)
             raise
@@ -270,9 +270,12 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     except asyncio.TimeoutError as exc:
         legacy_reason = str(exc) if isinstance(exc, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
         return defer(legacy_reason, route_failure_reason(exc))
-    failures = [item for item in results if isinstance(item, (httpx.HTTPError, ValueError))]
-    prepared = [item for item in results if not isinstance(item, (httpx.HTTPError, ValueError))]
-    if failures and not prepared:
+    # A rejected route is not equivalent to a verified absence of useful moves.
+    # If only failed/ineligible checks remain, do not label an incomplete
+    # assessment HOLD; an unverified candidate may still be viable.
+    failures = [item for item in results if isinstance(item, BaseException)]
+    prepared = [item for item in results if not isinstance(item, BaseException)]
+    if failures and not any(item is not None for item in prepared):
         failure = failures[0]
         legacy_reason = str(failure) if isinstance(failure, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
         return defer(legacy_reason, route_failure_reason(failure))
