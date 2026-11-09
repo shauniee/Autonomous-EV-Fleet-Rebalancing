@@ -97,6 +97,13 @@ export function DemandForm({
       <p className="description">
         Set a target for available vehicles in each selected zone.
       </p>
+      <p className="description">
+        For a relocation demonstration, give every zone a fresh demand value first:
+        select all zones and apply 0, then select the high-demand zone and apply a larger target.
+        CRDS assesses fleet-wide shortages, so missing or expired demand in another zone can
+        prevent any recommendation. Pause automatic demand updates while entering your scenario;
+        refresh manual observations before they expire.
+      </p>
       <form className="demand-layout" onSubmit={submit}>
         <fieldset className="demand-zones" disabled={busy || !available}>
           <legend>Zones ({selectedZones.length} selected)</legend>

@@ -28,6 +28,19 @@ class RoutingSettings(BaseModel):
                    access_token=os.getenv("ONEMAP_ACCESS_TOKEN", ""))
 
 
+def routing_configuration(settings: RoutingSettings) -> dict:
+    """Report configuration only; never expose or imply validation of an access token."""
+    token_present = bool(settings.access_token.get_secret_value().strip())
+    configured = settings.provider == "ONEMAP" and token_present
+    return {
+        "provider": settings.provider,
+        "configured": configured,
+        "reason_code": (None if configured else
+                        "ONEMAP_TOKEN_MISSING" if settings.provider == "ONEMAP"
+                        else "ONEMAP_ROUTE_REQUIRED"),
+    }
+
+
 def decode_polyline(encoded):
     """Decode OneMap's precision-5 encoded polyline into WGS84 positions."""
     if not isinstance(encoded, str) or len(encoded) > 500000:
@@ -57,7 +70,7 @@ def decode_polyline(encoded):
 
 
 async def _onemap_route(client, settings, origin, destination):
-    if not settings.access_token.get_secret_value():
+    if not settings.access_token.get_secret_value().strip():
         raise HTTPException(503, "ONEMAP_TOKEN_MISSING")
     try:
         response = await client.get("https://www.onemap.gov.sg/api/public/routingsvc/route",

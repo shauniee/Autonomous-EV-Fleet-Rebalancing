@@ -511,3 +511,26 @@ def test_dispatch_preserves_fresh_crds_rejection_reason(clock, monkeypatch, reas
             assert not cluster.facilities.holds
 
     asyncio.run(scenario())
+
+
+def test_missing_route_provider_is_reported_as_configuration_issue(observations, clock):
+    result = asyncio.run(plan(observations, clock, route_error="ONEMAP_ROUTE_REQUIRED"))
+    assert result.metadata.decision == "DEFER"
+    assert not result.metadata.approval_allowed
+    evidence = result.metadata.source_references["decision_evidence"]
+    assert evidence["assessment_reasons"] == ["ROUTING_NOT_CONFIGURED"]
+    assert {row["reason"] for row in evidence["vehicles"].values()} == {"ROUTING_NOT_CONFIGURED"}
+
+
+def test_failed_route_plus_ineligible_vehicle_must_not_claim_no_eligible_moves(observations, clock):
+    # One candidate was unable to get any route evidence; the second had a
+    # verified insufficient reserve. Previously a returned None hid the failed
+    # lookup and misreported HOLD / NO_ELIGIBLE_RELOCATIONS.
+    result = asyncio.run(plan(observations, clock,
+        route_error="ONEMAP_ROUTE_REQUIRED", route_error_vehicle="healthy", route_distance=250))
+    assert result.metadata.decision == "DEFER"
+    assert not result.metadata.approval_allowed
+    evidence = result.metadata.source_references["decision_evidence"]
+    assert evidence["assessment_reasons"] == ["ROUTING_NOT_CONFIGURED"]
+    assert evidence["vehicles"]["healthy"]["outcome"] == "INCOMPLETE"
+    assert evidence["vehicles"]["healthy-2"]["reason"] == "ROUTE_BELOW_OPERATIONAL_RESERVE"

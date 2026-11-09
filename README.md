@@ -9,75 +9,176 @@ information and explicit operator approval. It does not control real vehicles.
 Optional integrations can provide real parking, charging, routing and traffic
 observations, but movement and operational decisions remain simulated.
 
-## Start the application
+## What this project demonstrates
 
-### Prerequisites
+This is a **distributed-systems coursework demonstration**, not an autonomous
+vehicle service. The goal is to show how separate services work together to
+decide **whether an EV should be relocated from one Singapore zone to another**,
+and how a human-approved request is safely carried out by simulated vehicles.
 
-- Docker Desktop using Linux containers
-- Docker Desktop Kubernetes enabled
-- `kubectl` with the `docker-desktop` context
-- Windows PowerShell
-- Python 3 available through `py -3` or `python`
-- Host ports 8080 and 8090 available
+| Interface | Local URL | What to demonstrate |
+|---|---|---|
+| **Simulation Console** | <http://127.0.0.1:8090> | Change zone demand, pause/start demand generation, create controlled traffic/rental scenarios, and inspect service health and analytics. |
+| **Operator / Map Dashboard** | <http://127.0.0.1:8080> | View Singapore zones and simulated EV telemetry, inspect shortages and recommendation evidence, approve a relocation, and track the EV along a verified road route to arrival. |
 
-From the repository root, run:
+An example presentation is **increasing demand in CBD**, observing the shortage,
+requesting a suitable EV, **explicitly approving** the dispatch, then watching
+Fleet telemetry and Dispatch status change as the simulator moves and arrives.
+The system also showcases distributed-system concerns: independent services,
+freshness and partial failures, eligibility and battery checks, competing claims,
+idempotent approvals, and recovery from uncertain outcomes.
+
+Recommendations are **not** dispatch commands. A high-demand zone does not
+guarantee a move: the decision may legitimately be **MOVE** (useful, eligible
+relocation), **HOLD** (no useful verified move), or **DEFER** (assessment incomplete).
+No real vehicles are controlled.
+
+## Quick start on Windows (laptop or desktop)
+
+Run these commands from **Windows PowerShell** in the repository root. The
+same steps apply to each computer: each needs its own Docker Desktop setup,
+local `.env` file, and optional OneMap credentials. For a longer demonstration
+checklist, see [Local demo readiness](docs/local-demo-readiness.md).
+
+### Step 1 — Install prerequisites and get the code
+
+- Git and Windows PowerShell
+- Python **3.12+** and Node.js **22+**
+- Docker Desktop using **Linux containers**, with its **Kubernetes** feature enabled
+- `kubectl` configured for the **`docker-desktop`** context
+- Available local ports **8080** (map dashboard) and **8090** (Simulation Console)
+
+On a new computer, clone the repository:
+
+```powershell
+git clone https://github.com/shauniee/Autonomous-EV-Fleet-Rebalancing.git
+cd Autonomous-EV-Fleet-Rebalancing
+Copy-Item .env.example .env
+```
+
+The repository must be accessible to your GitHub account. If you have already
+cloned it, use your existing checkout and **do not overwrite** its `.env`.
+Check the Docker Desktop context and local Kubernetes readiness:
+
+```powershell
+docker context show
+kubectl config current-context
+kubectl get nodes
+```
+
+Both the Docker context and Kubernetes context should target your local
+Docker Desktop installation, and the Kubernetes node should report `Ready`.
+Do not deploy to an unintended remote cluster.
+
+**Routing for a working relocation demo:** Edit your private `.env` to set
+`ROUTING_PROVIDER=ONEMAP` and `ONEMAP_ACCESS_TOKEN` to a valid **OneMap REST
+access token**. Do **not** commit or share that file. The default
+`ROUTING_PROVIDER=SIMULATED` allows observation and dashboard exploration, but
+**does not provide a verified road route for an approvable relocation**. The
+routing-status banner helps explain this. See [OneMap configuration](docs/onemap-routing.md).
+A configured token does not by itself prove OneMap can return a valid route.
+
+### Step 2 — Prepare, test, and launch
+
+Run the following **in order**:
+
+**1. Prepare the Python environment**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
+```
+
+Creates or repairs the project-local `.venv` and installs the required Python
+packages. Generally needed on initial setup or when dependencies change; the
+normal startup command also calls this automatically.
+
+**2. Test the code before demonstrating it**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1
+```
+
+Runs the Python backend tests, React operator-dashboard unit tests and build,
+and Simulation Console build. It installs frontend npm dependencies if missing.
+A `PASS` here does **not** prove live OneMap routing, Kubernetes, or both user
+interfaces work together; the live demo check below is still required. Stop
+and investigate failures instead of assuming everything works.
+
+**3. Start the complete local system**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
 ```
 
-This single command:
+Validates the local Docker/Kubernetes environment and existing data, refuses
+unsafe redeployment during active workflows, builds updated Docker images,
+deploys services/simulators/dashboards, waits for their rollouts, and opens
+or reuses local dashboard connections. **Keep the PowerShell window open**
+while its port-forward connections are needed; `Ctrl+C` stops tunnels it
+created, not the Kubernetes deployment.
 
-1. Runs `scripts/setup-local.ps1` to validate or create `.venv` and install runtime
-   dependencies when the dependency definition changes.
-2. Validates the local Docker Desktop Kubernetes context.
-3. Checks that an existing PostgreSQL database is reachable without deleting data.
-4. Refuses to redeploy while rentals, relocations or charging work are active.
-5. Validates permitted integration settings from `.env` without printing secrets.
-6. Builds uniquely tagged backend, operator-dashboard and simulation-console images.
-7. Applies the Kubernetes resources and waits for every workload to roll out.
-8. Opens or reuses the two local dashboard tunnels.
+### Step 3 — Open both dashboards
 
-After startup:
+- **Simulation Console:** <http://127.0.0.1:8090>
+- **Operator / Map Dashboard:** <http://127.0.0.1:8080>
 
-- Operator dashboard: <http://127.0.0.1:8080>
-- Simulation console: <http://127.0.0.1:8090>
+The Simulation Console **creates the scenario**; the Operator Dashboard
+**evaluates, approves, and shows its outcome**. Both views use backend state;
+the map must not invent vehicle motion when telemetry is missing.
 
-Keep the PowerShell window open when it created new port-forward sessions. Press
-`Ctrl+C` to close only those tunnels. PostgreSQL data remains on the
-`postgres-data-postgres-0` persistent-volume claim.
+### Step 4 — Try an end-to-end relocation scenario
 
-For a complete local fresh boot that discards generated runtime state while
-preserving PostgreSQL data, run:
+1. In the **Simulation Console → Demand**, **pause** automatic demand generation
+   for predictable manual values. Select all six zones and apply a fresh
+   desired-supply value of **0**; then select **CBD** alone and apply a larger
+   target (for example, **12**). This creates *simulated* high demand, not a
+   real observation. CRDS requires fresh demand in **every** zone.
+2. In the **Operator Dashboard → Dispatch**, confirm Fleet, Demand and Facilities
+   observations are available. Select **CBD** on the map or zone list and
+   request a recommendation. Inspect **Evidence** if the result is HOLD/DEFER.
+3. If the result is **MOVE**, review the proposed EV, parking destination,
+   arrival battery and checked road route. Click **Review dispatch** and then
+   **Approve**. Approval is deliberately separate from recommendation.
+4. Follow **Relocations** and the **Map**: observe command acknowledgement,
+   reported movement, arrival, battery use, and eventual claim release.
+   If approval status is uncertain, **check/retry the original request ID**;
+   do not create a second approval blindly.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -FreshBoot
-```
+A relocation can only succeed when an available EV, compatible destination,
+adequate battery reserve, useful fleet-wide benefit and **verified OneMap road
+route** all exist. Manual demand can become stale (default: **300 seconds**);
+refresh it if a subsequent recommendation reports expired observations.
+Traffic scenarios, rentals, and charging may temporarily make vehicles
+ineligible. See [demo readiness and recovery](docs/local-demo-readiness.md)
+for expected failure cases.
 
-Fresh boot recreates `.venv`, reads whitelisted integration settings directly
-from the saved `.env` instead of inherited PowerShell overrides, rebuilds every
-application image, and replaces every project Pod. It preserves the PostgreSQL
-PVC and records. It does not delete the namespace, prune old images, or recreate
-the Docker Desktop Kubernetes cluster. The normal active-workflow safety checks
-still apply. A completed optional customer-rental Job and its terminal Pod are
-removed as generated runtime state. Processes running from this project's exact
-`.venv` path, such as VS Code Python tooling, are stopped before recreation;
-unrelated Python processes are not touched.
+### Other PowerShell commands and when to use them
 
-To reconnect to an existing deployment without rebuilding or restarting it:
+| Command | Use it when | Important effect |
+|---|---|---|
+| `powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly` | The deployment is already running and you only need the dashboards. | Opens/reuses local tunnels **without** rebuilding, restarting Pods or reloading `.env`. |
+| `powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -FreshBoot` | You explicitly need to recreate the project Python environment and replace project Pods. | Rebuilds/restarts local project workloads and reloads `.env` while **preserving PostgreSQL PVC data**. It still refuses to proceed during active rentals, relocations or charging and is **not** a routine first fix. |
+| `powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly` | You want to check the current local PostgreSQL StatefulSet without full redeployment. | Database health check only. |
+| `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -Integration` | You changed infrastructure, Kubernetes, Compose or database behaviour. | Runs additional **disposable local** infrastructure checks; requires Docker Desktop and `act`. Do not use production data. |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -ConnectOnly
-```
+**If you edit `.env`** (for example, to renew a OneMap token), run the
+**normal** `start-kubernetes.ps1` command when the simulation is idle.
+`-ConnectOnly` does not apply configuration changes.
 
-To check only the existing PostgreSQL StatefulSet:
+### Common reasons a demo cannot dispatch
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly
-```
+| Symptom | Check |
+|---|---|
+| Routing is not configured | Set a valid `ROUTING_PROVIDER=ONEMAP` and `ONEMAP_ACCESS_TOKEN` in your local `.env`; then redeploy normally. |
+| No recommendation / **DEFER** | Open the recommendation **Evidence** panel for stale demand, Fleet or routing issues. An unavailable route is not proof that no EV is eligible. |
+| No useful move / **HOLD** | Inspect EV availability, parking, battery reserve and the *fleet-wide* shortage effect; high demand in one zone alone is insufficient. |
+| Data is stale | Confirm simulator Pods and services are healthy; refresh demand observations and try again. |
+| Review dispatch is disabled | Wait for fresh data or request a new non-expired recommendation; do not bypass checks. |
+| Different result on laptop and PC | Confirm the same code commit, local `.env` configuration, Kubernetes context, service readiness and clock/observation freshness. |
 
-For the complete procedure and troubleshooting, see
-[Local Kubernetes deployment](docs/kubernetes-local.md).
+For environment repair and deeper diagnostics, see
+[Local Kubernetes deployment](docs/kubernetes-local.md) and
+[Local-first testing](docs/local-testing.md).
 
 ## Local Python environment
 
@@ -163,12 +264,10 @@ kilometres, energy in kWh and state of charge as a percentage.
 
 ### EV selection
 
-Rebalancing excludes vehicles with missing or stale telemetry, offline connectivity,
-an active claim or rental, insufficient predicted arrival charge, or another
-conflicting operation. Eligible vehicles receive an explainable score:
-Rebalancing first excludes EVs with missing/stale telemetry, offline connectivity,
-unavailability, an active relocation or claim, or insufficient predicted arrival
-SOC. CRDS is the default rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
+Rebalancing excludes EVs with missing or stale telemetry, offline connectivity,
+unavailability, a rental or active relocation/claim, insufficient predicted
+arrival charge, or another conflicting operation. CRDS is the default
+rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
 eligible moves across declared futures, ranks their minimum fleet-wide shortage
 reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires
 operator approval and fresh revalidation. Execution defaults to LOCAL, so the
@@ -184,9 +283,10 @@ dispatch, or `CRDS_MODE=DISABLED` to select the legacy weighted policy. Its scor
 10% charging suitability
 ```
 
-The highest score wins, followed by deterministic tie-breaks. A nearest-eligible-EV
-strategy exists only as an experimental comparison; the application uses the
-energy-aware strategy.
+In this **legacy weighted policy**, the highest score wins, followed by
+deterministic tie-breaks. A nearest-eligible-EV strategy exists only as an
+experimental comparison; **default CRDS** instead evaluates the minimum
+fleet-wide shortage reduction across its declared scenarios.
 
 ### Rentals and charging
 
@@ -274,7 +374,11 @@ Available optional integrations include:
 - [OneMap road routing](docs/onemap-routing.md)
 - live or simulated traffic settings documented in `.env.example`
 
-The default system remains fully simulated when these integrations are disabled.
+The demand, telemetry and map demonstrations work with simulated inputs when
+optional observation feeds are disabled. However, the current Dispatch path
+requires an explicit verified **OneMap road route** before relocation approval.
+The default `SIMULATED` routing setting does **not** permit a complete
+relocation demonstration.
 
 ## Simulation analytics and HPA observability
 
