@@ -373,13 +373,6 @@ export default function App() {
       </div>
     </header>
     <main>
-      {routing.data && !routing.data.configured && <section className="warning routing-setup" role="status" aria-label="Road routing setup">
-        <strong>Road routing is not configured for dispatch.</strong>
-        <p>Demand, vehicles and the map can still be viewed, but this computer cannot verify the road routes needed for EV relocation.</p>
-        <p>In this computer's <code>.env</code>, set <code>ROUTING_PROVIDER=ONEMAP</code> and a valid
-          {' '}<code>ONEMAP_ACCESS_TOKEN</code>, then run a normal Kubernetes startup (not ConnectOnly).
-          A saved token does not guarantee the route provider is reachable.</p>
-      </section>}
       <OperationalTabs activeTab={operationalTab} onTabChange={setOperationalTab} tabs={[
         { id: 'dispatch', label: 'Dispatch', content: <>
           <div className="workspace" data-compact-view={compactView}>
@@ -413,6 +406,13 @@ export default function App() {
                   : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} ${criticalZones === 1 ? 'zone' : 'zones'} with critical demand` : 'No zones with critical demand')}</span>}
               </div>
               <div className="inspector-body" ref={inspectorBody}>
+                {routing.data && !routing.data.configured && <section className="warning routing-setup" role="status" aria-label="Road routing setup">
+                  <strong>Road routing is not configured for dispatch.</strong>
+                  <p>Demand, vehicles and the map can still be viewed, but this computer cannot verify the road routes needed for EV relocation.</p>
+                  <p>In this computer's <code>.env</code>, set <code>ROUTING_PROVIDER=ONEMAP</code> and a valid
+                    {' '}<code>ONEMAP_ACCESS_TOKEN</code>, then run a normal Kubernetes startup (not ConnectOnly).
+                    A saved token does not guarantee the route provider is reachable.</p>
+                </section>}
                 {(outsideZones != null || unparkedIdle.length > 0) &&
                   <div className="fleet-coverage" aria-label="Fleet coverage">
                     {outsideZones != null && <span className="muted">Available outside zones <strong>{outsideZones}</strong></span>}
