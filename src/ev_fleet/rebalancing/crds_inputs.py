@@ -2,6 +2,11 @@
 import asyncio
 from collections import Counter, defaultdict
 
+import httpx
+from fastapi import HTTPException
+
+from ev_fleet.common.clock import Clock
+from ev_fleet.common.settings import Settings
 from ev_fleet.contracts.crds import (CrdsDemandSnapshot, CrdsInputs, CrdsPlanningSnapshot,
                                    CrdsRelocationExclusion)
 from ev_fleet.contracts.facilities import FacilitiesSnapshot
@@ -13,6 +18,50 @@ from .clients import get_json
 
 
 ACTIVE_JOURNEY_STATES = {"PENDING", "SENT", "ACKNOWLEDGED", "IN_PROGRESS", "ARRIVAL_PENDING"}
+
+
+async def selected_vehicles_are_current(
+    client: httpx.AsyncClient, settings: Settings, clock: Clock, original: FleetSnapshot,
+    vehicle_ids: set[str], deadline: float,
+) -> bool:
+    """Confirm that newer heartbeats still support the frozen route and score."""
+    policy = DemandSettings.from_env()
+    policy.telemetry_max_age_seconds = min(policy.telemetry_max_age_seconds, settings.stale_seconds)
+    selected = {v.vehicle_id: v for v in original.vehicles if v.vehicle_id in vehicle_ids}
+    if selected.keys() != vehicle_ids:
+        return False
+    now = clock.now()
+    if all(telemetry_is_fresh(v, original, policy, now) for v in selected.values()):
+        return True
+
+    remaining = deadline - clock.monotonic()
+    if remaining <= 0:
+        return False
+    try:
+        raw = await asyncio.wait_for(get_json(client, f"{settings.fleet_url}/api/v1/vehicles"),
+                                     min(remaining, policy.fleet_timeout_seconds))
+        current = FleetSnapshot.model_validate(raw)
+    except (asyncio.TimeoutError, HTTPException, httpx.HTTPError, ValueError):
+        return False
+
+    now = clock.now()
+    if (current.instance_id != original.instance_id or current.snapshot_version < original.snapshot_version
+            or not -5 <= (now - current.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds):
+        return False
+    latest = {v.vehicle_id: v for v in current.vehicles}
+    for vehicle_id, before in selected.items():
+        after = latest.get(vehicle_id)
+        if (after is None or before.telemetry is None or after.telemetry is None
+                or not telemetry_is_fresh(after, current, policy, now)
+                or after.effective_availability != "AVAILABLE"
+                or after.control_version != before.control_version
+                or after.current_zone_id != before.current_zone_id
+                or after.battery_capacity_kwh != before.battery_capacity_kwh
+                or after.consumption_kwh_per_km != before.consumption_kwh_per_km
+                or after.telemetry.position != before.telemetry.position
+                or after.telemetry.soc_pct != before.telemetry.soc_pct):
+            return False
+    return True
 
 
 def journey_matches(dispatch, vehicle, fleet_id, zones):

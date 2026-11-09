@@ -6,13 +6,14 @@ from ev_fleet.contracts.crds import CrdsFuture, CrdsParameters, CrdsZoneTrajecto
 from .crds_routes import travel_minutes
 
 
-MODEL_VERSION = "crds-futures-v4"
+MODEL_VERSION = "crds-futures-v5"
 
 
 def parameters_for(settings):
     return CrdsParameters(horizon_minutes=settings.horizon_minutes,
                           slot_minutes=settings.slot_minutes,
-                          minimum_gain_vehicle_minutes=settings.minimum_gain_vehicle_minutes)
+                          minimum_gain_vehicle_minutes=settings.minimum_gain_vehicle_minutes,
+                          priority_coverage_pct=20)
 
 
 def observation_age(inputs):

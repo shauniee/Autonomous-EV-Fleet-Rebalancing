@@ -63,7 +63,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Estimated energy</dt><dd>{number(candidate.energy_required_kwh, ' kWh')}</dd></div>
     <div><dt>SOC at recommendation</dt><dd>{number(candidate.current_soc_pct, '%')}</dd></div>
     <div><dt>Predicted arrival SOC</dt><dd>{number(candidate.predicted_arrival_soc_pct, '%')}</dd></div>
-    <div><dt>{candidate.crds_gain ? 'Minimum shortage reduction' : 'Backend score'}</dt><dd>{candidate.crds_gain ? number(candidate.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes') : number(candidate.score)}</dd></div>
+    <div><dt>{candidate.crds_gain ? 'Minimum coverage gain' : 'Backend score'}</dt><dd>{candidate.crds_gain ? number(candidate.crds_gain.worst_case_gain_vehicle_minutes, ' points') : number(candidate.score)}</dd></div>
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
@@ -80,7 +80,7 @@ export function RecommendationPanel({ recommendation, onRelocation }: { recommen
         {recommendation.crds && <CrdsEvidence result={recommendation.crds} onRelocation={onRelocation}/>}
         {recommendation.crds?.source_references.decision_evidence?.version !== 1 && <>
           <h4>Ranked vehicles</h4>
-          {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes)} vehicle-minutes` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
+          {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes, ' points')}` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
         </>}
         {!recommendation.crds && <>
           <h4>Exclusions</h4>

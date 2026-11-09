@@ -24,6 +24,7 @@ const approvalReasons: Readonly<Record<string, string>> = {
   CRDS_PLANNING_CHANGED: 'Fleet plans changed while Dispatch was checking the recommendation.',
   CRDS_APPROVAL_RECHECK_FAILED: 'The fresh CRDS assessment could not confirm the recommended move.',
   NO_USEFUL_MOVE: 'The move no longer provides enough modeled benefit to the fleet.',
+  DONOR_SERVICE_FLOOR: 'The origin zone needs its last available EV to serve demand.',
   NO_ELIGIBLE_RELOCATIONS: 'The fresh assessment found no eligible move for this recommendation.',
   NO_RECOMMENDED_VEHICLE: 'This recommendation has no EV to approve.',
   NO_BATCH_ASSIGNMENTS: 'This batch has no EV assignments to approve.',
@@ -128,7 +129,7 @@ function evidenceMessage(decision: unknown, fallback: string | null) {
   }
   if (typeof evidence?.gain_vehicle_minutes === 'number' && Number.isFinite(evidence.gain_vehicle_minutes)
     && typeof evidence.minimum_gain_vehicle_minutes === 'number' && Number.isFinite(evidence.minimum_gain_vehicle_minutes)) {
-    messages.push(`Minimum modeled benefit ${number(evidence.gain_vehicle_minutes, ' vehicle-minutes')}. The move must exceed ${number(evidence.minimum_gain_vehicle_minutes, ' vehicle-minutes')}.`);
+    messages.push(`Minimum modeled benefit ${number(evidence.gain_vehicle_minutes, ' points')}. The move must exceed ${number(evidence.minimum_gain_vehicle_minutes, ' points')}.`);
   }
   return messages.join(' ');
 }
