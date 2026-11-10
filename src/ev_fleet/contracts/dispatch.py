@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Literal
 from uuid import UUID, uuid5
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, field_validator
 from .common import Model, Position
 from .routing import RoadRoute
 
@@ -190,3 +190,44 @@ class BatchApprovalRefusal(Model):
 class BatchApprovalLookup(Model):
     batches: list[BatchDispatch]
     refusals: list[BatchApprovalRefusal]
+
+
+class BatchApprovalGroupRequest(Model):
+    group_id: UUID
+    batch_recommendation_ids: list[UUID] = Field(min_length=1, max_length=10)
+
+    @field_validator("batch_recommendation_ids")
+    @classmethod
+    def unique_plans(cls, ids: list[UUID]) -> list[UUID]:
+        if len(set(ids)) != len(ids):
+            raise ValueError("batch recommendation IDs must be unique")
+        return ids
+
+
+class BatchApprovalGroupPlan(Model):
+    batch_recommendation_id: UUID
+    request_id: UUID
+    status: Literal["QUEUED", "RUNNING", "APPROVED", "PARTIAL", "REJECTED", "UNKNOWN", "SKIPPED"]
+    reason_code: str | None = None
+    approval: BatchDispatch | None = None
+
+
+class BatchApprovalGroupConflict(Model):
+    vehicle_id: str
+    batch_recommendation_ids: list[UUID]
+
+
+class BatchApprovalGroup(Model):
+    group_id: UUID
+    status: Literal["QUEUED", "RUNNING", "COMPLETED", "CONFLICT", "UNKNOWN"]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    reason_code: str | None = None
+    plans: list[BatchApprovalGroupPlan]
+    conflicts: list[BatchApprovalGroupConflict] = Field(default_factory=list)
+
+
+class BatchApprovalGroupPage(Model):
+    enabled: bool
+    groups: list[BatchApprovalGroup]
+    next_offset: int | None = None

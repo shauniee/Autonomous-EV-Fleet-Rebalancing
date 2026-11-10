@@ -19,6 +19,7 @@ from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .approval_evidence import (ApprovalCheckError, approval_evidence, record_approval,
                                 revalidation_rejection)
+from .batch_groups import BatchApprovalGroups
 from .clients import request_json
 from .store import DispatchRecord, DispatchStore
 from .recovery import RecoveryCoordinator
@@ -47,6 +48,7 @@ class DispatchService:
         self.batch_approval_refusals = {}
         self.repository = repository or SnapshotRepository.from_env("dispatch")
         self.persisted_snapshot = None
+        self.batch_groups = BatchApprovalGroups(self)
         self.routing = RoutingSettings.from_env()
         self.planning_instance_id = uuid4()
         self.planning_revision = 0
@@ -66,6 +68,7 @@ class DispatchService:
         self.batches = payload["batches"]
         self.batch_recommendations = payload["batch_recommendations"]
         self.batch_approval_refusals = payload.get("batch_approval_refusals", {})
+        self.batch_groups.records = payload.get("batch_approval_groups", {})
         self.planning_revision = payload.get("planning_revision", 0)
         tick = self.clock.monotonic()
         for key, item in payload["records"].items():
@@ -124,6 +127,7 @@ class DispatchService:
             "batches": self.batches,
             "batch_recommendations": self.batch_recommendations,
             "batch_approval_refusals": self.batch_approval_refusals,
+            "batch_approval_groups": self.batch_groups.records,
             "planning_revision": self.planning_revision,
         }
 
@@ -819,6 +823,21 @@ class DispatchService:
                 await self.close_unstarted(child_id, recommendation_id)
             return self.batch_view(data)
 
+    async def load_batch_preview(self, batch_id: UUID, *, queued: bool) -> BatchRecommendation:
+        rec = await request_json(self.client, "GET",
+            f"{self.settings.rebalancing_url}/api/v1/batch-recommendations/{batch_id}",
+            model=BatchRecommendation)
+        if rec.batch_recommendation_id != batch_id:
+            raise HTTPException(503, "BATCH_IDENTITY_MISMATCH")
+        if rec.expires_at <= self.clock.now():
+            raise HTTPException(409, "BATCH_EXPIRED")
+        if not rec.assignments:
+            raise HTTPException(409, "NO_BATCH_ASSIGNMENTS")
+        if queued and (rec.purpose != "REBALANCE" or rec.crds is None or rec.crds.decision != "MOVE"
+                       or not rec.crds.approval_allowed or self.crds_settings.mode != "ACTIVE"):
+            raise HTTPException(409, "CRDS_ADVISORY_ONLY")
+        return rec
+
     async def approve_batch(self, body):
         key = str(body.request_id)
         async with self.batch_lock:
@@ -833,18 +852,7 @@ class DispatchService:
                     raise HTTPException(refused["status_code"], refused["reason_code"])
                 queued = body.request_id == queued_batch_approval_id(body.batch_recommendation_id)
                 try:
-                    rec = await request_json(self.client, "GET",
-                        f"{self.settings.rebalancing_url}/api/v1/batch-recommendations/{body.batch_recommendation_id}",
-                        model=BatchRecommendation)
-                    if rec.batch_recommendation_id != body.batch_recommendation_id:
-                        raise HTTPException(503, "BATCH_IDENTITY_MISMATCH")
-                    if rec.expires_at <= self.clock.now():
-                        raise HTTPException(409, "BATCH_EXPIRED")
-                    if not rec.assignments:
-                        raise HTTPException(409, "NO_BATCH_ASSIGNMENTS")
-                    if queued and (rec.crds is None or rec.crds.decision != "MOVE"
-                                   or not rec.crds.approval_allowed or self.crds_settings.mode != "ACTIVE"):
-                        raise HTTPException(409, "CRDS_ADVISORY_ONLY")
+                    rec = await self.load_batch_preview(body.batch_recommendation_id, queued=queued)
                     existing = self.batch_recommendations.get(str(body.batch_recommendation_id))
                     if existing is not None and existing != key:
                         raise HTTPException(409, "BATCH_ALREADY_APPROVED")
