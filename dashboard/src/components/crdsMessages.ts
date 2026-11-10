@@ -62,6 +62,9 @@ const reasons: Readonly<Record<string, string>> = {
   DEPENDENCY_TIMEOUT: 'Planning data did not arrive in time. Try requesting a fresh recommendation.',
   DEPENDENCY_UNAVAILABLE: 'A service needed for the assessment is unavailable. Try again shortly.',
   DEPENDENCY_INVALID_RESPONSE: 'CRDS could not verify the information returned by a planning service.',
+  QUEUE_WAIT_EXCEEDED: 'The request waited too long to start. Request a fresh assessment from the map.',
+  RECOMMENDATION_QUEUE_FULL: 'The recommendation queue is full. Try again when an assessment finishes.',
+  RECOMMENDATION_QUEUE_DISABLED: 'The recommendation queue is disabled.',
   RECOMMENDATION_CAPACITY_REACHED: 'The recommendation service is busy. Try again shortly.',
 };
 

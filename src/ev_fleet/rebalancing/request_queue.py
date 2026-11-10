@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from ev_fleet.common.clock import Clock
 from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.contracts.dispatch import queued_batch_approval_id
 from ev_fleet.contracts.recommendations import (
     BatchRecommendation,
     QueuedRecommendationRequest,
@@ -69,9 +70,12 @@ class RecommendationQueue:
         self.entries = entries
 
     def view(self, record: RecommendationRequestRecord) -> RecommendationRequestRecord:
+        updates = {}
         if record.status == "READY" and record.expires_at and record.expires_at <= self.clock.now():
-            return record.model_copy(update={"status": "EXPIRED"})
-        return record
+            updates["status"] = "EXPIRED"
+        if record.batch_recommendation_id and record.decision == "MOVE":
+            updates["approval_request_id"] = queued_batch_approval_id(record.batch_recommendation_id)
+        return record.model_copy(update=updates) if updates else record
 
     async def submit(self, request: QueuedRecommendationRequest) -> RecommendationRequestRecord:
         async with self.lock:

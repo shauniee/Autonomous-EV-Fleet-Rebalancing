@@ -16,6 +16,7 @@ function server(overrides: Record<string, unknown> = {}) {
     '/api/dispatch/dispatches': { dispatches: [] },
     '/api/dispatch/routing/status': { provider: 'ONEMAP', configured: true, reason_code: null },
     '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/rebalancing/recommendation-requests?offset=0&limit=30': { enabled: false, crds_mode: 'DISABLED', requests: [], next_offset: null },
     '/api/dispatch/dispatches/dispatch-1/recovery': {
       dispatch_id: 'dispatch-1', status: 'BLOCKED', reason_code: 'CHECKPOINT_UNAVAILABLE', can_resume: false,
       operation: null, blockers: [], evidence: { checkpoint_source: 'NONE', checkpoint_at: null },
@@ -43,6 +44,74 @@ function openNotifications() {
   return within(screen.getByRole('region', { name: 'Notifications' }));
 }
 describe('dispatcher dashboard', () => {
+  it('queues a map request, reviews its plan, and reloads the approval refusal from Dispatch', async () => {
+    const path = '/api/rebalancing/recommendation-requests';
+    const expires = new Date(Date.now() + 60000).toISOString();
+    const batch = {
+      batch_recommendation_id: 'queued-batch', target_zone_id: 'cbd',
+      requested_count: 1, recommended_count: 1, unfulfilled_count: 0,
+      created_at: new Date().toISOString(), expires_at: expires, explanation: 'One EV', assumptions: [],
+      assignments: [{
+        recommendation_id: 'rec-1', vehicle_id: 'ev-01', facility_id: 'cbd-1',
+        facility_name: 'CBD parking', requires_charging: false, distance_km: 4, predicted_arrival_soc_pct: 72,
+      }],
+    };
+    let saved: Record<string, unknown> | undefined;
+    let rejected = false;
+    let lostResponse = true;
+    const drafts: string[] = [];
+    const fetch = server();
+    const baseline = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === path && init?.method === 'POST') {
+        const draft = JSON.parse(String(init.body));
+        drafts.push(draft.request_id);
+        saved = { ...draft, status: 'READY', batch_recommendation_id: batch.batch_recommendation_id,
+          approval_request_id: 'stable-approval', submitted_at: batch.created_at,
+          recommended_count: 1, expires_at: expires, assignments: batch.assignments, batch: null };
+        if (lostResponse) { lostResponse = false; throw new Error('Lost response'); }
+        return Response.json(saved, { status: 202 });
+      }
+      if (url.startsWith(`${path}?`)) return Response.json({
+        enabled: true, crds_mode: 'ACTIVE', next_offset: null, requests: saved ? [saved] : [],
+      });
+      if (url.startsWith(`${path}/`)) return Response.json({ ...saved, batch });
+      if (url === '/api/dispatch/batches' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          request_id: 'stable-approval', batch_recommendation_id: 'queued-batch',
+        });
+        rejected = true;
+        return Response.json({ error: { code: 'BATCH_EXPIRED' } }, { status: 409 });
+      }
+      if (url.startsWith('/api/dispatch/batches?')) return Response.json({
+        batches: [], refusals: rejected ? [{
+          request_id: 'stable-approval', batch_recommendation_id: 'queued-batch', reason_code: 'BATCH_EXPIRED',
+        }] : [],
+      });
+      return baseline(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Request recommendation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry same request' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View request' }));
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]).toBe(drafts[1]);
+    const review = await screen.findByRole('button', { name: 'Review approval' });
+    await waitFor(() => expect(review).toBeEnabled());
+    expect(await screen.findByText(/CBD parking · parking/)).toBeVisible();
+    fireEvent.click(review);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
+    expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
+    view.unmount();
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Recommendations' }));
+    expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /Review recommendation for CBD/ }));
+    expect(await screen.findByText(/The batch recommendation expired before approval/)).toBeVisible();
+  });
+
   it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {
     const fetch = server({
       '/api/dispatch/routing/status': {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyTheme, type Theme } from './theme';
-import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
+import type { Approval, BatchApprovalLookup, BatchDispatch, BatchRecommendation, RecommendationDraft, RecommendationRequest, RecommendationRequestPage, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError } from './api/client';
 import { recommendationError } from './components/crdsMessages';
 import { approvalErrorMessage, approvalStatus, batchApprovalLabels, dispatchApprovalMessage } from './components/approvalMessages';
@@ -18,6 +18,10 @@ import { FacilitiesPanel } from './components/FacilitiesPanel';
 import { BatchPanel, BatchConfirmation, BatchResult } from './components/BatchPanel';
 import { Badge, number, time } from './components/format';
 import { DispatchConfirmation, FleetPanel, RecommendationPanel, ServiceStatus, ZoneDemandStatus, ZoneDetails, ZoneMetrics } from './components/Panels';
+import {
+  RecommendationRequests, recommendationPageSize, recommendationRequestsPath,
+  requestApprovalStatus, type QueuedBatchApproval,
+} from './components/RecommendationRequests';
 import { RelocationPanel } from './components/RelocationPanel';
 import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
 
@@ -49,6 +53,28 @@ export default function App() {
   const [selected, setSelected] = useState('');
   const [selectedDispatch, setSelectedDispatch] = useState('');
   const [operationalTab, setOperationalTab] = useState('dispatch');
+  const [requestOffset, setRequestOffset] = useState(0);
+  const [requestFocus, setRequestFocus] = useState<{ id: string; revision: number }>();
+  const requestPage = usePolling<RecommendationRequestPage>(
+    `${recommendationRequestsPath}?offset=${requestOffset}&limit=${recommendationPageSize}`,
+    operationalTab === 'recommendations' ? 2000 : 4000);
+  const queueEnabled = requestPage.data?.enabled === true;
+  const focusedRequest = usePolling<RecommendationRequest>(
+    operationalTab === 'recommendations' && requestFocus &&
+      !requestPage.data?.requests.some(row => row.request_id === requestFocus.id)
+      ? `${recommendationRequestsPath}/${requestFocus.id}` : null, 4000);
+  const requestRows = requestPage.data?.requests ?? [];
+  const visibleRequests = focusedRequest.data ? [focusedRequest.data, ...requestRows] : requestRows;
+  const [queuedReceipt, setQueuedReceipt] = useState<RecommendationRequest>();
+  const [sendingRequest, setSendingRequest] = useState(false);
+  const sendingRequestRef = useRef(false);
+  const [drafts, updateDraft] = usePendingApprovals<RecommendationDraft>('fleet.pending-recommendation', 'target_zone_id');
+  function openRequest(id: string) {
+    setRequestOffset(0);
+    setRequestFocus(previous => ({ id, revision: (previous?.revision ?? 0) + 1 }));
+    setOperationalTab('recommendations');
+    requestPage.refresh();
+  }
   const [unparkedOnly, setUnparkedOnly] = useState(false);
   const [relocationFocus, setRelocationFocus] = useState<{ id: string; revision: number }>();
   const [compactView, setCompactView] = useState<'dispatch' | 'map'>('dispatch');
@@ -88,7 +114,21 @@ export default function App() {
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
-  const [pendingBatches, updateBatch] = usePendingApprovals<BatchApproval>(batchPendingKey, 'batch_recommendation_id');
+  const [pendingBatches, updateBatch] = usePendingApprovals<QueuedBatchApproval>(batchPendingKey, 'batch_recommendation_id');
+  const approvalIds = visibleRequests.flatMap(row => row.approval_request_id ? [row.approval_request_id] : []).sort();
+  const queueApprovals = usePolling<BatchApprovalLookup>(
+    approvalIds.length
+      ? `/api/dispatch/batches?${new URLSearchParams(approvalIds.map(id => ['request_id', id]))}` : null,
+    operationalTab === 'recommendations' ? 2000 : 5000);
+  useEffect(() => {
+    if (!queueApprovals.data) return;
+    for (const pending of pendingBatches) {
+      if (queueApprovals.data.refusals.some(item => item.request_id === pending.request_id) ||
+          queueApprovals.data.batches.some(item => item.request_id === pending.request_id && item.status !== 'UNKNOWN')) {
+        updateBatch(pending, false);
+      }
+    }
+  }, [queueApprovals.data, pendingBatches, updateBatch]);
   const [recommending, setRecommending] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [activity, setActivity] = useState<Notification[]>([]);
@@ -175,7 +215,42 @@ export default function App() {
     || (!!recommendation?.crds && (recommendation.crds.decision !== 'MOVE' || !recommendation.crds.approval_allowed));
   const batchBlocked = !fresh || !facilitiesFresh || submitting || batchRemaining <= 0
     || (!!batch?.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed));
+  const queuedRebalance = purpose === 'REBALANCE' && queueEnabled;
+  const draft = drafts.find(item => item.target_zone_id === selected && item.quantity === quantity &&
+    (item.vehicle_id ?? '') === selectedVehicle);
+  async function submitRecommendation(inputs: RecommendationDraft) {
+    if (sendingRequestRef.current) return;
+    sendingRequestRef.current = true;
+    setSendingRequest(true);
+    updateDraft(inputs, true);
+    try {
+      const receipt = await api<RecommendationRequest>(recommendationRequestsPath, {
+        method: 'POST', body: JSON.stringify(inputs),
+      });
+      updateDraft(inputs, false);
+      setQueuedReceipt(receipt);
+      requestPage.refresh();
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 422 ||
+          ['RECOMMENDATION_REQUEST_ID_CONFLICT', 'RECOMMENDATION_QUEUE_FULL', 'RECOMMENDATION_QUEUE_DISABLED'].includes(error.message))) {
+        updateDraft(inputs, false);
+        notify('error', recommendationError(error));
+      } else {
+        notify('warning', 'Could not confirm the recommendation request. Retry the same request to check whether it was queued.');
+      }
+    } finally {
+      sendingRequestRef.current = false;
+      setSendingRequest(false);
+    }
+  }
   async function recommend() {
+    if (queuedRebalance) {
+      await submitRecommendation(draft ?? {
+        request_id: crypto.randomUUID(), target_zone_id: selected, quantity,
+        ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
+      });
+      return;
+    }
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;
     setRecommending(true); setRecommendation(null); setBatch(null); setBatchResult(null);
@@ -222,34 +297,35 @@ export default function App() {
       if (mounted.current) { setSubmitting(false); dispatches.refresh(); fleet.refresh(); heat.refresh(); }
     }
   }
-  async function approveBatch(retry?: BatchApproval) {
+  async function approveBatch(retry?: QueuedBatchApproval) {
     if (submittingRef.current || (!retry && (!batch || batchBlocked || Date.now() >= Date.parse(batch.expires_at)))) return;
     submittingRef.current = true; setSubmitting(true); setBatchConfirming(false);
     const approval = retry ?? { request_id: crypto.randomUUID(), batch_recommendation_id: batch!.batch_recommendation_id };
+    const { queued, ...approvalBody } = approval;
     updateBatch(approval, true);
     if (!retry) setBatch(null);
     try {
-      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
+      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approvalBody) });
       if (!mounted.current) return;
-      setBatchResult(result);
+      if (!queued) setBatchResult(result);
       const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));
-      if (dispatched?.dispatch_id) setSelectedDispatch(dispatched.dispatch_id);
+      if (!queued && dispatched?.dispatch_id) setSelectedDispatch(dispatched.dispatch_id);
       if (result.status === 'UNKNOWN') {
         notify('warning', 'Some batch outcomes are uncertain. Reconcile or retry using the same batch request ID.');
       } else {
-        updateBatch(approval, false);
+        if (!queued) updateBatch(approval, false);
         reportBatchOutcome(result);
       }
     } catch (e) {
       if (!mounted.current) return;
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && ![408, 429].includes(e.status)) {
-        updateBatch(approval, false);
+        if (!queued || e.message === 'BATCH_REQUEST_ID_CONFLICT') updateBatch(approval, false);
         notify('error', approvalErrorMessage(e, 'REJECTED'));
       } else notify('warning', approvalErrorMessage(e, 'UNKNOWN'));
     } finally {
       submittingRef.current = false;
       if (mounted.current) {
-        setSubmitting(false); dispatches.refresh(); fleet.refresh(); heat.refresh(); facilities.refresh();
+        setSubmitting(false); queueApprovals.refresh(); dispatches.refresh(); fleet.refresh(); heat.refresh(); facilities.refresh();
       }
     }
   }
@@ -273,27 +349,47 @@ export default function App() {
       notify('warning', approvalErrorMessage(error, 'UNKNOWN', true));
     } finally { setCheckingApproval(false); }
   }
-  async function reconcileBatch(requestId: string, closeItem?: string) {
+  async function reconcileBatch(requestId: string, closeItem?: string, queued = false) {
     setCheckingApproval(true);
     try {
       const path = `/api/dispatch/batches/${requestId}`;
-      const result = closeItem
-        ? await api<BatchDispatch>(`${path}/items/${closeItem}/close`, { method: 'POST' })
-        : await api<BatchDispatch>(path);
-      setBatchResult(result);
+      let result: BatchDispatch;
+      if (queued && !closeItem) {
+        const status = await api<BatchApprovalLookup>(`/api/dispatch/batches?request_id=${requestId}`);
+        const refusal = status.refusals[0];
+        if (refusal) {
+          const pending = pendingBatches.find(item => item.request_id === requestId);
+          if (pending) updateBatch(pending, false);
+          notify('error', approvalErrorMessage(new ApiError(409, refusal.reason_code), 'REJECTED'));
+          return;
+        }
+        if (!status.batches[0]) throw new ApiError(404, 'BATCH_NOT_FOUND');
+        result = status.batches[0];
+      } else {
+        result = closeItem
+          ? await api<BatchDispatch>(`${path}/items/${closeItem}/close`, { method: 'POST' })
+          : await api<BatchDispatch>(path);
+      }
+      if (!queued) setBatchResult(result);
       const pending = pendingBatches.find(item => item.request_id === requestId);
       if (result.status !== 'UNKNOWN') {
         if (pending) updateBatch(pending, false);
         reportBatchOutcome(result);
       } else notify('warning', 'Some approvals are still unconfirmed. Check the individual batch results.');
-      setOperationalTab('dispatch');
+      if (!queued) setOperationalTab('dispatch');
       dispatches.refresh();
     } catch (error) {
       notify('warning', approvalErrorMessage(error, 'UNKNOWN', true));
-    } finally { setCheckingApproval(false); }
+    } finally { setCheckingApproval(false); if (queued) queueApprovals.refresh(); }
   }
 
   const activeNotifications: ActiveNotification[] = [];
+  for (const unconfirmed of drafts) activeNotifications.push({
+    id: unconfirmed.request_id, title: 'Unconfirmed recommendation request',
+    message: `${zones.find(zone => zone.zone_id === unconfirmed.target_zone_id)?.name ?? unconfirmed.target_zone_id} · ${unconfirmed.quantity} EVs requested`,
+    actions: <button disabled={sendingRequest || !queueEnabled}
+      onClick={() => void submitRecommendation(unconfirmed)}>Retry same request</button>,
+  });
   for (const pending of pendingApprovals) activeNotifications.push({
     id: pending.request_id, title: 'Unconfirmed approval',
     message: `Request ${pending.request_id}. You can continue with other relocations.`,
@@ -306,7 +402,7 @@ export default function App() {
     id: pending.request_id, title: 'Unconfirmed batch approval',
     message: `Batch ${pending.request_id}. You can continue with other relocations.`,
     actions: <>
-      <button disabled={submitting || checkingApproval} onClick={() => void reconcileBatch(pending.request_id)}>Check batch status</button>
+      <button disabled={submitting || checkingApproval} onClick={() => void reconcileBatch(pending.request_id, undefined, pending.queued)}>Check batch status</button>
       <button disabled={submitting || checkingApproval} onClick={() => void approveBatch(pending)}>Retry same batch approval</button>
     </>,
   });
@@ -336,7 +432,11 @@ export default function App() {
     ? !approvalBlocked && recommendation.ranked_candidates.some(item => item.vehicle_id === recommendation.selected_vehicle_id)
     : !!batch && !batchBlocked && batch.recommended_count > 0;
   const resultRemaining = recommendation ? remaining : batchRemaining;
-  const requestBlocked = !fresh || (facilityWorkflow && !facilitiesFresh);
+  const queueAvailabilityUnknown = purpose === 'REBALANCE' && !queueEnabled && (!requestPage.data || !!requestPage.error);
+  const requestBlocked = queueAvailabilityUnknown || !fresh || ((facilityWorkflow || queuedRebalance) && !facilitiesFresh);
+  const readyCount = queueApprovals.data && !queueApprovals.error && !requestPage.error && !requestOffset &&
+    requestPage.data?.next_offset === null
+    ? requestPage.data.requests.filter(row => requestApprovalStatus(row, now, queueApprovals.data, pendingBatches).ready).length : 0;
   const inspectorBody = useRef<HTMLDivElement>(null);
   const inspectorTitle = useRef<HTMLHeadingElement>(null);
   const shouldFocusResult = useRef(false);
@@ -494,11 +594,18 @@ export default function App() {
                       <button className="primary" disabled={!canReview} onClick={() => recommendation ? setConfirming(true) : setBatchConfirming(true)}>Review dispatch</button>
                     </>}
                 </> : <>
-                  {requestBlocked && <p className="warning">{!fresh ? 'Fresh demand and fleet data are required.' : 'Fresh facility availability is required.'}</p>}
-                  <button className="primary" disabled={recommending || requestBlocked} onClick={() => {
+                  {requestBlocked && <p className="warning">{queueAvailabilityUnknown ? 'Waiting for recommendation service status.'
+                    : !fresh ? 'Fresh demand and fleet data are required.' : 'Fresh facility availability is required.'}</p>}
+                  <button className="primary" disabled={recommending || sendingRequest || (requestBlocked && !(queuedRebalance && draft))} onClick={() => {
                     shouldFocusResult.current = true;
                     void recommend();
-                  }}>{recommending ? 'Finding suitable EVs…' : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
+                  }}>{sendingRequest ? 'Submitting request…' : recommending ? 'Finding suitable EVs…'
+                    : queuedRebalance ? draft ? 'Retry same request' : 'Request recommendation'
+                    : quantity === 1 ? 'Recommend EV' : `Recommend ${quantity} EVs`}</button>
+                  {queuedRebalance && queuedReceipt && <div className="queued-receipt" role="status">
+                    <span>{queuedReceipt.status === 'QUEUED' ? 'Request queued' : 'Request received'} for {zones.find(z => z.zone_id === queuedReceipt.target_zone_id)?.name ?? queuedReceipt.target_zone_id}.</span>
+                    <button className="text-button" onClick={() => openRequest(queuedReceipt.request_id)}>View request</button>
+                  </div>}
                   <span className="muted">Dispatch requires your approval.</span>
                 </>)}
               </div>}
@@ -507,6 +614,20 @@ export default function App() {
           {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation} busy={submitting || checkingApproval}
             onClose={item => void reconcileBatch(batchResult.request_id, item)}/>}
         </> },
+        { id: 'recommendations', label: 'Recommendations', summary: readyCount ? `${readyCount} ready` : undefined,
+          content: <RecommendationRequests page={requestPage} approvals={queueApprovals} pending={pendingBatches}
+            active={operationalTab === 'recommendations'} now={now} offset={requestOffset}
+            rows={visibleRequests} focusUnavailable={!!focusedRequest.error}
+            onPage={offset => { setRequestFocus(undefined); setRequestOffset(offset); }}
+            focus={requestFocus} zoneName={id => zones.find(z => z.zone_id === id)?.name ?? id}
+            onMap={id => {
+              const target = zones.find(z => z.zone_id === id);
+              if (target) { choose(id); openMap({ zone: target }); }
+              else notify('warning', 'This zone is unavailable on the map.');
+            }}
+            onRelocation={openRelocation} onApprove={approval => void approveBatch(approval)}
+            onCheck={(id, item) => void reconcileBatch(id, item, true)}
+            approvalBusy={submitting || checkingApproval} feedsFresh={fresh && facilitiesFresh}/> },
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPulse rentalDemandLevel={rentalDemandLevel} fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
           <FleetPanel vehicles={unparkedOnly ? unparkedIdle : vehicles} unparkedOnly={unparkedOnly} fleetFeedHealthy={fleetFeedHealthy}

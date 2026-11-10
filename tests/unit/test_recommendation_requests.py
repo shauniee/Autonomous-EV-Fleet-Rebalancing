@@ -179,3 +179,39 @@ def test_queue_is_disabled_without_durable_storage(clock, monkeypatch):
         })
         assert result.status_code == 503
         assert result.json()["error"]["code"] == "RECOMMENDATION_QUEUE_DISABLED"
+
+
+def test_queued_approval_refusal_is_durable_and_retry_keeps_original_reason(clock, monkeypatch):
+    from fastapi import HTTPException
+    from ev_fleet.contracts.dispatch import BatchApproval, BatchApprovalLookup, queued_batch_approval_id
+    from ev_fleet.dispatch import service
+
+    async def scenario():
+        snapshots = {}
+        batch_id = uuid4()
+        request_id = queued_batch_approval_id(batch_id)
+        body = BatchApproval(request_id=request_id, batch_recommendation_id=batch_id)
+        calls = 0
+
+        async def expired(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise HTTPException(404, "RECOMMENDATION_MISSING_OR_EXPIRED")
+
+        monkeypatch.setattr(service, "request_json", expired)
+        first = service.DispatchService(None, clock=clock, repository=MemorySnapshot("dispatch", snapshots))
+        await first.start()
+        with pytest.raises(HTTPException, match="RECOMMENDATION_MISSING_OR_EXPIRED"):
+            await first.approve_batch(body)
+
+        restored = service.DispatchService(None, clock=clock, repository=MemorySnapshot("dispatch", snapshots))
+        await restored.start()
+        lookup = BatchApprovalLookup.model_validate(restored.lookup_batch_approvals([request_id, uuid4()]))
+        assert lookup.refusals[0].batch_recommendation_id == batch_id
+        assert lookup.refusals[0].reason_code == "RECOMMENDATION_MISSING_OR_EXPIRED"
+        assert lookup.batches == []
+        with pytest.raises(HTTPException, match="RECOMMENDATION_MISSING_OR_EXPIRED"):
+            await restored.approve_batch(body)
+        assert calls == 1
+
+    asyncio.run(scenario())

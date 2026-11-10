@@ -131,6 +131,7 @@ class RecommendationRequestRecord(QueuedRecommendationRequest):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     batch_recommendation_id: UUID | None = None
+    approval_request_id: UUID | None = None
     expires_at: AwareDatetime | None = None
     decision: Literal["MOVE", "HOLD", "DEFER"] | None = None
     reason_code: str | None = None

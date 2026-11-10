@@ -260,3 +260,35 @@ export interface BatchDispatch {
   recommended_count: number; items: BatchDispatchItem[];
   status: 'APPROVED' | 'PARTIAL' | 'REJECTED' | 'UNKNOWN';
 }
+
+
+export interface RecommendationDraft {
+  request_id: string;
+  target_zone_id: string;
+  quantity: number;
+  vehicle_id?: string;
+}
+
+export interface RecommendationRequest extends RecommendationDraft {
+  status: 'QUEUED' | 'EVALUATING' | 'READY' | 'HOLD' | 'DEFERRED' | 'ADVISORY' | 'FAILED' | 'EXPIRED';
+  submitted_at: string;
+  batch_recommendation_id: string | null;
+  approval_request_id: string | null;
+  recommended_count: number | null;
+  expires_at: string | null;
+  reason_code: string | null;
+  assignments: { vehicle_id: string; facility_id: string; facility_name: string }[];
+  batch: BatchRecommendation | null;
+}
+
+export interface RecommendationRequestPage {
+  enabled: boolean;
+  crds_mode: 'DISABLED' | 'ADVISORY' | 'ACTIVE';
+  requests: RecommendationRequest[];
+  next_offset: number | null;
+}
+
+export interface BatchApprovalLookup {
+  batches: BatchDispatch[];
+  refusals: { request_id: string; batch_recommendation_id: string; reason_code: string }[];
+}

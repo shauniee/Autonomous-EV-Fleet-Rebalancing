@@ -1,14 +1,15 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from typing import Annotated
 from uuid import UUID
 import httpx
-from fastapi import Header, Request
+from fastapi import Header, Query, Request
 from fastapi.responses import JSONResponse
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
 from .routing import road_match_spawn, routing_configuration
 from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
-from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
+from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchApprovalLookup, BatchDispatch
 from .service import DispatchService
 from .approval_evidence import ApprovalCheckError
 from .recovery import assess_recovery
@@ -81,6 +82,10 @@ def create_app(settings=None, client=None, clock=None, background=True):
     @app.post("/api/v1/batches", status_code=202, response_model=BatchDispatch)
     async def approve_batch(body: BatchApproval):
         return await app.state.service.approve_batch(body)
+
+    @app.get("/api/v1/batches", response_model=BatchApprovalLookup)
+    async def lookup_batches(request_id: Annotated[list[UUID], Query(min_length=1, max_length=31)]):
+        return app.state.service.lookup_batch_approvals(request_id)
 
     @app.get("/api/v1/batches/{request_id}", response_model=BatchDispatch)
     async def batch(request_id: UUID):

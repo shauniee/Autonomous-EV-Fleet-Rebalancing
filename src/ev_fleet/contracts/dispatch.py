@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 from pydantic import AwareDatetime, Field
 from .common import Model, Position
 from .routing import RoadRoute
@@ -146,6 +146,14 @@ class DispatchList(Model):
 class CommandList(Model):
     commands: list[RelocationCommand]
 
+# Queued-plan approvals use this identity for both individual and future group approvals.
+QUEUED_BATCH_APPROVAL_NAMESPACE = UUID("80691ee1-26ef-47bb-b272-f5ebc6eba4e3")
+
+
+def queued_batch_approval_id(batch_id: UUID) -> UUID:
+    return uuid5(QUEUED_BATCH_APPROVAL_NAMESPACE, str(batch_id))
+
+
 class BatchApproval(Model):
     request_id: UUID
     batch_recommendation_id: UUID
@@ -169,3 +177,16 @@ class BatchDispatch(Model):
     recommended_count: int = Field(ge=0)
     items: list[BatchDispatchItem]
     status: Literal["APPROVED", "PARTIAL", "REJECTED", "UNKNOWN"]
+
+
+class BatchApprovalRefusal(Model):
+    request_id: UUID
+    batch_recommendation_id: UUID
+    reason_code: str
+    status_code: Literal[404, 409, 422]
+    recorded_at: AwareDatetime
+
+
+class BatchApprovalLookup(Model):
+    batches: list[BatchDispatch]
+    refusals: list[BatchApprovalRefusal]
