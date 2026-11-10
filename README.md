@@ -33,12 +33,14 @@ guarantee a move: the decision may legitimately be **MOVE** (useful, eligible
 relocation), **HOLD** (no useful verified move), or **DEFER** (assessment incomplete).
 No real vehicles are controlled.
 
+Set up the local demo on [Windows](#quick-start-on-windows-laptop-or-desktop)
+or [macOS](#quick-start-on-macos).
+
 ## Quick start on Windows (laptop or desktop)
 
-Run these commands from **Windows PowerShell** in the repository root. The
-same steps apply to each computer: each needs its own Docker Desktop setup,
-local `.env` file, and optional OneMap credentials. For a longer demonstration
-checklist, see [Local demo readiness](docs/local-demo-readiness.md).
+Run these commands from **Windows PowerShell** in the repository root. Each
+computer needs its own Docker Desktop setup and local `.env` file. For a longer
+demonstration checklist, see [Local demo readiness](docs/local-demo-readiness.md).
 
 ### Step 1 — Install prerequisites and get the code
 
@@ -53,11 +55,15 @@ On a new computer, clone the repository:
 ```powershell
 git clone https://github.com/shauniee/Autonomous-EV-Fleet-Rebalancing.git
 cd Autonomous-EV-Fleet-Rebalancing
-Copy-Item .env.example .env
 ```
 
-The repository must be accessible to your GitHub account. If you have already
-cloned it, use your existing checkout and **do not overwrite** its `.env`.
+The repository must be accessible to your GitHub account. If you already have
+a checkout, open it in PowerShell. Create `.env` only if it is missing.
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
 Check the Docker Desktop context and local Kubernetes readiness:
 
 ```powershell
@@ -70,13 +76,8 @@ Both the Docker context and Kubernetes context should target your local
 Docker Desktop installation, and the Kubernetes node should report `Ready`.
 Do not deploy to an unintended remote cluster.
 
-**Routing for a working relocation demo:** Edit your private `.env` to set
-`ROUTING_PROVIDER=ONEMAP` and `ONEMAP_ACCESS_TOKEN` to a valid **OneMap REST
-access token**. Do **not** commit or share that file. The default
-`ROUTING_PROVIDER=SIMULATED` allows observation and dashboard exploration, but
-**does not provide a verified road route for an approvable relocation**. The
-routing-status banner helps explain this. See [OneMap configuration](docs/onemap-routing.md).
-A configured token does not by itself prove OneMap can return a valid route.
+Follow the [shared credential setup](#configuration-and-optional-integrations)
+before launch if you want live LTA data or an end-to-end relocation demo.
 
 ### Step 2 — Prepare, test, and launch
 
@@ -162,15 +163,13 @@ for expected failure cases.
 | `powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -CheckPostgresOnly` | You want to check the current local PostgreSQL StatefulSet without full redeployment. | Database health check only. |
 | `powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1 -Integration` | You changed infrastructure, Kubernetes, Compose or database behaviour. | Runs additional **disposable local** infrastructure checks; requires Docker Desktop and `act`. Do not use production data. |
 
-**If you edit `.env`** (for example, to renew a OneMap token), run the
-**normal** `start-kubernetes.ps1` command when the simulation is idle.
-`-ConnectOnly` does not apply configuration changes.
+To reload credentials or other `.env` edits, see [Apply `.env` changes](#apply-env-changes).
 
 ### Common reasons a demo cannot dispatch
 
 | Symptom | Check |
 |---|---|
-| Routing is not configured | Set a valid `ROUTING_PROVIDER=ONEMAP` and `ONEMAP_ACCESS_TOKEN` in your local `.env`; then redeploy normally. |
+| OneMap routing is unavailable | Check the routing-status banner and the [OneMap configuration and token expiry](#onemap-rest-access-token-for-relocations). After updating `.env`, run normal startup. |
 | No recommendation / **DEFER** | Open the recommendation **Evidence** panel for stale demand, Fleet or routing issues. An unavailable route is not proof that no EV is eligible. |
 | No useful move / **HOLD** | Inspect EV availability, parking, battery reserve and the *fleet-wide* shortage effect; high demand in one zone alone is insufficient. |
 | Data is stale | Confirm simulator Pods and services are healthy; refresh demand observations and try again. |
@@ -181,7 +180,96 @@ For environment repair and deeper diagnostics, see
 [Local Kubernetes deployment](docs/kubernetes-local.md) and
 [Local-first testing](docs/local-testing.md).
 
+## Quick start on macOS
+
+### 1. Set up Kubernetes in Docker Desktop
+
+1. Install the build for your Mac's chip (Apple silicon or Intel), then open
+   the app. [Download Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/).
+2. In Docker Desktop, open **Kubernetes** and click **Create cluster**.
+3. Select **Kubeadm**, click **Create**, and wait for Kubernetes to show as
+   running. If you already have a running Kubeadm cluster, use it.
+
+See [Docker Desktop's Kubernetes guide](https://docs.docker.com/desktop/use-desktop/kubernetes/#enable-kubernetes).
+
+Then open Terminal and check that Docker is reachable and the `docker-desktop`
+node reports `Ready`.
+
+```sh
+docker --context desktop-linux info
+kubectl --context docker-desktop get nodes
+```
+
+### 2. Get the code and configure the demo
+
+For the remaining steps, use Terminal with Git, `bash`, `curl`, and
+Python **3.12+** available as `python3`.
+
+For a new checkout, clone the repository using a GitHub account with access.
+If you already have a checkout, open it in Terminal and start with the `.env` step.
+
+```sh
+git clone https://github.com/shauniee/Autonomous-EV-Fleet-Rebalancing.git
+cd Autonomous-EV-Fleet-Rebalancing
+```
+
+From the repository root, create `.env` only if it is missing.
+
+```sh
+if [ ! -e .env ]; then cp .env.example .env; fi
+```
+
+Follow the [shared credential setup](#configuration-and-optional-integrations)
+before launch if you want live LTA data or an end-to-end relocation demo.
+
+### 3. Start the local system
+
+```sh
+bash scripts/start-kubernetes.sh
+```
+
+Startup builds the images, applies the local configuration, waits for core
+services, and opens port forwards. Keep this terminal open while using the apps.
+`Ctrl+C` closes the port forwards started by this script. The Kubernetes
+workloads keep running.
+
+- **Simulation Console** at <http://127.0.0.1:8090>
+- **Operator / Map Dashboard** at <http://127.0.0.1:8080>
+
+EV simulators may still be starting when the dashboards open. Check their pods
+with `kubectl --context docker-desktop -n ev-fleet get pods` and wait for online
+vehicles in the Operator Dashboard before trying the [relocation walkthrough](#step-4--try-an-end-to-end-relocation-scenario).
+
+### 4. Reconnect or apply configuration changes
+
+To reopen the dashboards using the existing deployment, run:
+
+```sh
+bash scripts/start-kubernetes.sh --connect-only
+```
+
+If a dashboard port is occupied, set `DASHBOARD_PORT` or
+`SIMULATION_CONSOLE_PORT` to an unused port before running the script. Use the
+URLs printed in Terminal.
+
+To reload credentials or other `.env` edits, see [Apply `.env` changes](#apply-env-changes).
+
 ## Local Python environment
+
+On macOS, the Kubernetes startup only needs host `python3` for configuration.
+To work on the backend locally, create a virtual environment from the repository
+root and install the project with its test dependencies.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
+```
+
+For macOS development checks, see [the local checks in `AGENTS.md`](AGENTS.md#local-checks-on-windows-and-macos).
+Local frontend checks require Node.js **22+** and `npm ci` in each frontend
+directory before the first run.
+
+### Windows Python environment
 
 `scripts/setup-local.ps1` is called automatically during a full Windows Kubernetes
 startup. It installs the runtime and local test dependencies and can also be run
@@ -367,22 +455,62 @@ experimental tools and are not part of application startup.
 
 ## Configuration and optional integrations
 
-Copy `.env.example` to `.env` and set only the integrations you need. The Windows
-startup script validates an allowlist of facilities, routing, traffic-control and
-traffic-simulation settings. Credential values are piped directly to Kubernetes and
-are not written to generated manifest files or printed by the script.
+On Windows and macOS, put your own credentials in the repository-root `.env`
+and keep it out of version control. The dashboards, simulated demand, and
+telemetry work with the defaults in `.env.example` and require no API credentials.
+Enable the integrations you need for your demo.
 
-Available optional integrations include:
+### LTA DataMall Account Key for live observations
 
-- [LTA DataMall parking and charging observations](docs/lta-datamall.md)
-- [OneMap road routing](docs/onemap-routing.md)
-- live or simulated traffic settings documented in `.env.example`
+Request your own API access from LTA DataMall. LTA sends the **Account Key**
+to the email address you provide. Copy it into `LTA_DATAMALL_ACCOUNT_KEY`.
+[Request LTA DataMall API access](https://datamall.lta.gov.sg/content/datamall/en/request-for-api.html).
 
-The demand, telemetry and map demonstrations work with simulated inputs when
-optional observation feeds are disabled. However, the current Dispatch path
-requires an explicit verified **OneMap road route** before relocation approval.
-The default `SIMULATED` routing setting does **not** permit a complete
-relocation demonstration.
+```dotenv
+LTA_DATAMALL_ACCOUNT_KEY=your-emailed-account-key
+FACILITIES_SOURCE=LTA_DATAMALL
+TRAFFIC_SOURCE=LTA_DATAMALL
+```
+
+Both live feeds use the same key. `FACILITIES_SOURCE=LTA_DATAMALL` enables live
+parking and charging data. `TRAFFIC_SOURCE=LTA_DATAMALL` enables live road
+traffic. To enable just one feed, leave the other at its default (`MOCK` for
+facilities or `DISABLED` for traffic). You can run a relocation demo with mock
+facilities and OneMap routing. See [LTA DataMall configuration](docs/lta-datamall.md).
+
+### OneMap REST access token for relocations
+
+Relocation approval requires a verified OneMap road route. Use your separate
+OneMap account to generate the **REST access token** for `ONEMAP_ACCESS_TOKEN`.
+Each OneMap token lasts **3 days**.
+[Register for a OneMap API account](https://www.onemap.gov.sg/apidocs/register).
+
+1. In Postman or another HTTP client, send a `POST` to
+   `https://www.onemap.gov.sg/api/auth/post/getToken` with `Content-Type: application/json`
+   and a JSON body containing your registered OneMap `email` and `password`.
+   [OneMap authentication](https://www.onemap.gov.sg/apidocs/authentication).
+2. Copy the returned `access_token` into `.env` and select OneMap routing.
+
+   ```dotenv
+   ROUTING_PROVIDER=ONEMAP
+   ONEMAP_ACCESS_TOKEN=your-onemap-rest-access-token
+   ```
+
+3. Repeat the request before the token expires, replace `ONEMAP_ACCESS_TOKEN`,
+   and [apply the change](#apply-env-changes) if the project is already deployed.
+
+See [OneMap routing configuration](docs/onemap-routing.md) for more details.
+
+### Apply `.env` changes
+
+After adding or updating either credential, run normal startup when the
+simulation is idle. Wait for active relocations, rentals, and charging tasks to
+finish before redeploying.
+
+- **Windows** `powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1`
+- **macOS** `bash scripts/start-kubernetes.sh`
+
+Connect-only mode reopens the dashboards using the existing configuration.
 
 ## Simulation analytics and HPA observability
 
@@ -464,8 +592,9 @@ selection policy.
 - Internal APIs must not be exposed to an untrusted network.
 - PostgreSQL snapshots support local restart recovery but not safe multi-replica
   transactions across state-owning services.
-- Simulator journey progress is process-local. Deployment is therefore blocked while
-  active rentals, relocations or charging tasks exist.
+- Simulator journey progress is process-local. The Windows startup blocks
+  redeployment during active rentals, relocations or charging tasks. On macOS,
+  wait for those tasks to finish before redeploying.
 - The startup script never deletes PostgreSQL persistent-volume data.
 - Parking allocation is simulated and is not a real reservation.
 - Demand, movement, arrival, rentals and charging are simulated.
