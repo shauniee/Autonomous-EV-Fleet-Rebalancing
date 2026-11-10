@@ -100,3 +100,47 @@ class BatchRecommendation(Model):
     assumptions: list[str]
     crds: CrdsMetadata | None = None
     unfulfilled_reason: str | None = None
+
+
+class QueuedRecommendationRequest(RecommendationRequest):
+    request_id: UUID
+    quantity: int = Field(ge=1, le=20)
+    vehicle_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+    @model_validator(mode="after")
+    def selected_vehicle_quantity(self):
+        if self.vehicle_id and self.quantity != 1:
+            raise ValueError("a selected vehicle requires quantity one")
+        return self
+
+
+RecommendationRequestStatus = Literal[
+    "QUEUED", "EVALUATING", "READY", "HOLD", "DEFERRED", "ADVISORY", "FAILED", "EXPIRED"
+]
+
+
+class RecommendationRequestAssignment(Model):
+    vehicle_id: str
+    facility_id: str
+    facility_name: str
+
+
+class RecommendationRequestRecord(QueuedRecommendationRequest):
+    status: RecommendationRequestStatus
+    submitted_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    batch_recommendation_id: UUID | None = None
+    expires_at: AwareDatetime | None = None
+    decision: Literal["MOVE", "HOLD", "DEFER"] | None = None
+    reason_code: str | None = None
+    recommended_count: int | None = None
+    assignments: list[RecommendationRequestAssignment] = Field(default_factory=list)
+    batch: BatchRecommendation | None = None
+
+
+class RecommendationRequestPage(Model):
+    enabled: bool
+    crds_mode: Literal["DISABLED", "ADVISORY", "ACTIVE"]
+    requests: list[RecommendationRequestRecord]
+    next_offset: int | None = None

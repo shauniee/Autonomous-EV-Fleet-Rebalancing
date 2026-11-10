@@ -65,7 +65,7 @@ def traffic_identity(traffic):
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                    vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
-                   expand_age=None, for_batch=False):
+                   expand_age=None, for_batch=False, route_slots=None, traffic_slots=None):
     start = clock.monotonic()
     expand_age = settings.expand_age if expand_age is None else expand_age
     inputs = await collect_inputs(client, policy, settings.dispatch_url, clock, traffic,
@@ -202,7 +202,21 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                 outcome="EXCLUDED",
                 reason=reasons[0] if len(reasons) == 1 else "NO_SUITABLE_DESTINATION",
                 related_reasons=reasons if len(reasons) > 1 else [])
-    semaphore = asyncio.Semaphore(4)
+    semaphore = route_slots if route_slots is not None else asyncio.Semaphore(4)
+
+    async def traffic_work(function, *args):
+        if traffic_slots is None:
+            return await asyncio.to_thread(function, *args)
+        await traffic_slots.acquire()
+        work = asyncio.create_task(asyncio.to_thread(function, *args))
+
+        def release(task):
+            traffic_slots.release()
+            if not task.cancelled():
+                task.exception()
+
+        work.add_done_callback(release)
+        return await asyncio.shield(work)
 
     async def prepare(candidate):
         vehicle, site, assessment = candidate
@@ -226,7 +240,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                         or estimate.origin != vehicle.telemetry.position):
                     raise ValueError("ROUTE_ESTIMATE_IDENTITY_CHANGED")
                 route = estimate.route
-            evaluation = await asyncio.to_thread(
+            evaluation = await traffic_work(
                 assess_traffic, [p.model_dump() for p in route.geometry],
                 route.distance_km, route.duration_seconds, traffic, inputs.evaluated_at)
             if evaluation["blocked"]:
@@ -252,7 +266,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             modeled_route = route if route.traffic_assessment is not None else route.model_copy(update={
                 "duration_seconds": evaluation["estimated_duration_seconds"] or route.duration_seconds,
                 "traffic_assessment": evaluation})
-            minutes = await asyncio.to_thread(
+            minutes = await traffic_work(
                 travel_minutes, modeled_route, traffic, inputs.evaluated_at,
                 time_scale=settings.simulation_time_scale)
             origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
