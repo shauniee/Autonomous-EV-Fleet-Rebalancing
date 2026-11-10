@@ -28,6 +28,9 @@ function server(overrides: Record<string, unknown> = {}) {
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
+    if (path.startsWith('/api/dispatch/batch-approval-groups?')) {
+      return Response.json({ enabled: true, groups: [], next_offset: null });
+    }
     if (path === '/api/dispatch/dispatches' && init?.method === 'POST') return new Response(JSON.stringify(makeDispatch()));
     const body = responses[path === '/api/fleet/dashboard/vehicles' ? '/api/fleet/vehicles' : path];
     if (body instanceof Error) throw body;
@@ -120,10 +123,91 @@ describe('dispatcher dashboard', () => {
     expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Review recommendation for CBD/ }));
     expect(await screen.findByText(/The batch recommendation expired before approval/)).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Revise request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Request again' }));
     expect(screen.getByRole('checkbox', { name: /ev-01/ })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /ev-02/ })).toBeChecked();
     expect(drafts).toHaveLength(2);
+  });
+
+  it('blocks overlapping plans and retries a lost bulk submission under the original group ID after reload', async () => {
+    const created = new Date().toISOString();
+    const expires = new Date(Date.now() + 60000).toISOString();
+    const rows = [
+      { id: 'cbd', ev: 'ev-01', parking: 'CBD parking' },
+      { id: 'bishan', ev: 'ev-01', parking: 'Bishan parking' },
+      { id: 'punggol', ev: 'ev-02', parking: 'Punggol parking' },
+      { id: 'tampines', ev: 'ev-03', parking: 'Tampines parking' },
+    ].map(row => ({
+      request_id: row.id, target_zone_id: row.id, submitted_at: created, quantity: 1, recommended_count: 1,
+      expires_at: row.id === 'tampines' ? new Date(Date.now() + 4000).toISOString() : expires, status: 'READY', batch_recommendation_id: `batch-${row.id}`,
+      approval_request_id: `approval-${row.id}`,
+      assignments: [{ vehicle_id: row.ev, facility_name: row.parking, facility_id: row.id }],
+    }));
+    const attempts: { group_id: string; batch_recommendation_ids: string[] }[] = [];
+    let saved: unknown;
+    const path = '/api/dispatch/batch-approval-groups';
+    const fetch = server({
+      '/api/rebalancing/recommendation-requests?offset=0&limit=30': {
+        enabled: true, crds_mode: 'ACTIVE', requests: rows, next_offset: null,
+      },
+    });
+    const baseline = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/dispatch/batches?')) return Response.json({ batches: [], refusals: [] });
+      if (url.startsWith(`${path}?`)) return Response.json({ enabled: true, groups: saved ? [saved] : [], next_offset: null });
+      if (url === path && init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body));
+        attempts.push(payload);
+        if (attempts.length === 1) throw new Error('Lost response');
+        saved = { group_id: payload.group_id, status: 'QUEUED', created_at: created, updated_at: created,
+          reason_code: null, conflicts: [], plans: payload.batch_recommendation_ids.map((id: string) => ({
+            batch_recommendation_id: id, status: 'QUEUED', reason_code: null, approval: null,
+          })) };
+        return Response.json(saved, { status: 202 });
+      }
+      return baseline(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select plan for CBD' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Bishan' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Punggol' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Tampines' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve selected' }));
+    const review = within(screen.getByRole('dialog', { name: 'Approve selected plans' }));
+    expect(review.getAllByText('Shared EVs ev-01')).toHaveLength(2);
+    expect(review.getByRole('button', { name: 'Confirm 4 plans' })).toBeDisabled();
+    expect(attempts).toHaveLength(0);
+    fireEvent.click(review.getByRole('button', { name: 'Remove Bishan plan' }));
+    const actualNow = Date.now.bind(Date);
+    const shiftedClock = vi.spyOn(Date, 'now').mockImplementation(() => actualNow() + 4500);
+    expect(await review.findByText('Expired', { exact: true })).toBeVisible();
+    expect(review.getByRole('button', { name: 'Confirm 3 plans' })).toBeDisabled();
+    fireEvent.click(review.getByRole('button', { name: 'Remove Tampines plan' }));
+    expect(review.getByText('ev-01 → CBD parking')).toBeVisible();
+    expect(review.getByText('ev-02 → Punggol parking')).toBeVisible();
+    fireEvent.click(review.getByRole('button', { name: 'Confirm 2 plans' }));
+    expect(await screen.findByText(/Dispatch did not confirm receipt/)).toBeVisible();
+    shiftedClock.mockRestore();
+    view.unmount();
+
+    const reloaded = render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    const retry = await screen.findByRole('button', { name: 'Retry same group' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    expect(await screen.findAllByText('Approval queued')).toHaveLength(2);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].batch_recommendation_ids).toEqual(['batch-cbd', 'batch-punggol']);
+    expect(attempts[1]).toEqual(attempts[0]);
+
+    reloaded.unmount();
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    expect(await screen.findAllByText('Approval queued')).toHaveLength(2);
+    expect(screen.queryByRole('checkbox', { name: 'Select plan for CBD' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select plan for Bishan' })).toBeEnabled();
   });
 
   it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {

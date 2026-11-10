@@ -22,6 +22,7 @@ import {
   RecommendationRequests, recommendationPageSize, recommendationRequestsPath,
   requestApprovalStatus, type QueuedBatchApproval,
 } from './components/RecommendationRequests';
+import { useBulkRecommendationApproval } from './components/BulkRecommendationApproval';
 import { RecommendationVehiclePicker } from './components/RecommendationVehiclePicker';
 import { RelocationPanel } from './components/RelocationPanel';
 import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
@@ -60,6 +61,7 @@ export default function App() {
     `${recommendationRequestsPath}?offset=${requestOffset}&limit=${recommendationPageSize}`,
     operationalTab === 'recommendations' ? 2000 : 4000);
   const queueEnabled = requestPage.data?.enabled === true;
+  const bulkApproval = useBulkRecommendationApproval(queueEnabled, operationalTab === 'recommendations');
   const focusedRequest = usePolling<RecommendationRequest>(
     operationalTab === 'recommendations' && requestFocus &&
       !requestPage.data?.requests.some(row => row.request_id === requestFocus.id)
@@ -445,7 +447,11 @@ export default function App() {
   const requestBlocked = queueAvailabilityUnknown || !requestQuantity || !fresh || ((facilityWorkflow || queuedRebalance) && !facilitiesFresh);
   const readyCount = queueApprovals.data && !queueApprovals.error && !requestPage.error && !requestOffset &&
     requestPage.data?.next_offset === null
-    ? requestPage.data.requests.filter(row => requestApprovalStatus(row, now, queueApprovals.data, pendingBatches).ready).length : 0;
+    ? requestPage.data.requests.filter(row => {
+      const batchId = row.batch_recommendation_id ?? '';
+      return bulkApproval.statusKnown && !bulkApproval.waitingIds.has(batchId) && !bulkApproval.plansByBatch.has(batchId)
+        && requestApprovalStatus(row, now, queueApprovals.data, pendingBatches).ready;
+    }).length : 0;
   const inspectorBody = useRef<HTMLDivElement>(null);
   const inspectorTitle = useRef<HTMLHeadingElement>(null);
   const shouldFocusResult = useRef(false);
@@ -634,7 +640,7 @@ export default function App() {
             onClose={item => void reconcileBatch(batchResult.request_id, item)}/>}
         </> },
         { id: 'recommendations', label: 'Recommendations', summary: readyCount ? `${readyCount} ready` : undefined,
-          content: <RecommendationRequests page={requestPage} approvals={queueApprovals} pending={pendingBatches}
+          content: <RecommendationRequests bulk={bulkApproval} page={requestPage} approvals={queueApprovals} pending={pendingBatches}
             active={operationalTab === 'recommendations'} now={now} offset={requestOffset}
             rows={visibleRequests} focusUnavailable={!!focusedRequest.error}
             onPage={offset => { setRequestFocus(undefined); setRequestOffset(offset); }}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, message } from '../api/client';
 
 export interface Resource<T> { data?: T; error?: string; updatedAt?: string }
-export function usePolling<T>(path: string | null, interval = 2000) {
+export function usePolling<T>(path: string | null, interval = 2000, read: typeof api<T> = api<T>) {
   const [state, setState] = useState<Resource<T> & { path?: string }>({});
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision(x => x + 1), []);
@@ -14,7 +14,7 @@ export function usePolling<T>(path: string | null, interval = 2000) {
     let failures = 0;
     async function poll() {
       try {
-        const data = await api<T>(endpoint, { signal: controller.signal });
+        const data = await read(endpoint, { signal: controller.signal });
         if (controller.signal.aborted) return;
         failures = 0;
         setState({ path: endpoint, data, updatedAt: new Date().toISOString() });
@@ -27,7 +27,7 @@ export function usePolling<T>(path: string | null, interval = 2000) {
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [path, interval, revision]);
+  }, [path, interval, revision, read]);
   useEffect(() => {
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);

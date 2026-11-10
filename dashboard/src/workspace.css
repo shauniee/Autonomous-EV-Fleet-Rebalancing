@@ -473,3 +473,20 @@
   overflow-wrap: anywhere;
 }
 .recommendation-vehicle-options label:focus-within { background: var(--surface-soft); }
+
+.bulk-selection {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: .5rem 1rem;
+  padding-block: .75rem;
+  border-block: 1px solid var(--border);
+}
+.bulk-selection p { flex-basis: 100%; margin: 0; }
+.bulk-approval-review { max-height: 85dvh; overflow: auto; }
+.bulk-review-plans > li, .bulk-progress-row { padding-block: .625rem; }
+.bulk-review-plans > li + li { border-top: 1px solid var(--border); }
+.bulk-review-plans ul { margin-block: .375rem; }
+.bulk-review-plans li, .bulk-progress-row li { overflow-wrap: anywhere; }
+.bulk-progress-row summary { cursor: pointer; padding-block: .375rem; }

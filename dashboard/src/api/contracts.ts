@@ -294,3 +294,32 @@ export interface BatchApprovalLookup {
   batches: BatchDispatch[];
   refusals: { request_id: string; batch_recommendation_id: string; reason_code: string }[];
 }
+
+export interface BatchApprovalGroupRequest {
+  group_id: string;
+  batch_recommendation_ids: string[];
+}
+
+export interface BatchApprovalGroupPlan {
+  batch_recommendation_id: string;
+  request_id: string;
+  status: BatchDispatch['status'] | 'QUEUED' | 'RUNNING' | 'SKIPPED';
+  reason_code: string | null;
+  approval: BatchDispatch | null;
+}
+
+export interface BatchApprovalGroup {
+  group_id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'CONFLICT' | 'UNKNOWN';
+  created_at: string;
+  updated_at: string;
+  reason_code: string | null;
+  plans: BatchApprovalGroupPlan[];
+  conflicts: { vehicle_id: string; batch_recommendation_ids: string[] }[];
+}
+
+export interface BatchApprovalGroupPage {
+  enabled: boolean;
+  groups: BatchApprovalGroup[];
+  next_offset: number | null;
+}
