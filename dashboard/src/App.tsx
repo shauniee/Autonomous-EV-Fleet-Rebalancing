@@ -8,7 +8,7 @@ import { usePendingApprovals } from './hooks/usePendingApprovals';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
 import { FleetPulse } from './components/FleetPulse';
-import { SingaporeMap } from './components/SingaporeMap';
+import { SingaporeMap, type MapFocusTarget } from './components/SingaporeMap';
 import { Notifications, type ActiveNotification, type Notification, type Notify } from './components/Notifications';
 import { ChargingOperations } from './components/ChargingOperations';
 import { TrafficConditions } from './components/TrafficConditions';
@@ -53,7 +53,7 @@ export default function App() {
   const [relocationFocus, setRelocationFocus] = useState<{ id: string; revision: number }>();
   const [compactView, setCompactView] = useState<'dispatch' | 'map'>('dispatch');
   const [demandDetails, setDemandDetails] = useState(false);
-  const [mapFocus, setMapFocus] = useState<{ dispatchId: string } | { facility: Facility } | null>(null);
+  const [mapFocus, setMapFocus] = useState<MapFocusTarget | null>(null);
   const trafficDispatchId = selectedDispatch || dispatches.data?.dispatches.filter(d =>
     d.command?.route && !['SUCCEEDED', 'REJECTED', 'FAILED'].includes(d.state)).at(-1)?.dispatch_id;
   const unresolvedRelocations = dispatches.data?.dispatches.filter(d => d.vehicle_id &&
@@ -424,7 +424,10 @@ export default function App() {
                 {!result && !demandDetails && <>
                   <DemandThresholds applied={thresholds} defaults={defaultThresholds} onApply={setCustomThresholds}/>
                   <div className="zone-list" role="group" aria-label="Select target zone">{zones.map(z =>
-                    <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => choose(z.zone_id)}>
+                    <button key={z.zone_id} aria-pressed={selected === z.zone_id} onClick={() => {
+                      choose(z.zone_id);
+                      openMap({ zone: z });
+                    }}>
                       <strong>{z.name}</strong><Badge value={rentalDemandLevel(z)}/>
                       <small>{heatUnavailable || z.current_shortage == null ? 'Shortage unknown' : z.current_shortage ? `${z.current_shortage} short now` : 'No current shortage'}</small>
                     </button>)}</div>
@@ -432,8 +435,9 @@ export default function App() {
                   {!!zones.length && !zone && <p className="empty inspector-empty">Choose a zone to see its shortage and request a relocation.</p>}
                 </>}
                 {zone && (demandDetails ? <ZoneDetails zone={zone} rentalDemandLevel={rentalDemandLevel(zone)}
-                  feedUnavailable={heatUnavailable}/> : <section className="selected-demand" aria-label="Selected zone demand">
-                  <div className="section-title"><h3>{zone.name}</h3>{result ? <Badge value={rentalDemandLevel(zone)}/> :
+                  feedUnavailable={heatUnavailable} onShowOnMap={() => openMap({ zone })}/> : <section className="selected-demand" aria-label="Selected zone demand">
+                  <div className="section-title"><h3><button type="button" className="text-button" aria-label={`Zoom to ${zone.name} on map`}
+                    onClick={() => openMap({ zone })}>{zone.name}</button></h3>{result ? <Badge value={rentalDemandLevel(zone)}/> :
                     <button className="text-button" onClick={() => { setDemandDetails(true); inspectorTitle.current?.focus(); }}>Demand details</button>}</div>
                   {result ? heatUnavailable || zone.demand_status !== 'FRESH'
                     ? <ZoneDemandStatus zone={zone} feedUnavailable={heatUnavailable}/>

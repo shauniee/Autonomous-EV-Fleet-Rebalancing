@@ -49,10 +49,12 @@ export function ZoneMetrics({ zone, feedUnavailable, detailed = false }: {
   </>;
 }
 
-export function ZoneDetails({ zone, rentalDemandLevel, feedUnavailable }: {
-  zone: Zone; rentalDemandLevel: string; feedUnavailable: boolean;
+export function ZoneDetails({ zone, rentalDemandLevel, feedUnavailable, onShowOnMap }: {
+  zone: Zone; rentalDemandLevel: string; feedUnavailable: boolean; onShowOnMap?: () => void;
 }) {
-  return <><div className="section-title"><h2>{zone.name}</h2><Badge value={rentalDemandLevel}/></div>
+  return <><div className="section-title"><h2>{onShowOnMap
+    ? <button type="button" className="text-button" aria-label={`Zoom to ${zone.name} on map`} onClick={onShowOnMap}>{zone.name}</button>
+    : zone.name}</h2><Badge value={rentalDemandLevel}/></div>
     <p className="muted">{zone.zone_id} · {feedUnavailable ? 'UNKNOWN' : zone.data_quality}</p>
     <ZoneMetrics zone={zone} feedUnavailable={feedUnavailable} detailed/>
   </>;
