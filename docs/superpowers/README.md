@@ -2,6 +2,9 @@
 
 **Planning snapshot:** 4 November 2026. **Final coursework deadline:** Sunday **15 November 2026, 23:59**. **Status:** group approval needed; this branch contains documents **only**.
 
+The dated plans preserve their assumptions at the time of writing. For current
+policy behavior and the scope of the archived selector evaluation, see [CRDS](../crds.md).
+
 Start here:
 
 1. [Master design and decision record](specs/2026-11-04-csc3104-delivery-design.md) — scope, original-contribution framing, architecture, invariants, release gates and dates.

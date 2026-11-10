@@ -22,20 +22,20 @@ or an automatic mid-journey rerouting system.
    and renders both layers with explicit `SIMULATED` and `LTA observed` labels.
 5. The *same* events feed the single and batch recommendation assessment,
    and Dispatch rechecks the actual road route geometry at operator approval.
-   Confirmed synthetic closures reject an affected route if no valid
-   alternative road geometry is available. Roadworks are delay/risk
-   events, **not** hard closures. Recommendations include traffic ETA
-   versus the synthetic 30 km/h baseline, plus predicted arrival SOC.
+   Confirmed synthetic closures can make a route ineligible. Legacy approval
+   can consider an OSRM alternate. CRDS requires a final OneMap route.
+   Roadworks contribute delay and risk. Assessment evidence can show traffic
+   ETA and predicted arrival SOC.
 6. A scenario expires automatically (1–120 minutes), can be removed or
    cleared explicitly, and uses version-checked writes. The source reverts
    to live LTA observations or DISABLED when no simulated scenarios remain.
 
-**Accuracy boundary:** matching during initial recommendation uses approximate
-point-to-point candidate corridors, not actual routes; road geometry is
-checked again at Dispatch approval. The illustrative scoring formula
-still has an uncalibrated origin-supply term. A short simulated segment can
-be treated as a journey-wide delay in ETA screening; do not interpret its
-numeric ETA as verified street-level trip time.
+**Accuracy boundary:** [CRDS](crds.md) matches traffic to OneMap road geometry
+during planning and checks the final route again at approval. Its objective
+remains fleet-wide shortage reduction. Legacy previews screen approximate
+point-to-point corridors and may apply the traffic cost. Modeled ETA is an
+estimate, and simulator movement applies segment speed caps and closures
+to the issued route.
 
 ## Safe optional setup (local Kubernetes)
 

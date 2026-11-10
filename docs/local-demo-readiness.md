@@ -10,7 +10,7 @@ at a real fleet, production PostgreSQL database, or existing Kubernetes deployme
 - Enable Docker Desktop Kubernetes and check that `kubectl config current-context` is `docker-desktop` and `kubectl get nodes` reports a Ready node. Confirm ports **8080** and **8090** are available locally.
 - Clone or pull the **same reviewed commit** on each computer. Keep `.env` untracked and private; a token/configuration from one computer does not automatically exist on the other.
 - For a real road-following relocation demo, set `ROUTING_PROVIDER=ONEMAP` and `ONEMAP_ACCESS_TOKEN=<your current REST token>` in each computer's `.env`. Token validity is checked by OneMap when a route is requested; a saved token alone is **not** proof of reachability.
-- `ROUTING_PROVIDER=SIMULATED` is a **read-only routing mode for the current dispatch path**. You can see fleet/demand/maps, but CRDS cannot create an approvable road route. An offline **test-only** route fixture does not change that production rule. The `OSRM_ROUTING_URL` setting is currently an optional traffic-blocked *alternate*, not a substitute for an initial verified OneMap route.
+- `ROUTING_PROVIDER=SIMULATED` is a **read-only routing mode for the current dispatch path**. You can see fleet/demand/maps, but CRDS cannot create an approvable road route. An offline **test-only** route fixture does not change that production rule. OSRM can supply an alternate for the legacy approval path. CRDS also requires a OneMap route at approval-time benefit revalidation.
 
 See [OneMap routing](onemap-routing.md) for the provider configuration and safety limits. Never commit provider tokens or paste them into screenshots.
 
@@ -35,14 +35,14 @@ Open:
 
 ## 3. Demonstrate demand → recommendation → human approval
 
-1. **Simulation Console / Demand:** Pause automatic demand generation if you want stable manual values. Initialise fresh observations for **every** zone by selecting all zones and applying `0`. Then select one destination zone (for example CBD), set a higher desired available EV supply (for example `12`), and apply. This is a demo scenario, not real demand. CRDS uses the entire fleet and requires fresh demand in *all* zones, not only the selected high-demand destination.
+1. **Simulation Console / Demand:** Pause automatic demand generation if you want stable manual values. Initialise fresh observations for **every** zone by selecting all zones and applying `0`. Then select one destination zone (for example CBD), set a higher desired available EV supply (for example `12`), and apply. This is a demo scenario, not real demand. CRDS requires a valid target in every zone and evaluates the impact across the whole fleet.
 2. **Operator dashboard / Dispatch:** Confirm the map has a current demand snapshot, Fleet observations are fresh, and Facilities are available. Check the road-routing setup notice. If routing is not configured, correct `.env` and restart the local deployment before attempting a dispatch.
-3. Select the high-demand destination. Request a recommendation. A **MOVE** only appears if an available EV, suitable destination space, sufficient battery reserve, verified road route and a net fleet-wide shortage reduction are all present. If **HOLD** or **DEFER** appears, inspect **Evidence** for the exact reason; do not force a move.
+3. Select the high-demand destination. Request a recommendation. A **MOVE** only appears if an available EV, suitable destination space, sufficient battery reserve, verified road route and a net fleet-wide shortage reduction above the threshold in every modeled future are all present. If **HOLD** or **DEFER** appears, inspect **Evidence** for the exact reason; do not force a move.
 4. Review the proposed EV, target, SOC, road-distance and assumptions. Only then explicitly **Approve**. The backend rechecks current state and may legitimately reject a proposal that became stale.
 5. Open **Relocations** and **Map** to track command acknowledgement, a confirmed OneMap road path and reported EV movement. Map markers follow backend telemetry, not front-end animation. If an outcome is unconfirmed, **reconcile the same approval/request ID** instead of creating duplicate commands.
 6. Show **Charging** and **Facilities** with their own observed/unknown states. Not every vehicle or facility must be eligible. The Simulation Console's Traffic and Rentals tools can demonstrate other scenarios separately, but rentals and charging may temporarily reduce eligible EVs.
 
-**Important:** Paused demand stays fixed but can become too old for CRDS (the local default is `DEMAND_MAX_AGE_SECONDS=300`). Refresh the manual observations before expiry. Automatic generation has a manual hold (`DEMAND_MANUAL_HOLD_SECONDS=60` by default); if resumed, it can later replace your chosen scenario.
+While generation is paused, manually set targets remain valid until updated. A generated value left over from before the pause still ages out after `DEMAND_MAX_AGE_SECONDS` (300 seconds by default). While generation is running, a manual edit holds the target for `DEMAND_MANUAL_HOLD_SECONDS` (60 seconds by default). See [CRDS inputs and decisions](crds.md).
 
 ## 4. Diagnose a missing recommendation without bypassing safety
 

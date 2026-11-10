@@ -2,11 +2,13 @@
 
 Singapore simulation only. Recommendation creation does not claim an EV or move it.
 Dispatch approval is a separate POST, using an existing recommendation ID and a
-caller-generated request UUID. Four independent services communicate over HTTP.
+caller-generated request UUID. Fleet, Demand, Rebalancing, Dispatch and Facilities
+communicate over HTTP.
 
 ## Run locally
 
-Start Fleet, Demand and Rebalancing as described in the README, then use a fourth terminal:
+For the default [CRDS](crds.md) path, start Fleet, Demand, Rebalancing and Facilities
+and configure [OneMap](onemap-routing.md) for Dispatch. Start Dispatch in a separate terminal:
 
 ```powershell
 .\.venv\Scripts\python -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
@@ -21,7 +23,7 @@ IDs. A vehicle ID belongs to one simulator process. In separate terminals:
 ```
 
 The original CLI without `--dispatch-url` remains stationary. Moving mode supports
-`--speed-kph` (30), `--time-scale` (30 simulated seconds/real second), `--tick-seconds`
+`--speed-kph` (30), `--time-scale` (10 simulated seconds per real second by default), `--tick-seconds`
 (0.2), `--poll-interval` (1), and existing `--interval` for telemetry (5 seconds).
 `--updates` is only valid for stationary mode.
 
@@ -45,7 +47,8 @@ alongside an existing project. Internal Compose URLs keep using service DNS/8000
 ## Explicit approval
 
 Select a Singapore hotspot/zone through the existing API, request a recommendation,
-inspect it, then approve before its existing 10-second expiry:
+inspect it, then approve before its `expires_at` (120 seconds by default). For
+CRDS, proceed only on `MOVE` with `approval_allowed=true`:
 
 ```powershell
 $recommendation = Invoke-RestMethod -Method Post -Uri http://localhost:8003/api/v1/recommendations -ContentType application/json -Body '{"target_zone_id":"cbd"}'
@@ -57,7 +60,10 @@ Invoke-RestMethod "http://localhost:8004/api/v1/dispatches/$($dispatch.dispatch_
 An expired/changed recommendation requires a fresh recommendation and new request
 ID. Normal telemetry after recommendation is allowed: approval checks the latest
 state, then atomically claims its current version. A race during that operation
-returns 409 rather than silently approving another vehicle.
+returns 409 rather than silently approving another vehicle. CRDS also re-evaluates
+the exact EV and facility against the final OneMap route and current commitments.
+If benefit or evidence has changed, review the approval reason and request a new
+recommendation when appropriate.
 
 Repeat the exact approval body after a lost response: it identifies the same
 dispatch. Reusing a request ID for another recommendation is 409. Approving the same

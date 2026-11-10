@@ -1,13 +1,14 @@
-# initial service foundation architecture
+# Initial service foundation architecture
 
 The current demand and heat-map extension is documented in [dynamic demand and heat-map composition](demand-heatmap.md).
 It adds an optional simulator and a read-only API composition module inside Demand,
 using a Fleet HTTP snapshot without storing a second source of vehicle truth.
 
-This document records the preserved initial service foundation foundation. The implemented dispatch and relocation
-extension, including Dispatch Service, cloud-owned claims and moving simulators,
-is described in [dispatch and relocation dispatch](dispatch-relocation.md). References below to future
-dispatch describe the original design boundary; that boundary is now implemented.
+This is a historical record of the initial service foundation. Its scoring,
+expiry, storage and deployment descriptions are from that stage. For current
+recommendation behavior, see [CRDS](crds.md). For current approval and ownership,
+see [Dispatch](dispatch-relocation.md). The historical legacy selector was later
+evaluated against nearest eligible EV in the [archived study](strategy-evaluation.md).
 
 This project is independently implemented for Singapore point-to-point EV rental
 rebalancing. All demand, charging and autonomous vehicle behaviour is simulated.

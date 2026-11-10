@@ -1,6 +1,7 @@
 # Operator dashboard
 
-React/TypeScript/Vite renders the existing six Singapore zones with Leaflet. The UI is a client of the existing services. It does not calculate shortage, severity, eligibility, ranking, route energy or dispatch transitions. All coordinates and charging assessments are simulated.
+React/TypeScript/Vite renders the existing six Singapore zones with Leaflet. The UI is a client of the existing services. It does not calculate shortage, severity, eligibility, ranking, route energy or dispatch transitions. EV movement and charging are simulated. Facilities and routes can use configured
+provider observations.
 
 ## Run locally
 
@@ -31,12 +32,20 @@ The dashboard has a Node build stage and an Nginx static runtime. Nginx resolves
 
 1. Select a zone on the map or in the keyboard-accessible zone list.
 2. Read current and projected shortage, demand, supply and freshness.
-3. Select **Recommend EV**. This only calls Rebalancing.
-4. Inspect backend score, explanation, exclusions, distance, energy, charging assessment and SOC estimates.
-5. Select **Review dispatch**, then explicitly **Approve Dispatch** in the confirmation dialog.
+3. Request a recommendation. When the [CRDS](crds.md) queue is enabled, the
+   rebalancing request is evaluated in the background. Select **View request**
+   or open **Recommendations** to inspect it.
+   Other requests use the synchronous recommendation endpoints.
+4. Inspect the decision and **Evidence**, including the reason, relevant EV and
+   facility exclusions, route estimates and modeled shortage effects when available.
+   Legacy recommendations show trip scores instead.
+5. Review an approvable plan and explicitly approve it. Open **Relocations** to
+   inspect approval decisions and journey status.
 6. Follow backend acknowledgement, lifecycle, distance travelled and SOC under Relocations. On arrival, Fleet updates the destination and availability.
 
-Recommendations expire according to backend `expires_at` (default 120 seconds). Target changes clear recommendations. Demand changes can cause `TARGET_CHANGED` on approval; request a new recommendation and review again. The UI never silently substitutes another EV or automatically dispatches.
+Recommendations expire according to backend `expires_at` (default 120 seconds). Target changes clear recommendations. Changes to the zone definition or Demand instance can cause `TARGET_CHANGED`.
+Ordinary demand updates can change CRDS benefit during revalidation. If approval
+is refused, inspect the reason and request a new recommendation. The UI never silently substitutes another EV or automatically dispatches.
 
 The map colours `hotspot_severity` as green NORMAL, amber WARNING, red CRITICAL and grey UNKNOWN. Raw `demand_level` is separately displayed; HIGH demand is not itself CRITICAL. Backend nulls display Unknown, not zero. The map plots approximate zone centres, not invented administrative boundaries or routes.
 
@@ -47,11 +56,14 @@ The map colours `hotspot_severity` as green NORMAL, amber WARNING, red CRITICAL 
 | Demand | GET `/api/v1/heat-map` | Combined zone state and source freshness |
 | Fleet | GET `/api/v1/vehicles` | Fleet-owned telemetry snapshot |
 | Fleet | GET `/api/v1/vehicles/{vehicle_id}/claims/{dispatch_id}` | Dispatch origin receipt |
-| Rebalancing | POST `/api/v1/recommendations` | Advisory EV selection |
-| Dispatch | POST `/api/v1/dispatches` | Explicit approval with stable request ID |
+| Rebalancing | POST `/api/v1/recommendation-requests` | Queue a CRDS plan when enabled |
+| Rebalancing | GET `/api/v1/recommendation-requests` or `/api/v1/recommendation-requests/{request_id}` | List and inspect queued assessments |
+| Rebalancing | POST `/api/v1/recommendations` or `/api/v1/batch-recommendations` | Synchronous recommendations |
+| Dispatch | POST `/api/v1/dispatches` or `/api/v1/batches` | Explicit single or batch approval with stable request ID |
+| Dispatch | POST `/api/v1/batch-approval-groups` | Group review and approval when enabled |
 | Dispatch | GET `/api/v1/dispatches` | Backend-reconciled lifecycle and outcomes |
 
-No backend endpoint or lifecycle was changed. The UI only keeps response snapshots and operator interaction state. Origin before approval is labelled as the latest fleet snapshot; after approval it comes from the claim receipt. Recommendation SOC estimates remain labelled separately from live SOC. Progress uses backend distance and lifecycle, with no invented ETA or percentage.
+The UI displays backend decisions and keeps response snapshots and operator interaction state. Origin before approval is labelled as the latest fleet snapshot; after approval it comes from the claim receipt. Recommendation SOC estimates remain labelled separately from live SOC. Progress uses backend distance and lifecycle, with no invented ETA or percentage.
 
 ## Refresh and failures
 
@@ -59,7 +71,7 @@ Heat-map, fleet and dispatch polls run independently every 2 seconds after compl
 
 Partial heat-map data retains demand and displays backend issues. Fresh fleet and heat-map fetches are required for new recommendations/approvals; the backend still owns final eligibility and validation. EV stale/offline flags and dispatch UNKNOWN/timeouts are displayed, never interpreted as claim release. Loss of Demand, Fleet or Dispatch does not erase healthy panels.
 
-Approval creates one UUID only after explicit confirmation. Double submission is blocked synchronously. A failed/ambiguous network response retains the same approval payload in session storage and disables new approvals. **Retry same approval** sends the same ID; **Reconcile status** checks the dispatch list for that ID. A reload resumes reconciliation. This storage is only a pending operator intent, not durable backend state. If browser storage is blocked, in-page retries still work but reload recovery is unavailable. Backend restart can lose dispatch history because durable state is intentionally deferred.
+Approval creates one UUID only after explicit confirmation. Double submission is blocked synchronously. A failed/ambiguous network response retains the same approval payload in session storage and disables new approvals. **Retry same approval** sends the same ID; **Reconcile status** checks the dispatch list for that ID. A reload resumes reconciliation. This storage is only a pending operator intent, not durable backend state. If browser storage is blocked, in-page retries still work but reload recovery is unavailable. Restart retention depends on whether backend snapshot persistence is configured.
 
 Public OSM raster tiles require network access. Attribution remains visible, browser cache behaviour is retained, and no prefetch/offline download feature is included. `VITE_TILE_URL` can select another compatible tile source at build/dev time (update attribution appropriately if changing providers). Tile failure shows a warning; the zone list and service panels keep working.
 
