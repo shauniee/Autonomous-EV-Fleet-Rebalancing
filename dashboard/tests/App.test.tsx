@@ -60,13 +60,17 @@ describe('dispatcher dashboard', () => {
     let rejected = false;
     let lostResponse = true;
     const drafts: string[] = [];
-    const fetch = server();
+    const fleet = makeFleet();
+    fleet.vehicles.push({ ...fleet.vehicles[0], vehicle_id: 'ev-02' },
+      { ...fleet.vehicles[0], vehicle_id: 'ev-03', stale: true });
+    const fetch = server({ '/api/fleet/vehicles': fleet });
     const baseline = fetch.getMockImplementation()!;
     fetch.mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === path && init?.method === 'POST') {
         const draft = JSON.parse(String(init.body));
         drafts.push(draft.request_id);
+        expect(draft).toMatchObject({ quantity: 2, vehicle_ids: ['ev-01', 'ev-02'] });
         saved = { ...draft, status: 'READY', batch_recommendation_id: batch.batch_recommendation_id,
           approval_request_id: 'stable-approval', submitted_at: batch.created_at,
           recommended_count: 1, expires_at: expires, assignments: batch.assignments, batch: null };
@@ -93,7 +97,13 @@ describe('dispatcher dashboard', () => {
     });
     const view = render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Request recommendation' }));
+    fireEvent.change(screen.getByLabelText('Vehicle selection'), { target: { value: 'specific' } });
+    expect(screen.getByRole('button', { name: 'Request recommendation' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /ev-03.*Telemetry stale/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /ev-02/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /ev-01/ }));
+    expect(screen.getByLabelText('Number of EVs needed')).toHaveValue(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Request recommendation' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Retry same request' }));
     fireEvent.click(await screen.findByRole('button', { name: 'View request' }));
     expect(drafts).toHaveLength(2);
@@ -110,6 +120,10 @@ describe('dispatcher dashboard', () => {
     expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Review recommendation for CBD/ }));
     expect(await screen.findByText(/The batch recommendation expired before approval/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Revise request' }));
+    expect(screen.getByRole('checkbox', { name: /ev-01/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /ev-02/ })).toBeChecked();
+    expect(drafts).toHaveLength(2);
   });
 
   it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {

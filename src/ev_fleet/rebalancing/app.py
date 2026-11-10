@@ -299,7 +299,9 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
         start = clock.monotonic()
         try:
             plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
-                body.target_zone_id, vehicle_id=body.vehicle_id, for_batch=True, **route_budget())
+                body.target_zone_id, vehicle_id=body.vehicle_id,
+                vehicle_ids=body.vehicle_ids if isinstance(body, QueuedRecommendationRequest) else None,
+                for_batch=True, **route_budget())
         except asyncio.TimeoutError:
             raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
         except ValueError:

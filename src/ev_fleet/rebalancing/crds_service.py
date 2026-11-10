@@ -64,7 +64,8 @@ def traffic_identity(traffic):
 
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
-                   vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
+                   vehicle_id=None, vehicle_ids: list[str] | None = None, facility_id=None,
+                   route_override=None, exclude_dispatch_id=None,
                    expand_age=None, for_batch=False, route_slots=None, traffic_slots=None):
     start = clock.monotonic()
     expand_age = settings.expand_age if expand_age is None else expand_age
@@ -75,11 +76,13 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if target is None:
         raise HTTPException(404, "TARGET_NOT_FOUND")
     params = parameters_for(settings)
+    requested_ids = set(vehicle_ids or ([vehicle_id] if vehicle_id else []))
+    shortlist = {"requested_vehicle_ids": sorted(requested_ids)} if vehicle_ids is not None else {}
     fingerprint = hashlib.sha256(json.dumps({
         "inputs": inputs.model_dump(mode="json", exclude={"traffic"}),
         "traffic": traffic_identity(inputs.traffic),
         "settings": settings.model_dump(), "model": MODEL_VERSION,
-        "expand_age": expand_age,
+        "expand_age": expand_age, **shortlist,
     }, sort_keys=True).encode()).hexdigest()
     metadata = CrdsMetadata(decision="DEFER", reason_code="INCOMPLETE_INPUTS", parameters=params,
         scenario_model_version=MODEL_VERSION, scenario_count=0, epoch_id=uuid4(), input_fingerprint=fingerprint,
@@ -94,23 +97,23 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "planning_instance_id": str(inputs.planning.instance_id), "planning_revision": inputs.planning.revision,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
             "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat(),
-            "expand_age": expand_age,
+            "expand_age": expand_age, **shortlist,
             "simulation_time_scale": settings.simulation_time_scale})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
                      [], [], {}, {}, metadata, start + settings.deadline_seconds)
     vehicles = {v.vehicle_id: VehicleDecision(outcome="INCOMPLETE", reason="ASSESSMENT_INCOMPLETE")
-                for v in inputs.fleet.vehicles if not vehicle_id or v.vehicle_id == vehicle_id}
+                for v in inputs.fleet.vehicles if not requested_ids or v.vehicle_id in requested_ids}
     for identifier, reason in inputs.telemetry_exclusions.items():
-        if not vehicle_id or identifier == vehicle_id:
+        if not requested_ids or identifier in requested_ids:
             vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason=reason)
     for row in inputs.relocation_exclusions:
-        if not vehicle_id or row.vehicle_id == vehicle_id:
+        if not requested_ids or row.vehicle_id in requested_ids:
             prior = vehicles.get(row.vehicle_id)
             reason = prior.reason if prior and row.reason == "TELEMETRY_UNAVAILABLE" else row.reason
             vehicles[row.vehicle_id] = VehicleDecision(
                 outcome="EXCLUDED", reason=reason, dispatch_ids=row.dispatch_ids)
-    if vehicle_id and vehicle_id not in vehicles:
-        vehicles[vehicle_id] = VehicleDecision(outcome="EXCLUDED", reason="VEHICLE_MISSING")
+    for identifier in requested_ids.difference(vehicles):
+        vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason="VEHICLE_MISSING")
 
     def defer(reason, evidence_reason=None):
         metadata.reason_code = reason
@@ -204,11 +207,11 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                 related_reasons=reasons if len(reasons) > 1 else [])
     semaphore = route_slots if route_slots is not None else asyncio.Semaphore(4)
 
-    async def traffic_work(function, *args):
+    async def traffic_work(function, *args, **kwargs):
         if traffic_slots is None:
-            return await asyncio.to_thread(function, *args)
+            return await asyncio.to_thread(function, *args, **kwargs)
         await traffic_slots.acquire()
-        work = asyncio.create_task(asyncio.to_thread(function, *args))
+        work = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
 
         def release(task):
             traffic_slots.release()

@@ -51,18 +51,22 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
     planned = []
 
     async def plan_one(*args, **kwargs):
-        planned.append(args[5])
+        planned.append((args[5], kwargs["vehicle_ids"]))
         started.set()
         await release.wait()
 
     async def plan_batch(*args, **kwargs):
-        return [], metadata(), "NO_USEFUL_MOVE"
+        decision = metadata()
+        decision.source_references["decision_evidence"] = {
+            "vehicles": {"ev-2": {"reason": "VEHICLE_MISSING"}},
+        }
+        return [], decision, "NO_USEFUL_MOVE"
 
     monkeypatch.setattr(app, "plan_one", plan_one)
     monkeypatch.setattr(app, "plan_batch", plan_batch)
     settings = CrdsSettings(request_queue_capacity=2, request_queue_max_wait_seconds=10)
     route = "/api/v1/recommendation-requests"
-    first = {"request_id": str(uuid4()), "target_zone_id": "cbd", "quantity": 2}
+    first = {"request_id": str(uuid4()), "target_zone_id": "cbd", "quantity": 2, "vehicle_ids": ["ev-2", "ev-1"]}
     second = {"request_id": str(uuid4()), "target_zone_id": "punggol", "quantity": 1}
     with TestClient(app.create_app(clock=clock, crds_settings=settings)) as client:
         try:
@@ -71,8 +75,14 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
                 await asyncio.wait_for(started.wait(), timeout=2)
 
             client.portal.call(wait_until_started)
-            assert client.post(route, json=first).json()["status"] == "EVALUATING"
-            assert client.post(route, json={**first, "quantity": 3}).status_code == 409
+            reordered = client.post(route, json={**first, "vehicle_ids": ["ev-1", "ev-2"]})
+            assert reordered.json()["status"] == "EVALUATING"
+            assert reordered.json()["vehicle_ids"] == ["ev-1", "ev-2"]
+            assert client.post(route, json={**first, "vehicle_ids": ["ev-1", "ev-3"]}).status_code == 409
+            for invalid in ({"quantity": 3}, {"vehicle_ids": []}, {"vehicle_ids": ["ev-1", "ev-1"]},
+                            {"vehicle_id": "ev-1", "quantity": 1, "vehicle_ids": ["ev-2"]},
+                            {"vehicle_ids": ["ev-1", "invalid id"]}):
+                assert client.post(route, json={**first, **invalid}).status_code == 422
             assert client.post(route, json=second).status_code == 202
             assert client.post(route, json={**second, "request_id": str(uuid4())}).status_code == 429
             page = client.get(route, params={"limit": 1}).json()
@@ -103,7 +113,8 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
         history = client.get(f'{route}/{first["request_id"]}').json()
         assert history["batch"] is None
         assert history["decision"] == "HOLD"
-    assert planned == ["cbd"]
+        assert history["vehicle_reasons"] == {"ev-2": "VEHICLE_MISSING"}
+    assert planned == [("cbd", ["ev-1", "ev-2"])]
 
 
 def test_checkpoint_resumes_publication_without_replanning(clock):

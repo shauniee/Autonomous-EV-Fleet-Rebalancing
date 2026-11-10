@@ -46,6 +46,7 @@ interface Props {
   onPage: (offset: number) => void;
   zoneName: (id: string) => string;
   onMap: (id: string) => void;
+  onRevise?: (request: RecommendationRequest) => void;
   onRelocation: (id: string) => void;
   onApprove: (approval: QueuedBatchApproval) => void;
   onCheck: (requestId: string, item?: string) => void;
@@ -54,7 +55,7 @@ interface Props {
 }
 
 export function RecommendationRequests(props: Props) {
-  const { page, rows, focusUnavailable, approvals, pending, now, active, focus, offset, onPage, zoneName, onMap,
+  const { page, rows, focusUnavailable, approvals, pending, now, active, focus, offset, onPage, zoneName, onMap, onRevise,
     onRelocation, onApprove, onCheck, approvalBusy, feedsFresh } = props;
   const [expanded, setExpanded] = useState<string>();
   const [confirming, setConfirming] = useState<string>();
@@ -106,6 +107,7 @@ export function RecommendationRequests(props: Props) {
         const retry: QueuedBatchApproval | undefined = row.approval_request_id && row.batch_recommendation_id
           ? { request_id: row.approval_request_id, batch_recommendation_id: row.batch_recommendation_id, queued: true }
           : undefined;
+        const requestedIds = row.vehicle_ids ?? (row.vehicle_id ? [row.vehicle_id] : []);
         const open = expanded === row.request_id;
         const preview = open && detail.data?.request_id === row.request_id ? detail.data.batch : null;
         return <article className="request-queue-row" key={row.request_id} onFocus={() => { focusedRow.current = row.request_id; }}>
@@ -123,13 +125,17 @@ export function RecommendationRequests(props: Props) {
           </div>
           <div id={`request-${row.request_id}`} hidden={!open} className="request-queue-detail">
             {open && <>
-              {row.vehicle_id && <p>Requested EV <strong>{row.vehicle_id}</strong></p>}
+              {requestedIds.length > 0 && <p>Requested EVs <strong>{requestedIds.join(', ')}</strong></p>}
               {detail.error && <p className="warning" role="status">The full assessment is unavailable. Showing saved request details.</p>}
               {row.batch_recommendation_id && !detail.data && !detail.error && <p role="status">Loading assessment…</p>}
               {preview ? <BatchPanel batch={preview} onRelocation={onRelocation}/> : <>
                 {row.reason_code && <p>{crdsMessage(row.reason_code, 'The assessment did not produce an approvable plan.')}</p>}
                 {row.assignments.length > 0 && <ul>{row.assignments.map(item =>
                   <li key={item.vehicle_id}>{item.vehicle_id} → {item.facility_name}</li>)}</ul>}
+                {row.vehicle_reasons && Object.keys(row.vehicle_reasons).length > 0 && <ul>
+                  {Object.entries(row.vehicle_reasons).map(([id, reason]) =>
+                    <li key={id}><strong>{id}</strong> · {crdsMessage(reason, 'CRDS did not recommend this EV.')}</li>)}
+                </ul>}
               </>}
               {outcome && <BatchResult result={outcome} onRelocation={onRelocation} busy={approvalBusy}
                 onClose={item => onCheck(outcome.request_id, item)}/>}
@@ -137,6 +143,7 @@ export function RecommendationRequests(props: Props) {
               {ready && !feedsFresh && <p className="muted">Wait for current fleet, demand and parking data before approving.</p>}
               <div className="actions">
                 <button onClick={() => onMap(row.target_zone_id)}>View on map</button>
+                {onRevise && <button onClick={() => onRevise(row)}>Revise request</button>}
                 {ready && <button className="primary" disabled={!canApprove} onClick={() => setConfirming(row.request_id)}>Review approval</button>}
                 {(outcome?.status === 'UNKNOWN' || !!unresolved) && !refusal && retry && <>
                   <button disabled={approvalBusy} onClick={() => onCheck(retry.request_id)}>Check approval status</button>

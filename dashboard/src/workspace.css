@@ -454,3 +454,22 @@
   flex-basis: max-content;
   min-width: max-content;
 }
+
+.recommendation-vehicle-picker {
+  min-width: 0;
+  margin: .75rem 0 0;
+  padding: 0;
+  border: 0;
+}
+.recommendation-vehicle-picker legend { padding: 0; font-weight: 650; }
+.recommendation-vehicle-picker p { margin-block: .25rem .5rem; }
+.recommendation-vehicle-options { max-height: 12rem; overflow: auto; }
+.recommendation-vehicle-options label {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 36px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.recommendation-vehicle-options label:focus-within { background: var(--surface-soft); }

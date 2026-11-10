@@ -22,6 +22,7 @@ import {
   RecommendationRequests, recommendationPageSize, recommendationRequestsPath,
   requestApprovalStatus, type QueuedBatchApproval,
 } from './components/RecommendationRequests';
+import { RecommendationVehiclePicker } from './components/RecommendationVehiclePicker';
 import { RelocationPanel } from './components/RelocationPanel';
 import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
 
@@ -110,6 +111,7 @@ export default function App() {
   const [quantity, setQuantity] = useState(1);
   const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
   const [selectedVehicle, setSelectedVehicle] = useState('');
+  const [selectedVehicles, setSelectedVehicles] = useState<string[] | null>(null);
   const [selectedFacility, setSelectedFacility] = useState('');
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
@@ -177,6 +179,7 @@ export default function App() {
   }, [dispatches.data, pendingApprovals, updateApproval, notify]);
   const choose = useCallback((id: string) => {
     recommendationRequest.current?.abort(); setRecommending(false);
+    setSelectedVehicles(null);
     setSelected(id); setDemandDetails(false); setSelectedFacility(''); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
   }, []);
   const zones = heat.data?.zones ?? [];
@@ -216,8 +219,13 @@ export default function App() {
   const batchBlocked = !fresh || !facilitiesFresh || submitting || batchRemaining <= 0
     || (!!batch?.crds && (batch.crds.decision !== 'MOVE' || !batch.crds.approval_allowed));
   const queuedRebalance = purpose === 'REBALANCE' && queueEnabled;
-  const draft = drafts.find(item => item.target_zone_id === selected && item.quantity === quantity &&
-    (item.vehicle_id ?? '') === selectedVehicle);
+  const shortlist = queuedRebalance ? selectedVehicles : null;
+  const requestQuantity = shortlist?.length ?? quantity;
+  const draft = drafts.find(item => {
+    const ids = item.vehicle_ids ?? (item.vehicle_id ? [item.vehicle_id] : []);
+    return item.target_zone_id === selected && item.quantity === requestQuantity &&
+      ids.length === (shortlist?.length ?? 0) && ids.every(id => shortlist?.includes(id));
+  });
   async function submitRecommendation(inputs: RecommendationDraft) {
     if (sendingRequestRef.current) return;
     sendingRequestRef.current = true;
@@ -245,9 +253,10 @@ export default function App() {
   }
   async function recommend() {
     if (queuedRebalance) {
+      if (!requestQuantity) return;
       await submitRecommendation(draft ?? {
-        request_id: crypto.randomUUID(), target_zone_id: selected, quantity,
-        ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
+        request_id: crypto.randomUUID(), target_zone_id: selected, quantity: requestQuantity,
+        ...(shortlist ? { vehicle_ids: shortlist } : {}),
       });
       return;
     }
@@ -433,7 +442,7 @@ export default function App() {
     : !!batch && !batchBlocked && batch.recommended_count > 0;
   const resultRemaining = recommendation ? remaining : batchRemaining;
   const queueAvailabilityUnknown = purpose === 'REBALANCE' && !queueEnabled && (!requestPage.data || !!requestPage.error);
-  const requestBlocked = queueAvailabilityUnknown || !fresh || ((facilityWorkflow || queuedRebalance) && !facilitiesFresh);
+  const requestBlocked = queueAvailabilityUnknown || !requestQuantity || !fresh || ((facilityWorkflow || queuedRebalance) && !facilitiesFresh);
   const readyCount = queueApprovals.data && !queueApprovals.error && !requestPage.error && !requestOffset &&
     requestPage.data?.next_offset === null
     ? requestPage.data.requests.filter(row => requestApprovalStatus(row, now, queueApprovals.data, pendingBatches).ready).length : 0;
@@ -548,21 +557,30 @@ export default function App() {
                   <div className="request-fields">
                     <div className="request-field"><label htmlFor="relocation-purpose">Destination purpose</label>
                       <div className="select-wrap"><select className="form-select" id="relocation-purpose" value={purpose} disabled={recommending || submitting} onChange={event => {
-                        setPurpose(event.target.value as 'REBALANCE' | 'CHARGE'); setSelectedFacility('');
+                        setPurpose(event.target.value as 'REBALANCE' | 'CHARGE'); setSelectedFacility(''); setSelectedVehicles(null);
                         setBatchResult(null);
                       }}><option value="REBALANCE">{facilityWorkflow ? 'Automatic' : 'Rebalance'}</option><option value="CHARGE">Charging only</option></select></div>
                     </div>
-                    <div className="request-field request-count"><label htmlFor="ev-count">EV count</label><input id="ev-count" aria-label="Number of EVs needed" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
+                    <div className="request-field request-count"><label htmlFor="ev-count">EV count</label><input id="ev-count" aria-label="Number of EVs needed" type="number" min={1} max={20} value={requestQuantity} disabled={recommending || submitting || shortlist !== null || (!queuedRebalance && !!selectedVehicle)} onChange={event => {
                       setQuantity(Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1))));
                       setBatchResult(null);
                     }}/></div>
-                    <div className="request-field request-vehicle"><label htmlFor="relocation-vehicle">Vehicle</label>
+                    {queuedRebalance ? <div className="request-field request-vehicle">
+                      <label htmlFor="relocation-vehicle-mode">Vehicle selection</label>
+                      <div className="select-wrap"><select className="form-select" id="relocation-vehicle-mode"
+                        value={shortlist === null ? 'any' : 'specific'} disabled={sendingRequest || submitting}
+                        onChange={event => setSelectedVehicles(event.target.value === 'any' ? null : [])}>
+                        <option value="any">Any eligible EV</option><option value="specific">Specific EVs</option>
+                      </select></div>
+                    </div> : <div className="request-field request-vehicle"><label htmlFor="relocation-vehicle">Vehicle</label>
                       <div className="select-wrap"><select className="form-select" id="relocation-vehicle" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
                         setSelectedVehicle(event.target.value); setSelectedFacility(''); if (event.target.value) setQuantity(1);
                         setBatchResult(null);
                       }}><option value="">Any eligible</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
-                    </div>
+                    </div>}
                   </div>
+                  {shortlist !== null && <RecommendationVehiclePicker vehicles={vehicles} selected={shortlist}
+                    onChange={setSelectedVehicles} disabled={sendingRequest || submitting}/>}
                   {purpose === 'CHARGE' ? <p className="muted">Simulated charging after arrival, up to 80%.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
                   {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => setSelectedFacility('')}>Clear advised charger</button></p>}
                 </section>}
@@ -595,6 +613,7 @@ export default function App() {
                     </>}
                 </> : <>
                   {requestBlocked && <p className="warning">{queueAvailabilityUnknown ? 'Waiting for recommendation service status.'
+                    : !requestQuantity ? 'Select at least one EV.'
                     : !fresh ? 'Fresh demand and fleet data are required.' : 'Fresh facility availability is required.'}</p>}
                   <button className="primary" disabled={recommending || sendingRequest || (requestBlocked && !(queuedRebalance && draft))} onClick={() => {
                     shouldFocusResult.current = true;
@@ -625,6 +644,18 @@ export default function App() {
               if (target) { choose(id); openMap({ zone: target }); }
               else notify('warning', 'This zone is unavailable on the map.');
             }}
+            onRevise={queueEnabled ? row => {
+              const target = zones.find(zone => zone.zone_id === row.target_zone_id);
+              if (!target) { notify('warning', 'This zone is unavailable on the map.'); return; }
+              choose(target.zone_id);
+              setPurpose('REBALANCE');
+              setQuantity(row.quantity);
+              setSelectedVehicles(row.vehicle_ids ?? (row.vehicle_id ? [row.vehicle_id] : null));
+              setMapFocus({ zone: target });
+              setOperationalTab('dispatch');
+              setCompactView('dispatch');
+              requestAnimationFrame(() => document.getElementById('relocation-vehicle-mode')?.focus());
+            } : undefined}
             onRelocation={openRelocation} onApprove={approval => void approveBatch(approval)}
             onCheck={(id, item) => void reconcileBatch(id, item, true)}
             approvalBusy={submitting || checkingApproval} feedsFresh={fresh && facilitiesFresh}/> },

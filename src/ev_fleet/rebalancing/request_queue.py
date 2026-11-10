@@ -173,7 +173,13 @@ class RecommendationQueue:
                 reason = str(exc.detail)
         if status == "READY" and batch.expires_at <= self.clock.now():
             status = "EXPIRED"
+        requested_ids = record.vehicle_ids or ([record.vehicle_id] if record.vehicle_id else [])
+        evidence = batch.crds.source_references.get("decision_evidence", {}).get("vehicles", {})
+        assigned_ids = {item.vehicle_id for item in batch.assignments}
+        vehicle_reasons = {identifier: evidence[identifier]["reason"] for identifier in requested_ids
+                           if identifier not in assigned_ids and identifier in evidence}
         await self.finish(record, status=status, reason_code=reason, decision=batch.crds.decision,
+                          vehicle_reasons=vehicle_reasons,
                           batch_recommendation_id=batch.batch_recommendation_id,
                           recommended_count=batch.recommended_count, expires_at=batch.expires_at,
                           assignments=[item.model_dump(include={"vehicle_id", "facility_id", "facility_name"})

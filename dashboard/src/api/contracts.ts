@@ -266,7 +266,8 @@ export interface RecommendationDraft {
   request_id: string;
   target_zone_id: string;
   quantity: number;
-  vehicle_id?: string;
+  vehicle_id?: string | null;
+  vehicle_ids?: string[] | null;
 }
 
 export interface RecommendationRequest extends RecommendationDraft {
@@ -278,6 +279,7 @@ export interface RecommendationRequest extends RecommendationDraft {
   expires_at: string | null;
   reason_code: string | null;
   assignments: { vehicle_id: string; facility_id: string; facility_name: string }[];
+  vehicle_reasons?: Record<string, string>;
   batch: BatchRecommendation | null;
 }
 
