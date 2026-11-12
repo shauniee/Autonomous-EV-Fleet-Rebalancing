@@ -266,7 +266,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
 ```
 
-For macOS development checks, see [the local checks in `AGENTS.md`](AGENTS.md#local-checks-on-windows-and-macos).
+For macOS development checks, see [Local-first testing on macOS and Linux](docs/local-testing.md#macos-and-linux).
 Local frontend checks require Node.js **22+** and `npm ci` in each frontend
 directory before the first run.
 
