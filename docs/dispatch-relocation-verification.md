@@ -1,5 +1,8 @@
 # Dispatch and relocation verification
 
+This is historical evidence for the original Dispatch implementation. For
+current recommendation behavior and its evidence limits, see [CRDS](crds.md).
+
 ## Regression and new behaviour
 
 The final local regression run completed with **63 passed, 1 warning** on Python

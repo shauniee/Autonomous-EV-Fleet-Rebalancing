@@ -47,18 +47,18 @@ DASHBOARD_PORT=18080 SIMULATION_CONSOLE_PORT=18090 bash scripts/start-kubernetes
 
 1. Run full startup after enabling LTA_DATAMALL. Wait for both LTA feeds to be
    FRESH and for online, available EVs to appear. Extra Pods can still be updating.
-2. In the simulation console, set CBD demand to 12. In Fleet Dispatch, select CBD
+2. In the simulation console, set a valid demand target in every zone. Set CBD to 12 for the demonstration. In Fleet Dispatch, select CBD
    and confirm that real parking and charging locations are shown.
 3. Choose **Parking / demand rebalancing**, quantity one, then **Recommend EV**.
-   Review its LTA carpark, approve and watch the relocation reach SUCCEEDED.
+   For an approvable `MOVE`, review its LTA carpark, approve and follow the relocation. For `HOLD` or `DEFER`, inspect [CRDS evidence](crds.md#decisions-batches-and-approval).
    Fleet overview should then show its `lta-parking-...` parked facility ID.
 4. Choose **Charging — replenish to 80%**. Select an available EV below 80% SOC
    (or leave Any eligible EV to prioritise the lowest-SOC eligible car). Request
    and explicitly approve a recommendation to an available LTA charger. If the
    zone has no free chargers, choose another zone; no mock substitute is used.
 5. After verified arrival, observe **CHARGING (simulated)** in Fleet overview,
-   increasing SOC and UNAVAILABLE status. Charging uses the existing 30x time
-   scale. At 80%, it reports **Charging complete · parked** and becomes available.
+   increasing SOC and UNAVAILABLE status. Charging uses the configured simulation time scale (10× by default in Compose
+   and Kubernetes). At 80%, it reports **Charging complete · parked** and becomes available.
 6. Keep that vehicle selected, switch to **Parking / demand rebalancing**, request
    a destination and approve again. On arrival at a carpark, its old local charger
    allocation is released. It consumes battery while moving to the carpark.

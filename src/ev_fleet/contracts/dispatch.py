@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Literal
-from uuid import UUID
-from pydantic import AwareDatetime, Field
+from uuid import UUID, uuid5
+from pydantic import AwareDatetime, Field, field_validator
 from .common import Model, Position
 from .routing import RoadRoute
 
@@ -146,6 +146,14 @@ class DispatchList(Model):
 class CommandList(Model):
     commands: list[RelocationCommand]
 
+# Queued-plan approvals use this identity for both individual and future group approvals.
+QUEUED_BATCH_APPROVAL_NAMESPACE = UUID("80691ee1-26ef-47bb-b272-f5ebc6eba4e3")
+
+
+def queued_batch_approval_id(batch_id: UUID) -> UUID:
+    return uuid5(QUEUED_BATCH_APPROVAL_NAMESPACE, str(batch_id))
+
+
 class BatchApproval(Model):
     request_id: UUID
     batch_recommendation_id: UUID
@@ -169,3 +177,57 @@ class BatchDispatch(Model):
     recommended_count: int = Field(ge=0)
     items: list[BatchDispatchItem]
     status: Literal["APPROVED", "PARTIAL", "REJECTED", "UNKNOWN"]
+
+
+class BatchApprovalRefusal(Model):
+    request_id: UUID
+    batch_recommendation_id: UUID
+    reason_code: str
+    status_code: Literal[404, 409, 422]
+    recorded_at: AwareDatetime
+
+
+class BatchApprovalLookup(Model):
+    batches: list[BatchDispatch]
+    refusals: list[BatchApprovalRefusal]
+
+
+class BatchApprovalGroupRequest(Model):
+    group_id: UUID
+    batch_recommendation_ids: list[UUID] = Field(min_length=1, max_length=10)
+
+    @field_validator("batch_recommendation_ids")
+    @classmethod
+    def unique_plans(cls, ids: list[UUID]) -> list[UUID]:
+        if len(set(ids)) != len(ids):
+            raise ValueError("batch recommendation IDs must be unique")
+        return ids
+
+
+class BatchApprovalGroupPlan(Model):
+    batch_recommendation_id: UUID
+    request_id: UUID
+    status: Literal["QUEUED", "RUNNING", "APPROVED", "PARTIAL", "REJECTED", "UNKNOWN", "SKIPPED"]
+    reason_code: str | None = None
+    approval: BatchDispatch | None = None
+
+
+class BatchApprovalGroupConflict(Model):
+    vehicle_id: str
+    batch_recommendation_ids: list[UUID]
+
+
+class BatchApprovalGroup(Model):
+    group_id: UUID
+    status: Literal["QUEUED", "RUNNING", "COMPLETED", "CONFLICT", "UNKNOWN"]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    reason_code: str | None = None
+    plans: list[BatchApprovalGroupPlan]
+    conflicts: list[BatchApprovalGroupConflict] = Field(default_factory=list)
+
+
+class BatchApprovalGroupPage(Model):
+    enabled: bool
+    groups: list[BatchApprovalGroup]
+    next_offset: int | None = None

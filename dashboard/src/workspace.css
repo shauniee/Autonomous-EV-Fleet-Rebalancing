@@ -433,3 +433,60 @@
 .demand-thresholds [role=status]:not(:empty) { margin-top: 6px; }
 .badge.low { background: var(--success-bg); color: var(--success-text); }
 .badge.moderate { background: var(--warning-bg); color: var(--warning-text); }
+
+.request-queue { min-width: 0; }
+.request-queue-group { margin-block: 1.25rem; }
+.request-queue-group h3 { margin-bottom: .375rem; }
+.request-queue-row { border-top: 1px solid var(--border); }
+.request-queue-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: .375rem 1rem;
+  padding-block: .65rem;
+}
+.request-queue-summary .text-button { text-align: left; overflow-wrap: anywhere; }
+.request-queue-detail { padding-block: .25rem .75rem; }
+.request-queue-detail .actions { flex-wrap: wrap; }
+.queued-receipt { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: .375rem; }
+
+.app > main > .operational-tabs > .operational-tablist > button[id$="-recommendations-tab"] {
+  flex-basis: max-content;
+  min-width: max-content;
+}
+
+.recommendation-vehicle-picker {
+  min-width: 0;
+  margin: .75rem 0 0;
+  padding: 0;
+  border: 0;
+}
+.recommendation-vehicle-picker legend { padding: 0; font-weight: 650; }
+.recommendation-vehicle-picker p { margin-block: .25rem .5rem; }
+.recommendation-vehicle-options { max-height: 12rem; overflow: auto; }
+.recommendation-vehicle-options label {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 36px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.recommendation-vehicle-options label:focus-within { background: var(--surface-soft); }
+
+.bulk-selection {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: .5rem 1rem;
+  padding-block: .75rem;
+  border-block: 1px solid var(--border);
+}
+.bulk-selection p { flex-basis: 100%; margin: 0; }
+.bulk-approval-review { max-height: 85dvh; overflow: auto; }
+.bulk-review-plans > li, .bulk-progress-row { padding-block: .625rem; }
+.bulk-review-plans > li + li { border-top: 1px solid var(--border); }
+.bulk-review-plans ul { margin-block: .375rem; }
+.bulk-review-plans li, .bulk-progress-row li { overflow-wrap: anywhere; }
+.bulk-progress-row summary { cursor: pointer; padding-block: .375rem; }

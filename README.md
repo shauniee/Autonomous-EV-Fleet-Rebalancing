@@ -137,7 +137,8 @@ the map must not invent vehicle motion when telemetry is missing.
    valid until updated. CRDS still needs a valid target in every zone.
 2. In the **Operator Dashboard → Dispatch**, confirm Fleet, Demand and Facilities
    observations are available. Select **CBD** on the map or zone list and
-   request a recommendation. Inspect **Evidence** if the result is HOLD/DEFER.
+   request a recommendation. For queued requests, select **View request** or open
+   **Recommendations**. Inspect **Evidence** if the result is HOLD/DEFER.
 3. If the result is **MOVE**, review the proposed EV, parking destination,
    arrival battery and checked road route. Click **Review dispatch** and then
    **Approve**. Approval is deliberately separate from recommendation.
@@ -321,7 +322,7 @@ Shared models and utilities are intentionally separate:
 ```text
 Fleet telemetry + zone demand
         -> operator selects a shortage zone
-        -> Rebalancing ranks eligible EVs
+        -> CRDS evaluates verified moves against the no-additional-move baseline
         -> operator reviews a recommendation
         -> Dispatch receives explicit approval
         -> Fleet atomically claims the EV
@@ -333,9 +334,10 @@ Fleet telemetry + zone demand
 A recommendation is advisory. It does not reserve or move a vehicle. Only an
 explicit Dispatch approval can begin relocation.
 
-The operator can request one EV or a batch of up to 20. Batch recommendations rank
-vehicle-to-facility pairs, respect simulated parking capacity and may return partial
-fulfilment. Approval revalidates both vehicle eligibility and parking availability.
+The operator can request one EV or a batch of up to 20. CRDS recomputes fleet-wide
+benefit after each proposed move, respects parking and charging capacity, and
+may return fewer EVs than requested. Approval revalidates current eligibility,
+facility capacity and modeled benefit.
 
 ### Demand and shortages
 
@@ -355,7 +357,8 @@ kilometres, energy in kWh and state of charge as a percentage.
 
 Rebalancing excludes EVs with missing or stale telemetry, offline connectivity,
 unavailability, a rental or active relocation/claim, insufficient predicted
-arrival charge, or another conflicting operation. CRDS is the default
+arrival charge, or another conflicting operation.
+[Counterfactual Rebalancing under Delayed State (CRDS)](docs/crds.md) is the default
 rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
 eligible moves across declared futures, ranks their minimum fleet-wide shortage
 reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires

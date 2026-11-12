@@ -260,3 +260,66 @@ export interface BatchDispatch {
   recommended_count: number; items: BatchDispatchItem[];
   status: 'APPROVED' | 'PARTIAL' | 'REJECTED' | 'UNKNOWN';
 }
+
+
+export interface RecommendationDraft {
+  request_id: string;
+  target_zone_id: string;
+  quantity: number;
+  vehicle_id?: string | null;
+  vehicle_ids?: string[] | null;
+}
+
+export interface RecommendationRequest extends RecommendationDraft {
+  status: 'QUEUED' | 'EVALUATING' | 'READY' | 'HOLD' | 'DEFERRED' | 'ADVISORY' | 'FAILED' | 'EXPIRED';
+  submitted_at: string;
+  batch_recommendation_id: string | null;
+  approval_request_id: string | null;
+  recommended_count: number | null;
+  expires_at: string | null;
+  reason_code: string | null;
+  assignments: { vehicle_id: string; facility_id: string; facility_name: string }[];
+  vehicle_reasons?: Record<string, string>;
+  batch: BatchRecommendation | null;
+}
+
+export interface RecommendationRequestPage {
+  enabled: boolean;
+  crds_mode: 'DISABLED' | 'ADVISORY' | 'ACTIVE';
+  requests: RecommendationRequest[];
+  next_offset: number | null;
+}
+
+export interface BatchApprovalLookup {
+  batches: BatchDispatch[];
+  refusals: { request_id: string; batch_recommendation_id: string; reason_code: string }[];
+}
+
+export interface BatchApprovalGroupRequest {
+  group_id: string;
+  batch_recommendation_ids: string[];
+}
+
+export interface BatchApprovalGroupPlan {
+  batch_recommendation_id: string;
+  request_id: string;
+  status: BatchDispatch['status'] | 'QUEUED' | 'RUNNING' | 'SKIPPED';
+  reason_code: string | null;
+  approval: BatchDispatch | null;
+}
+
+export interface BatchApprovalGroup {
+  group_id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'CONFLICT' | 'UNKNOWN';
+  created_at: string;
+  updated_at: string;
+  reason_code: string | null;
+  plans: BatchApprovalGroupPlan[];
+  conflicts: { vehicle_id: string; batch_recommendation_ids: string[] }[];
+}
+
+export interface BatchApprovalGroupPage {
+  enabled: boolean;
+  groups: BatchApprovalGroup[];
+  next_offset: number | null;
+}

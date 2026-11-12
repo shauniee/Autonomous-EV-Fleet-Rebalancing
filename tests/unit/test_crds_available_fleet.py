@@ -461,6 +461,26 @@ def test_batch_keeps_last_donor_ev_even_when_target_still_needs_coverage(observa
     assert evidence["batch_stop_reasons"] == ["BATCH_ORIGIN_STOCK_LIMIT"]
 
 
+def test_requested_shortlist_restricts_routes_without_filtering_fleet(observations, clock):
+    routed = set()
+
+    async def note_route(vehicle_id):
+        routed.add(vehicle_id)
+
+    async def evaluate():
+        return await plan(observations, clock, batch=True, vehicle_ids=["unknown", "healthy"],
+                          route_hook=note_route, traffic_slots=asyncio.Semaphore(4))
+
+    result, (children, metadata, _) = asyncio.run(evaluate())
+    assert routed == {"healthy"}
+    assert {vehicle.vehicle_id for vehicle in result.inputs.fleet.vehicles} == {"healthy", "healthy-2"}
+    assert result.metadata.source_references["requested_vehicle_ids"] == ["healthy", "unknown"]
+    assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy"], metadata.reason_code
+    rows = metadata.source_references["decision_evidence"]["vehicles"]
+    assert set(rows) == {"healthy", "unknown"}
+    assert rows["unknown"]["reason"] == "VEHICLE_MISSING"
+
+
 def test_requested_ev_missing_and_road_reserve_are_distinct_exclusions(observations, clock):
     missing = asyncio.run(plan(observations, clock, vehicle_id="unknown"))
     assert missing.metadata.decision == "HOLD"

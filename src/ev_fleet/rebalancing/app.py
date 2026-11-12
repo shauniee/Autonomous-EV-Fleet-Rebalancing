@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from uuid import uuid4, UUID
@@ -27,6 +28,12 @@ from ev_fleet.contracts.dispatch import Dispatch
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
+from .request_queue import Checkpoint, RecommendationQueue
+from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.contracts.recommendations import (
+    QueuedRecommendationRequest, RecommendationRequestPage, RecommendationRequestRecord,
+    RecommendationRequestStatus,
+)
 
 
 class TrafficRouteQuery(BaseModel):
@@ -43,7 +50,14 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
     clock = clock or Clock()
     store = RecommendationStore(clock, "rebalancing.recommendations")
     batch_store = RecommendationStore(clock, "rebalancing.batches")
+    queue_repository = SnapshotRepository.from_env("rebalancing.recommendation_requests")
+    queue_enabled = queue_repository.enabled and crds_config.mode != "DISABLED"
+    queue = RecommendationQueue(clock, queue_repository,
+                                capacity=crds_config.request_queue_capacity,
+                                max_wait_seconds=crds_config.request_queue_max_wait_seconds)
     app.state.persistence = (store.repository, batch_store.repository)
+    if queue_enabled:
+        app.state.persistence += (queue_repository,)
     app.state.traffic_monitor = None
     app.state.traffic_scenarios = TrafficScenarios(clock)
     app.state.traffic_instance_id = str(uuid4())
@@ -60,6 +74,14 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                 cleanup.callback(state.repository.disable_recovery_exit)
                 cleanup.push_async_callback(state.close)
                 await state.start()
+            if queue_enabled:
+                queue_repository.enable_recovery_exit()
+                cleanup.callback(queue_repository.disable_recovery_exit)
+                cleanup.push_async_callback(queue_repository.close)
+                await queue_repository.start()
+                await queue.start()
+            app.state.crds_route_slots = asyncio.Semaphore(4)
+            app.state.crds_traffic_slots = asyncio.Semaphore(4)
             async with httpx.AsyncClient(timeout=httpx.Timeout(2.0), limits=httpx.Limits(max_connections=50)) as owned:
                 app.state.client = client or owned
                 # In Redis mode Rebalancing NEVER calls the LTA API. A separate,
@@ -80,9 +102,14 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
                 app.state.traffic_monitor = monitor
                 traffic_task = (asyncio.create_task(monitor.refresh_loop())
                                 if monitor.source == "LTA_DATAMALL" else None)
+                queue_task = asyncio.create_task(run_queue()) if queue_enabled else None
+                app.state.recommendation_queue_task = queue_task
                 try:
                     yield
                 finally:
+                    queue.stop()
+                    if queue_task is not None:
+                        await asyncio.gather(queue_task, return_exceptions=True)
                     if traffic_task:
                         traffic_task.cancel()
                         await asyncio.gather(traffic_task, return_exceptions=True)
@@ -91,13 +118,17 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
 
     app.router.lifespan_context = lifespan
 
+    def route_budget():
+        return {"route_slots": app.state.crds_route_slots,
+                "traffic_slots": app.state.crds_traffic_slots}
+
     @app.post("/api/v1/recommendations", status_code=201, response_model=Recommendation)
     async def recommend(body: RecommendationRequest):
         start = clock.monotonic()
         if crds_config.mode != "DISABLED":
             try:
                 plan = await plan_one(app.state.client, config, crds_config, clock,
-                                      traffic_snapshot(), body.target_zone_id)
+                                      traffic_snapshot(), body.target_zone_id, **route_budget())
             except asyncio.TimeoutError:
                 raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
             except ValueError:
@@ -171,7 +202,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
             plan = await plan_one(app.state.client, policy, crds_config, clock,
                 traffic_snapshot(), record.target.zone_id, vehicle_id=record.selected_vehicle_id,
                 facility_id=record.parking_facility_id, route_override=body.route,
-                exclude_dispatch_id=str(body.dispatch_id))
+                exclude_dispatch_id=str(body.dispatch_id), **route_budget())
         except asyncio.TimeoutError:
             raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
         except ValueError:
@@ -264,47 +295,94 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
         except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
             raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from exc
 
+    async def evaluate_request(body: QueuedRecommendationRequest | BatchRecommendationRequest) -> Checkpoint:
+        start = clock.monotonic()
+        try:
+            plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
+                body.target_zone_id, vehicle_id=body.vehicle_id,
+                vehicle_ids=body.vehicle_ids if isinstance(body, QueuedRecommendationRequest) else None,
+                for_batch=True, **route_budget())
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
+        except ValueError:
+            raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
+        children, metadata, stop_reason = await plan_batch(
+            plan, body.quantity, app.state.client, crds_config, clock, policy=config)
+        now = clock.now()
+        expires = now + timedelta(seconds=config.recommendation_ttl_seconds)
+        assignments = []
+        records = []
+        for child in children:
+            record = recommendation_record(child, config, clock, body.target_zone_id, started_at=start)
+            record["expires_at"] = expires.isoformat()
+            records.append(record)
+            gain = child.evaluation.ranked_candidates[0]
+            site = child.sites[(gain.vehicle_id, gain.facility_id)]
+            assessment = child.assessments[gain.vehicle_id]
+            assignments.append({"recommendation_id": record["recommendation_id"],
+                "vehicle_id": gain.vehicle_id, "facility_id": gain.facility_id, "facility_name": site.name,
+                "target_position": site.position.model_dump(mode="json"),
+                "requires_charging": record["requires_charging"], "distance_km": assessment["distance_km"],
+                "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"], "score": None,
+                "traffic_assessment": assessment["traffic_assessment"], "crds_gain": gain.model_dump(mode="json")})
+        result = {"batch_recommendation_id": str(uuid4()), "target_zone_id": body.target_zone_id,
+            "purpose": "REBALANCE", "requested_count": body.quantity, "recommended_count": len(assignments),
+            "unfulfilled_count": body.quantity - len(assignments), "assignments": assignments,
+            "created_at": now.isoformat(), "expires_at": expires.isoformat(),
+            "crds": metadata.model_dump(mode="json"),
+            "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
+            "explanation": f"CRDS recommends {len(assignments)} of {body.quantity} requested EVs.",
+            "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
+                "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
+        return {"batch": result, "children": records}
+
+    async def publish_crds_batch(checkpoint: Checkpoint) -> None:
+        result = checkpoint["batch"]
+        await store.put_many(checkpoint["children"])
+        await batch_store.put_many([{**result, "recommendation_id": result["batch_recommendation_id"]}])
+
+    async def run_queue():
+        try:
+            await queue.run(evaluate_request, publish_crds_batch)
+        except Exception:
+            logging.getLogger(__name__).exception("CRDS recommendation queue stopped")
+
+    @app.post("/api/v1/recommendation-requests", status_code=202, response_model=RecommendationRequestRecord)
+    async def submit_request(body: QueuedRecommendationRequest):
+        if not queue_enabled:
+            raise HTTPException(503, "RECOMMENDATION_QUEUE_DISABLED")
+        if queue.stopping or app.state.recommendation_queue_task.done():
+            raise HTTPException(503, "RECOMMENDATION_QUEUE_UNAVAILABLE")
+        return await queue.submit(body)
+
+    @app.get("/api/v1/recommendation-requests", response_model=RecommendationRequestPage)
+    async def list_requests(status: RecommendationRequestStatus | None = None,
+                            offset: int = Query(default=0, ge=0),
+                            limit: int = Query(default=30, ge=1, le=100)):
+        records, next_offset = await queue.page(status, offset, limit)
+        return RecommendationRequestPage(enabled=queue_enabled, crds_mode=crds_config.mode,
+                                         requests=records, next_offset=next_offset)
+
+    @app.get("/api/v1/recommendation-requests/{request_id}", response_model=RecommendationRequestRecord)
+    async def request_detail(request_id: UUID):
+        record = await queue.get(str(request_id))
+        if record.batch_recommendation_id and record.status in ("READY", "HOLD", "DEFERRED", "ADVISORY"):
+            try:
+                batch = await batch_store.get(str(record.batch_recommendation_id))
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                return queue.view(record)
+            batch.pop("recommendation_id")
+            return record.model_copy(update={"batch": BatchRecommendation.model_validate(batch)})
+        return record
+
     @app.post("/api/v1/batch-recommendations", status_code=201, response_model=BatchRecommendation)
     async def batch_recommend(body: BatchRecommendationRequest):
         if body.purpose == "REBALANCE" and crds_config.mode != "DISABLED":
-            start = clock.monotonic()
-            try:
-                plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
-                    body.target_zone_id, vehicle_id=body.vehicle_id, for_batch=True)
-            except asyncio.TimeoutError:
-                raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
-            except ValueError:
-                raise HTTPException(503, "DEPENDENCY_INVALID_RESPONSE") from None
-            children, metadata, stop_reason = await plan_batch(
-                plan, body.quantity, app.state.client, crds_config, clock, policy=config)
-            now = clock.now()
-            expires = now + timedelta(seconds=config.recommendation_ttl_seconds)
-            assignments = []
-            for child in children:
-                record = recommendation_record(child, config, clock, body.target_zone_id, started_at=start)
-                record["expires_at"] = expires.isoformat()
-                await store.put(record, config.recommendation_ttl_seconds)
-                gain = child.evaluation.ranked_candidates[0]
-                site = child.sites[(gain.vehicle_id, gain.facility_id)]
-                assessment = child.assessments[gain.vehicle_id]
-                assignments.append({"recommendation_id": record["recommendation_id"],
-                    "vehicle_id": gain.vehicle_id, "facility_id": gain.facility_id, "facility_name": site.name,
-                    "target_position": site.position.model_dump(mode="json"),
-                    "requires_charging": record["requires_charging"], "distance_km": assessment["distance_km"],
-                    "predicted_arrival_soc_pct": assessment["predicted_arrival_soc_pct"], "score": None,
-                    "traffic_assessment": assessment["traffic_assessment"], "crds_gain": gain.model_dump(mode="json")})
-            result = {"batch_recommendation_id": str(uuid4()), "target_zone_id": body.target_zone_id,
-                "purpose": "REBALANCE", "requested_count": body.quantity, "recommended_count": len(assignments),
-                "unfulfilled_count": body.quantity - len(assignments), "assignments": assignments,
-                "created_at": now.isoformat(), "expires_at": expires.isoformat(),
-                "crds": metadata.model_dump(mode="json"),
-                "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
-                "explanation": f"CRDS recommends {len(assignments)} of {body.quantity} requested EVs.",
-                "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
-                    "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
-            await batch_store.put({**result, "recommendation_id": result["batch_recommendation_id"]},
-                                  config.recommendation_ttl_seconds)
-            return result
+            checkpoint = await evaluate_request(body)
+            await publish_crds_batch(checkpoint)
+            return checkpoint["batch"]
         fleet_raw, target_raw, sites_raw = await asyncio.gather(
             get_json(app.state.client, f"{config.fleet_url}/api/v1/vehicles"),
             get_json(app.state.client, f"{config.demand_url}/api/v1/zones/{body.target_zone_id}"),

@@ -1,6 +1,8 @@
 # EV-selection strategy evaluation and baseline comparison
 
-This evaluation compares the existing energy-aware EV selector with a nearest-eligible-EV baseline. It adds research infrastructure, not a new product mode. The running Rebalancing Service still defaults to `ev-aware-v1`; Dispatch, Fleet, Demand and dashboard contracts are unchanged.
+This archived evaluation compares the legacy energy-aware EV selector
+(`ev-aware-v1`) with nearest eligible EV. The study predates the default
+[CRDS](crds.md) policy. Its results apply to the two tested selectors.
 
 ## Research question
 

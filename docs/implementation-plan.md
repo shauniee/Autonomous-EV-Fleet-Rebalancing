@@ -81,7 +81,7 @@ The roadmap below is historical.
 5. **Strategy evaluation:** nearest eligible baseline, reproducible paired
    scenarios, isolated trial state, raw JSON/CSV, confidence intervals, graphs and analysis
    of distance, SOC, arrivals, demand coverage and failure handling. Product policy weights
-   remain fixed and the application default remains energy-aware.
+   were fixed for that evaluation. The application now defaults to [CRDS](crds.md).
 
 Six-person allocation: Fleet/concurrency; Demand/charging; selection/metrics;
 simulator/telemetry; HTTP integration/failures and later Dispatch; deployment/logging/

@@ -78,8 +78,9 @@ at this scale because the confidence interval includes zero.
 | Docker container runtime | **Not verified: Docker daemon unavailable** |
 
 The browser journey again exercised explicit human approval and real relocation
-through arrival. strategy evaluation did not alter dispatch semantics, dashboard behavior,
-or the default energy-aware application policy.
+through arrival using the historical setup. This evidence covers the legacy
+selectors and dispatch path at the time of the run. For the current default
+policy and its evidence limits, see [CRDS](crds.md).
 
 ## Limits
 

@@ -302,7 +302,9 @@ Invoke-RestMethod http://127.0.0.1:8080/api/fleet/vehicles |
   ConvertTo-Json -Depth 12
 ```
 
-Create a current manual CBD demand observation using its actual version:
+For default [CRDS](crds.md) planning, initialize a valid target in every zone
+using the Simulation Console. Then set the target for CBD there or create the
+manual observation using its current API version:
 
 ```powershell
 $zone = Invoke-RestMethod http://127.0.0.1:8080/api/demand/zones/cbd
@@ -321,9 +323,11 @@ Invoke-RestMethod -Method Put `
 Then complete the operator-owned workflow in the dashboard:
 
 1. Select the **CBD CRITICAL** hotspot.
-2. Select **Recommend EV** and inspect the backend recommendation.
-3. Select **Review dispatch**.
-4. Select **Approve Dispatch** before the recommendation expires.
+2. Request a recommendation and inspect the result. If the request is queued,
+   open **Recommendations** for its decision and evidence.
+3. Review the plan if it contains an approvable `MOVE`. Investigate the reason
+   if the result is `HOLD` or `DEFER`.
+4. Explicitly approve before the recommendation expires.
 5. Observe acknowledgement, `IN PROGRESS`, incremental position/SOC updates,
    and finally `SUCCEEDED`.
 6. Confirm the EV shows `cbd`, `AVAILABLE`, and no active Fleet claim.
