@@ -3,6 +3,7 @@ import type { Candidate, Recommendation, Vehicle, Zone } from '../api/contracts'
 import type { Resource } from '../hooks/usePolling';
 import { Badge, number, position, time } from './format';
 import { CrdsEvidence, CrdsSummary } from './CrdsSummary';
+import { minutesText } from './crdsMessages';
 import { OperationalTabs } from './OperationalTabs';
 import { TwinHistoryPanel } from './TwinHistoryPanel';
 import { SimulatorStatus } from './SimulatorStatus';
@@ -65,7 +66,7 @@ export function CandidateDetails({ candidate }: { candidate: Candidate }) {
     <div><dt>Estimated energy</dt><dd>{number(candidate.energy_required_kwh, ' kWh')}</dd></div>
     <div><dt>SOC at recommendation</dt><dd>{number(candidate.current_soc_pct, '%')}</dd></div>
     <div><dt>Predicted arrival SOC</dt><dd>{number(candidate.predicted_arrival_soc_pct, '%')}</dd></div>
-    <div><dt>{candidate.crds_gain ? 'Minimum coverage gain' : 'Backend score'}</dt><dd>{candidate.crds_gain ? number(candidate.crds_gain.worst_case_gain_vehicle_minutes, ' points') : number(candidate.score)}</dd></div>
+    <div><dt>{candidate.crds_gain ? 'Extra EV availability' : 'Backend score'}</dt><dd>{candidate.crds_gain ? minutesText(candidate.crds_gain.worst_case_gain_vehicle_minutes) : number(candidate.score)}</dd></div>
     <div><dt>Charging assessment</dt><dd>{candidate.charging_assessment ?? 'Unknown'}</dd></div>
   </dl>;
 }
@@ -74,7 +75,7 @@ export function RecommendationPanel({ recommendation, onRelocation }: { recommen
   return <div className="recommendation" data-testid="recommendation">
     <h3>{recommendation.selected_vehicle_id ?? (recommendation.crds ? 'Relocation assessment' : 'No eligible EV')}</h3>
     {!recommendation.crds && <p className="recommendation-reason">{recommendation.explanation}</p>}
-    {recommendation.crds && <CrdsSummary result={recommendation.crds}/>}
+    {recommendation.crds && <CrdsSummary result={recommendation.crds} target={recommendation.target.name} vehicle={recommendation.selected_vehicle_id}/>}
     <OperationalTabs label="Recommendation details" tabs={[
       { id: 'overview', label: 'EV assessment', content: candidate ? <CandidateDetails candidate={candidate}/> :
         <p className="muted">No vehicle was proposed. Open Evidence to inspect the assessment.</p> },
@@ -82,7 +83,7 @@ export function RecommendationPanel({ recommendation, onRelocation }: { recommen
         {recommendation.crds && <CrdsEvidence result={recommendation.crds} onRelocation={onRelocation}/>}
         {recommendation.crds?.source_references.decision_evidence?.version !== 1 && <>
           <h4>Ranked vehicles</h4>
-          {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `minimum gain ${number(c.crds_gain.worst_case_gain_vehicle_minutes, ' points')}` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
+          {recommendation.ranked_candidates.length ? <ol>{recommendation.ranked_candidates.map(c => <li key={c.vehicle_id}>{c.vehicle_id} · {c.crds_gain ? `would add ${minutesText(c.crds_gain.worst_case_gain_vehicle_minutes)} of EV availability` : `score ${number(c.score)}`}</li>)}</ol> : <p>No ranked vehicles.</p>}
         </>}
         {!recommendation.crds && <>
           <h4>Exclusions</h4>

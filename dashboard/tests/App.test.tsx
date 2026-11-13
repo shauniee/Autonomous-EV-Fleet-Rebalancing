@@ -877,6 +877,54 @@ describe('CRDS recommendation explanations', () => {
     expect(result).not.toHaveTextContent(/ONEMAP_AUTH_FAILED|ROUTE_EVIDENCE_UNAVAILABLE/);
   });
 
+  it('explains a move in plain language and why other EVs were not chosen', async () => {
+    const row = { related_reasons: [], dispatch_ids: [] };
+    server({ '/api/rebalancing/recommendations': { ...makeRecommendation(), crds: { ...crds,
+      decision: 'MOVE', reason_code: 'USEFUL_SHORTAGE_REDUCTION', approval_allowed: true,
+      worst_case_gain_vehicle_minutes: 12, arrival_minutes_min: 6, arrival_minutes_max: 9,
+      source_references: { decision_evidence: { version: 1, assessment_reasons: ['USEFUL_SHORTAGE_REDUCTION'], batch_stop_reasons: [],
+        vehicles: {
+          'ev-01': { ...row, outcome: 'RECOMMENDED', reason: 'USEFUL_SHORTAGE_REDUCTION', gain_vehicle_minutes: 12 },
+          'ev-03': { ...row, outcome: 'NOT_SELECTED', reason: 'LOWER_MODELED_BENEFIT', gain_vehicle_minutes: 4 },
+          'ev-04': { ...row, outcome: 'EXCLUDED', reason: 'RENTED' },
+          'ev-05': { ...row, outcome: 'EXCLUDED', reason: 'RENTED' },
+          'ev-06': { ...row, outcome: 'EXCLUDED', reason: 'OFFLINE' },
+        } } } } } });
+    render(<App/>);
+    await selectAndRecommend();
+    const result = screen.getByTestId('recommendation');
+    expect(result).toHaveTextContent('Move ev-01 to CBD. Customers there would have one extra EV available for about 12 minutes of the next 30 minutes, even in the busiest of the 4 demand patterns CRDS checked.');
+    expect(result).toHaveTextContent('3 EVs could not be considered: 2 rented, 1 offline.');
+    expect(result).toHaveTextContent('How does CRDS decide?');
+    fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
+    expect(result).toHaveTextContent('ev-01 was chosen instead: it adds about 12 minutes of EV availability, compared with about 4 minutes for this EV.');
+    expect(result).not.toHaveTextContent(/points|coverage score/);
+  });
+
+  it('explains how close the best option came when CRDS recommends waiting', async () => {
+    server({ '/api/rebalancing/recommendations': { ...makeRecommendation(), selected_vehicle_id: null, crds: { ...crds,
+      decision: 'HOLD', reason_code: 'NO_USEFUL_MOVE',
+      source_references: { decision_evidence: { version: 1, assessment_reasons: ['NO_USEFUL_MOVE'], batch_stop_reasons: [],
+        vehicles: {
+          'ev-07': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: -39,
+            origin_shortage_increase: 30, related_reasons: [], dispatch_ids: [] },
+          'ev-08': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: 0,
+            related_reasons: [], dispatch_ids: [] },
+          'ev-03': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: 0.5,
+            related_reasons: [], dispatch_ids: [] },
+        } } } } } });
+    render(<App/>);
+    await selectAndRecommend();
+    const result = screen.getByTestId('recommendation');
+    expect(result).toHaveTextContent(
+      'The best option, ev-03, would give customers in CBD one extra EV available for less than a minute of the next 30 minutes. CRDS only recommends a trip that adds more than about 1 minute of availability, so it is better to wait.');
+    fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
+    expect(result).toHaveTextContent('ev-03 · Moving it would only add less than a minute of EV availability overall, which is not enough to be worth the trip.');
+    expect(result).toHaveTextContent('ev-07 · Moving it would do more harm than good: customers in its current zone would be left without a car for about 30 minutes, which outweighs any benefit at the destination.');
+    expect(result).toHaveTextContent('ev-08 · Moving it would not help: the destination is expected to have enough cars');
+    expect(result).not.toHaveTextContent(/points|coverage score|no time/);
+  });
+
   it('requests a fresh recommendation from a deferred result', async () => {
     const deferred = { ...makeRecommendation(), selected_vehicle_id: null,
       ranked_candidates: [], crds: { ...crds, reason_code: 'DEMAND_UNKNOWN_OR_STALE' } };

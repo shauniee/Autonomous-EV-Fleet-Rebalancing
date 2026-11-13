@@ -493,11 +493,12 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
         assessment["crds_gain"] = gain.model_dump(mode="json")
         assessments.append(assessment)
     if selected:
-        explanation = (f"{selected} improves the modeled coverage score by at least "
-                       f"{plan.metadata.worst_case_gain_vehicle_minutes:g} points across "
-                       f"{plan.metadata.scenario_count} declared futures.")
+        explanation = (f"Move {selected} to {target.name}: customers there gain about "
+                       f"{plan.metadata.worst_case_gain_vehicle_minutes:.0f} minutes of extra EV availability, "
+                       f"even in the busiest of {plan.metadata.scenario_count} demand patterns checked.")
     else:
-        explanation = ("Wait: no assessed move has sufficient fleet-wide benefit." if plan.metadata.decision == "HOLD"
+        explanation = ("Wait: no possible move would help customers enough to be worth the trip."
+                       if plan.metadata.decision == "HOLD"
                        else "The relocation assessment could not be completed.")
     return {"recommendation_id": str(uuid4()), "created_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=policy.recommendation_ttl_seconds)).isoformat(),

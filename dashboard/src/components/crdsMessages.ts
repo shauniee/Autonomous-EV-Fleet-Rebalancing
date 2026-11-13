@@ -1,17 +1,17 @@
 const reasons: Readonly<Record<string, string>> = {
-  USEFUL_SHORTAGE_REDUCTION: 'This move improves the modeled fleet coverage score, even in the least favorable scenario checked.',
-  NO_ELIGIBLE_RELOCATIONS: 'CRDS found no EV that could make this move to a suitable destination.',
-  NO_USEFUL_MOVE: 'No move improved the modeled fleet coverage score enough to recommend it.',
+  USEFUL_SHORTAGE_REDUCTION: 'Moving this EV makes it less likely that customers in the destination zone find no car available, even in the busiest demand pattern CRDS tested.',
+  NO_ELIGIBLE_RELOCATIONS: 'No EV was free, charged enough, and able to reach a parking or charging space in this zone.',
+  NO_USEFUL_MOVE: 'None of the possible moves would help customers enough to be worth the trip.',
   NO_MORE_ELIGIBLE_EVS: 'No more eligible EVs remained for this request.',
   CAPACITY_OR_STOCK_LIMIT: 'The batch reached a parking, charging, or origin-zone supply limit.',
   BATCH_PARKING_LIMIT: 'Earlier moves in this plan used the remaining parking spaces at the destination.',
   BATCH_CHARGING_LIMIT: 'Earlier moves in this plan used the remaining charging spaces at the destination.',
   BATCH_ORIGIN_STOCK_LIMIT: 'Earlier moves left too few available EVs in the origin zone to support this move.',
-  DONOR_SERVICE_FLOOR: 'This is the last available EV in a zone with demand.',
+  DONOR_SERVICE_FLOOR: 'This is the last available EV in a zone where customers need it, so it stays where it is.',
   REQUESTED_QUANTITY_REACHED: 'CRDS found the requested number of EVs before selecting this one.',
-  LOWER_MODELED_BENEFIT: 'Another EV offered a greater improvement in the modeled fleet coverage score.',
-  HIGHER_ENERGY_TIEBREAK: 'Another EV offered the same modeled benefit using less energy.',
-  STABLE_ORDER_TIEBREAK: 'Another EV had the same modeled benefit and energy requirement and came first in the ranking order.',
+  LOWER_MODELED_BENEFIT: 'Another EV would help customers in the destination zone more.',
+  HIGHER_ENERGY_TIEBREAK: 'Another EV would help customers just as much while using less battery.',
+  STABLE_ORDER_TIEBREAK: 'Another EV would help just as much with the same battery use, and CRDS picks between equal options in a fixed order.',
   TELEMETRY_UNAVAILABLE: 'Current vehicle updates are unavailable.',
   NO_TELEMETRY: 'The EV has not reported its current position and battery level.',
   OFFLINE: 'The EV is offline.',
@@ -67,6 +67,43 @@ const reasons: Readonly<Record<string, string>> = {
   RECOMMENDATION_QUEUE_DISABLED: 'The recommendation queue is disabled.',
   RECOMMENDATION_CAPACITY_REACHED: 'The recommendation service is busy. Try again shortly.',
 };
+
+// CRDS gain is EV-minutes of customer shortage avoided over the planning horizon.
+export function minutesText(minutes: number) {
+  if (minutes <= 0) return 'no time';
+  if (minutes < 1) return 'less than a minute';
+  const whole = Math.round(minutes);
+  return `about ${whole} ${whole === 1 ? 'minute' : 'minutes'}`;
+}
+
+export function benefitPhrase(minutes: number, horizon: number, combined = false) {
+  if (minutes <= 0) return 'no extra EV availability';
+  return combined || minutes > horizon
+    ? `the equivalent of one extra EV for ${minutesText(minutes)} over the next ${horizon} minutes`
+    : `one extra EV available for ${minutesText(minutes)} of the next ${horizon} minutes`;
+}
+
+const exclusionLabels: Readonly<Record<string, string>> = {
+  RENTED: 'rented', CHARGING: 'charging', CHARGING_TASK: 'charging', BUSY: 'already on another job',
+  OFFLINE: 'offline', NO_TELEMETRY: 'not reporting', STALE_TELEMETRY: 'not reporting',
+  TELEMETRY_UNAVAILABLE: 'not reporting', VEHICLE_MISSING: 'not reporting',
+  BELOW_OPERATIONAL_RESERVE: 'battery too low', ROUTE_BELOW_OPERATIONAL_RESERVE: 'battery too low',
+  PARKING_FULL: 'no space at the destination', CHARGING_FULL: 'no space at the destination',
+  NO_SUITABLE_DESTINATION: 'no space at the destination', CHARGING_ONLY_DESTINATION: 'no space at the destination',
+  ROAD_ROUTE_BLOCKED: 'no usable road route', ROAD_ROUTE_NOT_FOUND: 'no usable road route',
+  RELOCATION_FAILED: 'previous move needs review', RELOCATION_UNCONFIRMED: 'previous move needs review',
+  RELOCATION_OWNERSHIP_UNCONFIRMED: 'previous move needs review',
+  DONOR_SERVICE_FLOOR: 'needed in its own zone',
+};
+
+export function exclusionSummary(reasons: string[]) {
+  const counts = new Map<string, number>();
+  for (const reason of reasons) {
+    const label = Object.prototype.hasOwnProperty.call(exclusionLabels, reason) ? exclusionLabels[reason] : 'other reasons';
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([label, count]) => `${count} ${label}`).join(', ');
+}
 
 export function crdsMessage(code: string, fallback = 'CRDS could not verify the information needed for this assessment.') {
   return Object.prototype.hasOwnProperty.call(reasons, code) ? reasons[code] : fallback;
