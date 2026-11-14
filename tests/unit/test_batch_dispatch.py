@@ -128,8 +128,8 @@ def test_batch_recommendation_assigns_distinct_evs_and_parking_capacity(clock):
             claims = [(await cluster.fleet.get(name))["active_claim"] for name in ids]
             assert all(claim is not None for claim in claims)
             assert len({claim["dispatch_id"] for claim in claims}) == 3
-            snapshot = await cluster.facilities.snapshot("cbd")
-            for site in snapshot:
+            snapshot = await cluster.facilities.view("cbd")
+            for site in snapshot.facilities:
                 holds = sum(h["facility_id"] == site.facility_id and
                             h["status"] == "RESERVED" for h in cluster.facilities.holds.values())
                 assert site.parking_available == BY_ID[site.facility_id].parking_available - holds
