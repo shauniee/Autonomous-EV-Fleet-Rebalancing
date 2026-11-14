@@ -28,6 +28,7 @@ from ev_fleet.contracts.dispatch import Dispatch
 from .clients import get_json
 from .strategies import ENERGY_AWARE
 from .store import RecommendationStore
+from .approved_intents import recommendation_for_revalidation
 from .request_queue import Checkpoint, RecommendationQueue
 from ev_fleet.common.persistence import SnapshotRepository
 from ev_fleet.contracts.recommendations import (
@@ -188,7 +189,8 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
 
     @app.post("/api/v1/crds/revalidate", response_model=CrdsRevalidationResult)
     async def revalidate_crds(body: CrdsRevalidationRequest):
-        record = Recommendation.model_validate(await store.get(str(body.recommendation_id)))
+        record = await recommendation_for_revalidation(
+            app.state.client, store, body, crds_config, clock)
         if (crds_config.mode != "ACTIVE" or record.crds is None
                 or not record.crds.approval_allowed or record.crds.decision != "MOVE"):
             raise HTTPException(409, "CRDS_APPROVAL_DISABLED")
@@ -202,7 +204,8 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
             plan = await plan_one(app.state.client, policy, crds_config, clock,
                 traffic_snapshot(), record.target.zone_id, vehicle_id=record.selected_vehicle_id,
                 facility_id=record.parking_facility_id, route_override=body.route,
-                exclude_dispatch_id=str(body.dispatch_id), **route_budget())
+                exclude_dispatch_id=str(body.dispatch_id),
+                planning_mode=record.crds.planning_mode, **route_budget())
         except asyncio.TimeoutError:
             raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
         except ValueError:
@@ -301,7 +304,7 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
             plan = await plan_one(app.state.client, config, crds_config, clock, traffic_snapshot(),
                 body.target_zone_id, vehicle_id=body.vehicle_id,
                 vehicle_ids=body.vehicle_ids if isinstance(body, QueuedRecommendationRequest) else None,
-                for_batch=True, **route_budget())
+                for_batch=True, planning_mode=body.planning_mode, **route_budget())
         except asyncio.TimeoutError:
             raise HTTPException(504, "CRDS_INPUT_TIMEOUT") from None
         except ValueError:
@@ -331,8 +334,13 @@ def create_app(settings=None, client=None, clock=None, strategy=ENERGY_AWARE, cr
             "created_at": now.isoformat(), "expires_at": expires.isoformat(),
             "crds": metadata.model_dump(mode="json"),
             "unfulfilled_reason": stop_reason if len(assignments) < body.quantity else None,
-            "explanation": f"CRDS recommends {len(assignments)} of {body.quantity} requested EVs.",
-            "assumptions": ["Marginal gains recalculated after each move", "Nearest eligible facility pool",
+            "explanation": (f"{len(assignments)} of {body.quantity} operator-requested relocations are feasible. "
+                "Coverage benefit is advisory; physical eligibility and capacity remain required."
+                if body.planning_mode == "FULFIL_REQUEST" else
+                f"CRDS recommends {len(assignments)} of {body.quantity} requested EVs."),
+            "assumptions": ["Marginal gains recalculated after each move",
+                ("Capacity-matched eligible facility pool" if body.planning_mode == "FULFIL_REQUEST"
+                 else "Nearest eligible facility pool"),
                 "Whole-plan gain evaluated directly; individual minima need not sum to it"]}
         return {"batch": result, "children": records}
 

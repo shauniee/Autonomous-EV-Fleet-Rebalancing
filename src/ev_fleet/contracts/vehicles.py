@@ -36,7 +36,7 @@ class TelemetryUpdate(Observation):
     active_dispatch_id: UUID | None = None
     distance_travelled_km: float | None = Field(default=None, ge=0)
     parked_facility_id: str | None = None
-    charging_state: Literal["NOT_CHARGING", "CHARGING", "COMPLETE"] = "NOT_CHARGING"
+    charging_state: Literal["NOT_CHARGING", "AWAITING_CONNECTION", "CHARGING", "COMPLETE"] = "NOT_CHARGING"
     charging_power_kw: float | None = Field(default=None, gt=0, le=1000)
     # Optional simulator-derived digital-twin measurements, not real sensors.
     speed_kph: float | None = Field(default=None, ge=0, le=250)

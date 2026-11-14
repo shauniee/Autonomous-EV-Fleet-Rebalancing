@@ -13,7 +13,7 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173. Vite proxies `/api/fleet`, `/api/demand`, `/api/rebalancing` and `/api/dispatch` to ports 8001–8004, rewriting the prefix to `/api/v1`. Override targets with `FLEET_URL`, `DEMAND_URL`, `REBALANCING_URL`, and `DISPATCH_URL` in the Vite process environment or `dashboard/.env.local`. No CORS backend changes are needed. Use a Node version supported by the locked Vite release (Node 22.12+ is suitable).
+Open http://127.0.0.1:5173. Vite proxies `/api/fleet`, `/api/demand`, `/api/rebalancing` and `/api/dispatch` to ports 8001â€“8004, rewriting the prefix to `/api/v1`. Override targets with `FLEET_URL`, `DEMAND_URL`, `REBALANCING_URL`, and `DISPATCH_URL` in the Vite process environment or `dashboard/.env.local`. No CORS backend changes are needed. Use a Node version supported by the locked Vite release (Node 22.12+ is suitable).
 
 ## Docker demonstration
 
@@ -86,8 +86,10 @@ npx.cmd playwright install chromium
 npm.cmd run test:e2e
 ```
 
-Playwright starts isolated real services on ports 18001–18004, a readiness server on 18005, Vite on 15173 and two moving EV processes. It refuses occupied ports and does not reuse an existing backend. Demand is deterministic/manual; no frontend simulation is substituted. Public tiles are stubbed in browser tests, while Leaflet and zone/vehicle markers run normally. Tests cover explicit approval through real relocation/arrival and tile/Demand outage rendering. Backend logs and screenshots are written to `dashboard/test-results/`; failed browser tests retain traces.
+Playwright starts isolated real services on ports 18001â€“18004, a readiness server on 18005, Vite on 15173 and two moving EV processes. It refuses occupied ports and does not reuse an existing backend. Demand is deterministic/manual; no frontend simulation is substituted. Public tiles are stubbed in browser tests, while Leaflet and zone/vehicle markers run normally. Tests cover explicit approval through real relocation/arrival and tile/Demand outage rendering. Backend logs and screenshots are written to `dashboard/test-results/`; failed browser tests retain traces.
 
 For an occasional real-map smoke check, set `$env:REAL_MAP = '1'` before running the browser suite, then remove that environment variable afterward. The journey then requires successful real tile responses. Keep the default stubbed mode for routine tests.
 
 Frontend unit/component tests cover semantic states, selection races, expiry, explanations, confirmation, ambiguous retry/reload, partial responses and backend lifecycle display. The existing Python regression suite is unchanged. See `operator-dashboard-verification.md` for observed results and runtime limitations.
+
+Reviewed CRDS plans can be selected for multi-plan approval. Recommendation requests prepare advisory plans; approval separately records durable dispatch jobs, starts at most four relocations globally by default, and automatically handles transient admission retries. Operator-requested quantity planning supports up to 50 EVs and displays any modeled coverage trade-off. Staff still connect and disconnect charging cables. See [paced bulk relocation](paced-bulk-relocation.md).

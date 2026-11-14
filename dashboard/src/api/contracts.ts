@@ -72,6 +72,17 @@ export interface ChargingAdvice {
   generated_at: string; trigger_soc_pct: number; min_arrival_reserve_pct: number;
   vehicles: ChargerAdvice[]; assumptions: string[];
 }
+export interface VehicleParking {
+  vehicle_id: string;
+  pending: boolean;
+  parking: {
+    facility_id: string; name: string; charging_allocated: boolean;
+    charging_session_id: string | null; charging_target_soc_pct: number;
+    cable_status: 'AWAITING_CONNECTION' | 'CONNECTED' | 'DISCONNECTED';
+    cable_connected_by?: string | null; cable_connected_at?: string | null;
+    cable_disconnected_by?: string | null; cable_disconnected_at?: string | null;
+  } | null;
+}
 export interface ChargingTask {
   task_id: string; vehicle_id: string;
   status: 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
@@ -96,7 +107,7 @@ export interface Vehicle {
   telemetry: { position: Position; soc_pct: number; observed_at: string;
     session_id: string; sequence: number;
     active_dispatch_id?: string | null; distance_travelled_km?: number | null;
-    parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'CHARGING' | 'COMPLETE';
+    parked_facility_id?: string | null; charging_state?: 'NOT_CHARGING' | 'AWAITING_CONNECTION' | 'CHARGING' | 'COMPLETE';
     charging_power_kw?: number | null;
     speed_kph?: number | null; heading_deg?: number | null;
     odometer_km?: number | null; battery_temp_c?: number | null;
@@ -135,6 +146,8 @@ export interface CrdsDecisionEvidence {
   vehicles: Record<string, CrdsVehicleDecision>;
 }
 export interface CrdsMetadata {
+  planning_mode?: 'OPTIMIZE_COVERAGE' | 'FULFIL_REQUEST';
+  coverage_tradeoff?: boolean;
   decision: 'MOVE' | 'HOLD' | 'DEFER'; reason_code: string; approval_allowed: boolean;
   worst_case_gain_vehicle_minutes: number | null; worst_case_future_id: string | null;
   shortage_changes_by_zone: Record<string, number>;
@@ -254,15 +267,21 @@ export interface BatchDispatchItem {
   approval_decision?: ApprovalDecision | null;
   recommendation_id: string; vehicle_id: string; facility_id: string;
   dispatch_id: string | null; state: string; error: string | null;
+  queue_status?: 'QUEUED' | 'WAITING' | 'ADMITTED' | 'REJECTED' | 'CANCELLED' | null;
+  attempts?: number; retry_at?: string | null;
 }
 export interface BatchDispatch {
   request_id: string; batch_recommendation_id: string; requested_count: number;
   recommended_count: number; items: BatchDispatchItem[];
-  status: 'APPROVED' | 'PARTIAL' | 'REJECTED' | 'UNKNOWN';
+  status: 'APPROVED' | 'PARTIAL' | 'REJECTED' | 'UNKNOWN' | 'QUEUED' | 'PROCESSING';
+  job_status?: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'EXPIRED' | null;
+  accepted_at?: string | null; expires_at?: string | null;
+  admitted_count?: number; completed_count?: number; queued_count?: number; in_flight_limit?: number;
 }
 
 
 export interface RecommendationDraft {
+  planning_mode?: 'OPTIMIZE_COVERAGE' | 'FULFIL_REQUEST';
   request_id: string;
   target_zone_id: string;
   quantity: number;

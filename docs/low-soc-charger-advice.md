@@ -46,6 +46,9 @@ that a charger is working. When data is stale, no new route should be approved.
 
 Manual ground-staff charging tasks remain a separate workflow. A charging task
 reserves the EV against new relocation but does not automatically move it.
-Actual charging to 80% after an approved CHARGE relocation remains simulated.
+After an approved CHARGE relocation, the EV waits for a named ground team to
+confirm **Cable connected** in Charging operations. Simulated charging runs to
+80%; the EV remains unavailable until staff confirm **Cable disconnected** and
+the simulator publishes fresh availability. See [Human charging handoff](charging-cable-handoff.md).
 The dashboard polls for advice while open. There are no push/mobile alerts,
 no unattended dispatcher and no new persistence database.

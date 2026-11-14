@@ -302,12 +302,13 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
+          # Durable command/event writes need burst CPU alongside checkpoint traffic.
           resources:
             requests:
-              cpu: 50m
+              cpu: 250m
               memory: 96Mi
             limits:
-              cpu: 500m
+              cpu: "1"
               memory: 256Mi
 ---
 apiVersion: apps/v1

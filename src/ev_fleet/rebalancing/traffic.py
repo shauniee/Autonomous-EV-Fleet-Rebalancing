@@ -243,9 +243,15 @@ def _xy(p):
 
 def _segment_distance(point, a, b):
     # Local Singapore tangent-plane approximation; metres-scale screening only.
-    x, y = _xy(point)
-    ax, ay = _xy(a)
-    bx, by = _xy(b)
+    return _projected_segment_distance(_xy(point), _xy(a), _xy(b))
+
+
+def _projected_segment_distance(
+    point: tuple[float, float], a: tuple[float, float], b: tuple[float, float],
+) -> float:
+    x, y = point
+    ax, ay = a
+    bx, by = b
     dx, dy = bx - ax, by - ay
     u = max(0, min(1, ((x-ax)*dx + (y-ay)*dy) / (dx*dx + dy*dy))) if dx*dx + dy*dy > 0 else 0
     return ((x - (ax + u*dx))**2 + (y - (ay + u*dy))**2)**.5
@@ -253,6 +259,56 @@ def _segment_distance(point, a, b):
 
 def _near_route(point, geometry, threshold_km=.12):
     return any(_segment_distance(point, a, b) <= threshold_km for a, b in zip(geometry, geometry[1:]))
+
+
+class _RouteMatcher:
+    """Prefilter nearby route segments, then apply the unchanged exact distance.
+
+    Full LTA feeds can contain thousands of endpoints near a detailed route.
+    Reprojecting and scanning that entire route per endpoint is quadratic.
+    This per-assessment index uses the same projected coordinates and retains
+    every segment, including broad segments via a bounded-memory fallback.
+    """
+
+    _CELL_KM = .25
+    _RADIUS_KM = .12
+    _MAX_ENTRIES = 100_000
+
+    def __init__(self, geometry: list[dict[str, float]]) -> None:
+        points = [_xy(point) for point in geometry]
+        self.segments = list(zip(points, points[1:]))
+        self.cells: dict[tuple[int, int], list[int]] = {}
+        self.fallback: list[int] = []
+        entries = 0
+        for index, (a, b) in enumerate(self.segments):
+            # Padding also guards rounding at an exact threshold/grid edge.
+            radius = self._RADIUS_KM + 1e-9
+            left = floor((min(a[0], b[0]) - radius) / self._CELL_KM)
+            right = floor((max(a[0], b[0]) + radius) / self._CELL_KM)
+            bottom = floor((min(a[1], b[1]) - radius) / self._CELL_KM)
+            top = floor((max(a[1], b[1]) + radius) / self._CELL_KM)
+            count = (right - left + 1) * (top - bottom + 1)
+            if entries + count > self._MAX_ENTRIES:
+                self.fallback.append(index)
+                continue
+            entries += count
+            for x in range(left, right + 1):
+                for y in range(bottom, top + 1):
+                    self.cells.setdefault((x, y), []).append(index)
+
+    def near(self, point: dict[str, float], threshold_km: float = .12) -> bool:
+        projected = _xy(point)
+        if threshold_km > self._RADIUS_KM:
+            return any(_projected_segment_distance(projected, a, b) <= threshold_km
+                       for a, b in self.segments)
+        tile = (floor(projected[0] / self._CELL_KM),
+                floor(projected[1] / self._CELL_KM))
+        for indices in (self.cells.get(tile, ()), self.fallback):
+            for index in indices:
+                a, b = self.segments[index]
+                if _projected_segment_distance(projected, a, b) <= threshold_km:
+                    return True
+        return False
 
 
 # Index speed-link ENDPOINTS, because the legacy matching rule checks whether
@@ -298,19 +354,20 @@ def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
         return {"status": "UNKNOWN", "blocked": False, "delay_factor": None,
                 "estimated_duration_seconds": None, "risk": None,
                 "matched_speed_segments": 0, "roadworks": 0, "incidents": 0}
+    matcher = _RouteMatcher(geometry)
     if traffic.get("source") == "SIMULATION":
         # Match BOTH endpoints of a validated route segment to the assessed
         # geometry. A nearby parallel street must not count as affected.
         affected = [e for e in traffic.get("simulated_events", [])
-                    if _near_route(e["start"], geometry, .025)
-                    and _near_route(e["end"], geometry, .025)]
+                    if matcher.near(e["start"], .025)
+                    and matcher.near(e["end"], .025)]
         simulated_blocked = any(e["kind"] == "ROAD_CLOSED" for e in affected)
         # Synthetic events are an overlay, not permission to ignore actual
         # fresh LTA roadblocks on the same corridor.
         live = traffic.get("live_observations") or {}
         live_closures = [row for row in live.get("incidents", [])
                          if row["type"] in ("ROAD BLOCK", "DIVERSION")
-                         and _near_route(row["position"], geometry, .12)]
+                         and matcher.near(row["position"], .12)]
         blocked = simulated_blocked or bool(live_closures)
         controlled = [e for e in affected if e["kind"] != "ROAD_CLOSED"]
         normal_speed = 40.0  # Explicit synthetic baseline, not measured LTA speed
@@ -330,14 +387,14 @@ def assess_traffic(geometry, distance_km, duration_seconds, traffic, when=None):
     speed_rows = traffic.get("speeds", [])
     candidates = _candidate_speed_rows(speed_rows, traffic.get("_speed_index"), geometry)
     matched = [row for row in candidates if
-               _near_route(row["start"], geometry, .10) or _near_route(row["end"], geometry, .10)]
+               matcher.near(row["start"], .10) or matcher.near(row["end"], .10)]
     road_names = {item["road"] for item in matched if item["road"]}
     # Roadworks dates are Singapore local calendar dates, not UTC dates.
     current = when.astimezone(timezone(timedelta(hours=8))).date().isoformat()
     roadworks = [w for w in traffic.get("roadworks", [])
                  if w["road"] in road_names and w["start_date"] <= current <= w["end_date"]]
     incidents = [i for i in traffic.get("incidents", [])
-                 if _near_route(i["position"], geometry, .12)]
+                 if matcher.near(i["position"], .12)]
     blocked = any(x["type"] in ("ROAD BLOCK", "DIVERSION") for x in incidents)
     # Speed observations cover only a subset of Singapore roads. Use the
     # unmodified routing ETA as baseline for uncovered stretches; never claim

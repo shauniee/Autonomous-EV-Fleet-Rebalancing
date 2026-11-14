@@ -713,3 +713,149 @@ def test_failed_route_plus_ineligible_vehicle_must_not_claim_no_eligible_moves(o
     assert evidence["assessment_reasons"] == ["ROUTING_NOT_CONFIGURED"]
     assert evidence["vehicles"]["healthy"]["outcome"] == "INCOMPLETE"
     assert evidence["vehicles"]["healthy-2"]["reason"] == "ROUTE_BELOW_OPERATIONAL_RESERVE"
+
+
+@pytest.mark.parametrize("refresh", ["fresh", "still_stale", "unavailable", "timeout"])
+def test_slow_facilities_read_refreshes_expired_small_snapshots(observations, clock, refresh):
+    """Large Facilities reads must not force a false stale-Fleet defer."""
+    from collections import Counter
+    from ev_fleet.rebalancing.crds_inputs import collect_inputs
+
+    reads = Counter()
+
+    async def respond(request):
+        path = request.url.path
+        reads[path] += 1
+        if path == "/api/v1/facilities":
+            clock.advance(6)
+        data = deepcopy(observations[path])
+        if path in ("/api/v1/vehicles", "/api/v1/dispatch-planning-state") and reads[path] > 1:
+            if refresh == "unavailable":
+                return httpx.Response(503)
+            if refresh == "timeout":
+                await asyncio.sleep(3)
+            if refresh == "fresh":
+                if path == "/api/v1/vehicles":
+                    # Use the newly observed fleet state, not just its timestamp.
+                    data.update(snapshot_at=clock.now().isoformat(), snapshot_version=2, vehicles=[])
+                else:
+                    data.update(observed_at=clock.now().isoformat(), revision=1)
+        return httpx.Response(200, json=data)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            return await collect_inputs(client, Settings(), "http://dispatch.test", clock, {},
+                                        timeout_seconds=8)
+
+    inputs = asyncio.run(scenario())
+    if refresh == "fresh":
+        assert "FLEET_SNAPSHOT_STALE" not in inputs.issues
+        assert "DISPATCH_SNAPSHOT_STALE" not in inputs.issues
+        assert inputs.fleet.snapshot_version == 2
+        assert inputs.fleet.vehicles == []
+        assert inputs.planning.revision == 1
+    else:
+        assert "FLEET_SNAPSHOT_STALE" in inputs.issues
+        assert "DISPATCH_SNAPSHOT_STALE" in inputs.issues
+    assert 2 <= reads["/api/v1/vehicles"] <= 3
+    assert 2 <= reads["/api/v1/dispatch-planning-state"] <= 3
+    assert reads["/api/v1/facilities"] == 1
+
+
+
+def test_snapshot_refresh_stays_inside_original_input_deadline(observations, clock):
+    from ev_fleet.rebalancing.crds_inputs import collect_inputs
+
+    refreshed = set()
+    cancelled = set()
+
+    async def respond(request):
+        path = request.url.path
+        if path == "/api/v1/facilities":
+            await asyncio.sleep(.02)
+        if path in refreshed:
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled.add(path)
+                raise
+        if path in ("/api/v1/vehicles", "/api/v1/dispatch-planning-state"):
+            refreshed.add(path)
+        return httpx.Response(200, json=observations[path])
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(asyncio.TimeoutError):
+                await collect_inputs(client, Settings(), "http://dispatch.test", clock, {},
+                                     timeout_seconds=.1)
+
+    clock.advance(6)
+    asyncio.run(scenario())
+    assert cancelled == {"/api/v1/vehicles", "/api/v1/dispatch-planning-state"}
+
+
+def test_refreshed_snapshots_drive_parking_and_relocation_exclusions(observations, clock):
+    from collections import Counter
+    from ev_fleet.rebalancing.crds_inputs import collect_inputs
+
+    reads = Counter()
+    site = BY_ID["mock-cbd-01"]
+    updated = deepcopy(observations["/api/v1/vehicles"])
+    parked, claimed = updated["vehicles"]
+    parked["telemetry"].update(parked_facility_id=site.facility_id,
+                               position=site.position.model_dump())
+    dispatch = dispatch_for(claimed, observations, clock)
+    claimed["active_claim"] = {
+        "dispatch_id": dispatch["dispatch_id"], "command_id": dispatch["command"]["command_id"],
+        "fleet_instance_id": updated["instance_id"], "vehicle_id": claimed["vehicle_id"],
+        "target_zone_id": "cbd", "target_position": dispatch["command"]["target_position"],
+        "origin": claimed["telemetry"]["position"], "acquired_at": clock.now().isoformat(),
+    }
+
+    async def respond(request):
+        path = request.url.path
+        reads[path] += 1
+        if path == "/api/v1/facilities":
+            clock.advance(6)
+        if path == "/api/v1/vehicles" and reads[path] > 1:
+            return httpx.Response(200, json=updated | {
+                "snapshot_at": clock.now().isoformat(), "snapshot_version": 2})
+        if path == "/api/v1/dispatch-planning-state" and reads[path] > 1:
+            return httpx.Response(200, json=observations[path] | {
+                "observed_at": clock.now().isoformat(), "revision": 1, "dispatches": [dispatch]})
+        if path == "/api/v1/vehicle-parking":
+            return httpx.Response(200, json={parked["vehicle_id"]: {
+                "vehicle_id": parked["vehicle_id"], "parking": {
+                    "facility_id": site.facility_id, "name": site.name, "zone_id": "cbd",
+                    "position": site.position.model_dump(), "source": "MOCK",
+                    "charging_allocated": False, "charging_power_kw": 50,
+                    "charging_target_soc_pct": 80,
+                }}})
+        return httpx.Response(200, json=observations[path])
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            return await collect_inputs(client, Settings(), "http://dispatch.test", clock, {})
+
+    inputs = asyncio.run(scenario())
+    assert reads["/api/v1/vehicle-parking"] == 1
+    assert inputs.vehicle_zones == {parked["vehicle_id"]: "cbd"}
+    assert inputs.available_by_zone["cbd"] == 1
+    assert inputs.excluded_vehicle_ids == [claimed["vehicle_id"]]
+    assert inputs.relocation_exclusions[0].reason == "RELOCATION_UNCONFIRMED"
+    assert inputs.issues == []
+
+
+def test_fulfil_request_respects_operator_shortlist_with_negative_coverage(observations, clock):
+    zones = observations["/api/v1/zones"]["zones"]
+    zones[0]["demand"]["desired_available_vehicles"] = 10
+    zones[1]["demand"]["desired_available_vehicles"] = 0
+    result, (children, metadata, _) = asyncio.run(plan(
+        observations, clock, batch=True, vehicle_ids=["healthy"], planning_mode="FULFIL_REQUEST"))
+    assert {vehicle.vehicle_id for vehicle in result.inputs.fleet.vehicles} == {"healthy", "healthy-2"}
+    assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy"]
+    assert metadata.planning_mode == "FULFIL_REQUEST"
+    assert metadata.coverage_tradeoff is True
+    assert metadata.worst_case_gain_vehicle_minutes < 0
+    assert metadata.approval_allowed is True
+    assert set(metadata.source_references["decision_evidence"]["vehicles"]) == {"healthy"}

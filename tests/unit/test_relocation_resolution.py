@@ -55,9 +55,9 @@ def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkey
                 expected_checkpoint_revision=0, checkpoint=idle, publish_telemetry=True))
             unstarted = stopped == "unstarted_after_charge"
             if unstarted:
-                # Seed the previously persisted idle state of an EV that finished charging.
+                # Seed an EV that finished charging and whose cable was disconnected.
                 physical = TelemetryUpdate.model_validate({
-                    **physical.model_dump(), "charging_state": "COMPLETE",
+                    **physical.model_dump(), "charging_state": "NOT_CHARGING",
                     "parked_facility_id": "origin-charger", "charging_power_kw": 7.4,
                 })
                 idle = idle.model_copy(update={"physical": physical, "completed_command_id": uuid4()})
@@ -98,8 +98,10 @@ def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkey
             if unstarted:
                 assert record.data["delivery_attempts"] == 0
                 recovery = (await cluster.client.get(path.removesuffix("/resolution") + "/recovery")).json()
-                assert not recovery["can_resume"]
-                assert recovery["blockers"][0]["detail"] == "CHECKPOINT_COMMAND_MISMATCH"
+                # After cable disconnection the idle EV can safely resume;
+                # the operator may still choose to end the undelivered move.
+                assert recovery["can_resume"]
+                assert not recovery["blockers"]
             request = {"request_id": str(uuid4()), "reason": "Recover the remaining fleet",
                        "expected_assessment_revision": assessment["assessment_revision"]}
             stale = await cluster.client.post(path, json=request | {"expected_assessment_revision": "stale"})
@@ -137,7 +139,7 @@ def test_stop_fences_owner_and_reconciles_after_lost_fleet_receipt(clock, monkey
                     request_id=uuid4(), session_id=lease.session_id, generation=1,
                     expected_checkpoint_revision=after.checkpoint_revision, checkpoint=moving))
             if unstarted:
-                assert after.checkpoint.physical.charging_state == "COMPLETE"
+                assert after.checkpoint.physical.charging_state == "NOT_CHARGING"
                 assert after.checkpoint.physical.parked_facility_id == "origin-charger"
                 assert (await fleet.get("ev-1"))["effective_availability"] == "UNAVAILABLE"
                 return

@@ -1,4 +1,7 @@
 const reasons: Readonly<Record<string, string>> = {
+  ALREADY_IN_TARGET_ZONE: 'This EV is already in the destination zone and does not count toward incoming relocations.',
+  DESTINATION_CAPACITY_LIMIT: 'The compatible destinations cannot accommodate additional EVs in this plan.',
+  OPERATOR_REQUESTED_QUANTITY: 'Selected to fulfil the dispatcher’s requested quantity; review its modeled coverage impact.',
   USEFUL_SHORTAGE_REDUCTION: 'Moving this EV makes it less likely that customers in the destination zone find no car available, even in the busiest demand pattern CRDS tested.',
   NO_ELIGIBLE_RELOCATIONS: 'No EV was free, charged enough, and able to reach a parking or charging space in this zone.',
   NO_USEFUL_MOVE: 'None of the possible moves would help customers enough to be worth the trip.',

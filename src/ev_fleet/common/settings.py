@@ -35,6 +35,9 @@ class DispatchSettings(Settings):
     ack_timeout_seconds: float = Field(default=15, gt=0)
     progress_timeout_seconds: float = Field(default=30, gt=0)
     reconcile_interval_seconds: float = Field(default=1, gt=0)
+    dispatch_in_flight_limit: int = Field(default=4, ge=1, le=50)
+    dispatch_admission_interval_seconds: float = Field(default=1, ge=1)
+    batch_authorization_seconds: float = Field(default=1800, gt=0, le=1800)
     arrival_tolerance_km: float = Field(default=.05, gt=0, le=1)
 
 

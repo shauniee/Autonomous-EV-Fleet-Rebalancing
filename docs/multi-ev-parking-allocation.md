@@ -1,7 +1,7 @@
 # Multi-EV relocation and simulated parking allocation
 
 For demand rebalancing, [CRDS](crds.md) is the default planner for requests
-of 1–20 EVs. It chooses a compatible destination per EV, verifies road
+of 1â€“20 EVs. It chooses a compatible destination per EV, verifies road
 evidence, and updates modeled supply and remaining facility capacity after
 each proposed move. The preview can contain fewer assignments than requested.
 Rebalancing and explicit charging both require human approval and fresh
@@ -25,7 +25,7 @@ This section describes `CRDS_MODE=DISABLED` rebalancing and the separate
    combinations while accounting for facility capacity and charger allocations.
    Unknown total parking capacity uses a neutral utility. Fresh overlapping
    traffic can replace the score with a [traffic cost](traffic-aware-routing.md).
-5. The preview contains separate EV–facility destinations, scores, SOC and
+5. The preview contains separate EVâ€“facility destinations, scores, SOC and
    distances, plus explicit unfulfilled count. No mutation happens on preview.
 6. Operator approval creates one child dispatch per proposed assignment,
    each with its own immutable identity. The Facilities Service atomically

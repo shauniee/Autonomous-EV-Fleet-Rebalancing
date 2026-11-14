@@ -27,11 +27,13 @@ def http_error(status, code):
 
 @asynccontextmanager
 async def idle_runner(clock, monkeypatch, charging_state="NOT_CHARGING",
-                      facilities=False):
+                      facilities=False, soc=None):
     parking = (completed_parking() if charging_state != "NOT_CHARGING" else
                {"vehicle_id": "ev-idle", "pending": False, "parking": None})
+    if charging_state == "AWAITING_CONNECTION":
+        parking["parking"]["cable_status"] = "AWAITING_CONNECTION"
     dispatch_response(monkeypatch, parking=parking)
-    store, _, _ = await idle_vehicle(clock, charging_state)
+    store, _, _ = await idle_vehicle(clock, charging_state, soc=soc)
     monkeypatch.setattr("ev_fleet.simulator.recovery.utcnow", clock.now)
     monkeypatch.setattr(
         "ev_fleet.simulator.recovery.time",

@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
-from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.common.record_persistence import RecordSnapshotRepository
 from ev_fleet.contracts.dispatch import BatchApprovalGroupRequest, queued_batch_approval_id
 from ev_fleet.contracts.recommendations import BatchRecommendation
 from ev_fleet.dispatch.app import create_app
@@ -29,7 +29,7 @@ def preview(clock, batch_id, vehicle):
 
 def test_group_http_blocks_all_approvals_on_overlapping_vehicles(clock, monkeypatch):
     snapshots = {}
-    monkeypatch.setattr(SnapshotRepository, "from_env", lambda name: MemorySnapshot(name, snapshots))
+    monkeypatch.setattr(RecordSnapshotRepository, "from_env", lambda name, records: MemorySnapshot(name, snapshots))
     first, second, third = uuid4(), uuid4(), uuid4()
     previews = {key: preview(clock, key, vehicle)
                 for key, vehicle in [(first, "ev-1"), (second, "ev-1"), (third, "ev-2")]}
@@ -41,7 +41,7 @@ def test_group_http_blocks_all_approvals_on_overlapping_vehicles(clock, monkeypa
         pytest.fail("conflicting group must not attempt any approval")
 
     monkeypatch.setattr(DispatchService, "load_batch_preview", load)
-    monkeypatch.setattr(DispatchService, "approve_batch", unexpected_approval)
+    monkeypatch.setattr(DispatchService, "enqueue_batch", unexpected_approval)
     path = "/api/v1/batch-approval-groups"
     group_id = str(uuid4())
     ids = list(map(str, [first, second, third]))
@@ -91,7 +91,7 @@ def test_group_resumes_only_unfinished_plans_and_retries_unknown_with_same_ids(c
             return {"status": "APPROVED"}
 
         monkeypatch.setattr(DispatchService, "load_batch_preview", load)
-        monkeypatch.setattr(DispatchService, "approve_batch", approve)
+        monkeypatch.setattr(DispatchService, "enqueue_batch", approve)
         first_service = DispatchService(None, clock=clock, repository=MemorySnapshot("dispatch", snapshots))
         await first_service.start()
         await first_service.batch_groups.submit(body)
@@ -115,4 +115,64 @@ def test_group_resumes_only_unfinished_plans_and_retries_unknown_with_same_ids(c
         assert calls == [(batch_id, queued_batch_approval_id(batch_id))
                          for batch_id in (first, second, second, third, second)]
 
+    asyncio.run(scenario())
+
+
+def test_group_submit_retry_commits_intent_after_cancelled_first_save(clock, monkeypatch):
+    async def scenario():
+        repository = MemorySnapshot("dispatch", {})
+        service = DispatchService(None, clock=clock, repository=repository)
+        await service.start()
+        body = BatchApprovalGroupRequest(group_id=uuid4(), batch_recommendation_ids=[uuid4()])
+        save = repository.save
+
+        async def cancelled(payload, **kwargs):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(repository, "save", cancelled)
+        with pytest.raises(asyncio.CancelledError):
+            await service.batch_groups.submit(body)
+        with pytest.raises(HTTPException) as absent:
+            service.batch_groups.detail(body.group_id)
+        assert absent.value.status_code == 404
+        monkeypatch.setattr(repository, "save", save)
+        accepted = await service.batch_groups.submit(body)
+        assert service.batch_groups.detail(body.group_id) == accepted
+    asyncio.run(scenario())
+
+
+def test_group_overlap_includes_previously_queued_unclaimed_plan(clock, monkeypatch):
+    from ev_fleet.contracts.dispatch import BatchDispatch
+
+    async def scenario():
+        service = DispatchService(None, clock=clock, repository=MemorySnapshot("dispatch", {}))
+        await service.start()
+        first, second = uuid4(), uuid4()
+        body = BatchApprovalGroupRequest(group_id=uuid4(), batch_recommendation_ids=[first, second])
+        prior = preview(clock, first, "shared-ev")
+        existing = BatchDispatch(
+            request_id=queued_batch_approval_id(first), batch_recommendation_id=first,
+            requested_count=1, recommended_count=1, status="QUEUED", job_status="QUEUED",
+            items=[{"recommendation_id": prior.assignments[0].recommendation_id,
+                    "vehicle_id": "shared-ev", "facility_id": "cbd-parking", "state": "QUEUED",
+                    "queue_status": "QUEUED", "approval_status": "UNKNOWN"}])
+
+        def approval(plan):
+            return existing if plan.batch_recommendation_id == first else None
+
+        async def load(batch_id, *, queued):
+            return preview(clock, batch_id, "shared-ev")
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("overlapping unclaimed jobs must fail group preflight")
+
+        monkeypatch.setattr(service.batch_groups, "approval", approval)
+        monkeypatch.setattr(service, "load_batch_preview", load)
+        monkeypatch.setattr(service, "enqueue_batch", forbidden)
+        await service.batch_groups.submit(body)
+        await service.batch_groups.process(service.batch_groups.records[str(body.group_id)])
+        result = service.batch_groups.detail(body.group_id)
+        assert result.status == "CONFLICT"
+        assert result.conflicts[0].vehicle_id == "shared-ev"
+        assert result.conflicts[0].batch_recommendation_ids == [first, second]
     asyncio.run(scenario())

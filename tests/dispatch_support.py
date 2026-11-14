@@ -23,7 +23,8 @@ class Cluster:
         self.clock = clock
         self.recommendation_ttl = recommendation_ttl
         self.config = DispatchSettings(fleet_url="http://fleet.test", demand_url="http://demand.test",
-                                       rebalancing_url="http://rebalancing.test", facilities_url="http://facilities.test")
+                                       rebalancing_url="http://rebalancing.test", facilities_url="http://facilities.test",
+                                       dispatch_in_flight_limit=50)
         self.fleet = FleetStore(self.config, clock)
         self.demand = DemandStore(clock)
         self.facilities = FacilitiesStore()

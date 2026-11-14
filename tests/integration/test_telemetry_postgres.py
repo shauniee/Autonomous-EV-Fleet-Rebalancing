@@ -14,6 +14,9 @@ from ev_fleet.fleet.store import FleetStore
 def test_history_is_durable_atomic_and_unique_between_sessions(telemetry_database_url):
     async def scenario():
         database = telemetry_database_url
+        bootstrap = SnapshotRepository("fleet", database)
+        await bootstrap.start()
+        await bootstrap.close()
         vehicle_id = f"ev-test-{uuid4().hex}"
         store = FleetStore(repository=SnapshotRepository("fleet", database))
         await store.start()
@@ -53,4 +56,46 @@ def test_history_is_durable_atomic_and_unique_between_sessions(telemetry_databas
             assert history["samples"][0]["telemetry"]["gps_quality"] == "SIMULATED"
         finally:
             await restarted.close()
+    asyncio.run(scenario())
+
+
+def test_dispatch_idle_polls_preserve_postgres_journal_without_rewriting_it(telemetry_database_url):
+    from ev_fleet.contracts.dispatch import DispatchApproval
+    from ev_fleet.dispatch.service import DispatchService
+
+    async def scenario():
+        namespace = "dispatch-idle-test-" + uuid4().hex
+        repository = SnapshotRepository(namespace, telemetry_database_url)
+        service = DispatchService(None, repository=repository)
+        await service.start()
+        try:
+            for index in range(200):
+                record = await service.store.begin(DispatchApproval(
+                    request_id=uuid4(), recommendation_id=uuid4()))
+                record.data.update(
+                    vehicle_id=f"history-{index}", state="SUCCEEDED",
+                    revalidated_metrics={"history_fixture": "x" * 2500},
+                )
+            await service.persist()
+            async with repository.pool.acquire() as connection:
+                revision = await connection.fetchval(
+                    "SELECT revision FROM service_snapshots WHERE namespace=$1", namespace)
+            results = await asyncio.gather(*(
+                service.commands(f"idle-{index}") for index in range(100)))
+            assert all(result == {"commands": []} for result in results)
+            async with repository.pool.acquire() as connection:
+                after = await connection.fetchval(
+                    "SELECT revision FROM service_snapshots WHERE namespace=$1", namespace)
+            assert after == revision
+        finally:
+            await service.close()
+        restored = DispatchService(None, repository=SnapshotRepository(
+            namespace, telemetry_database_url))
+        await restored.start()
+        try:
+            assert len(restored.store.records) == 200
+            assert all(r.data["state"] == "SUCCEEDED"
+                       for r in restored.store.records.values())
+        finally:
+            await restored.close()
     asyncio.run(scenario())

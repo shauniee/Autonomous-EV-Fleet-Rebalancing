@@ -61,7 +61,7 @@ is displayed with its timestamp, not silently presented as a prediction.
 |---|---|
 | POST /recommendations | target_zone_id; 201 recommendation |
 | GET /recommendations/{id} | live recommendation; 404 if missing or expired |
-| POST /batch-recommendations | target_zone_id, quantity (1–20), optional purpose and vehicle/facility selection; 201 batch preview |
+| POST /batch-recommendations | target_zone_id, quantity (1â€“20), optional purpose and vehicle/facility selection; 201 batch preview |
 | GET /batch-recommendations/{batch_id} | live batch preview; 404 if missing or expired |
 | POST /recommendation-requests | request_id, target_zone_id, quantity and optional vehicle selection; 202 queue receipt |
 | GET /recommendation-requests | Queue availability, mode and paginated requests, with optional status filter |
@@ -110,3 +110,5 @@ exposes internal GET /dispatch-planning-state and POST /route-estimates for CRDS
 EVs poll GET /vehicles/{id}/commands and POST acknowledgements/events under the
 dispatch ID. These operations are now implemented by the separate Dispatch Service
 and Fleet claim API. See [dispatch and relocation contracts and lifecycle](dispatch-relocation.md).
+
+Queued recommendation requests also accept `planning_mode` (`OPTIMIZE_COVERAGE` by default, or `FULFIL_REQUEST`) and up to 50 EVs. Multi-plan approval queues each reviewed batch through the durable Dispatch admission queue; accepted approval and completed relocation are separate outcomes. See [paced bulk relocation](paced-bulk-relocation.md).

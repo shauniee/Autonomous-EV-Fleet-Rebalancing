@@ -51,7 +51,7 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
     planned = []
 
     async def plan_one(*args, **kwargs):
-        planned.append((args[5], kwargs["vehicle_ids"]))
+        planned.append((args[5], kwargs["vehicle_ids"], kwargs["planning_mode"]))
         started.set()
         await release.wait()
 
@@ -66,7 +66,8 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
     monkeypatch.setattr(app, "plan_batch", plan_batch)
     settings = CrdsSettings(request_queue_capacity=2, request_queue_max_wait_seconds=10)
     route = "/api/v1/recommendation-requests"
-    first = {"request_id": str(uuid4()), "target_zone_id": "cbd", "quantity": 2, "vehicle_ids": ["ev-2", "ev-1"]}
+    first = {"request_id": str(uuid4()), "target_zone_id": "cbd", "quantity": 2, "vehicle_ids": ["ev-2", "ev-1"],
+             "planning_mode": "FULFIL_REQUEST"}
     second = {"request_id": str(uuid4()), "target_zone_id": "punggol", "quantity": 1}
     with TestClient(app.create_app(clock=clock, crds_settings=settings)) as client:
         try:
@@ -114,7 +115,7 @@ def test_queue_api_idempotency_capacity_and_restart(clock, monkeypatch):
         assert history["batch"] is None
         assert history["decision"] == "HOLD"
         assert history["vehicle_reasons"] == {"ev-2": "VEHICLE_MISSING"}
-    assert planned == [("cbd", ["ev-1", "ev-2"])]
+    assert planned == [("cbd", ["ev-1", "ev-2"], "FULFIL_REQUEST")]
 
 
 def test_checkpoint_resumes_publication_without_replanning(clock):
@@ -226,3 +227,15 @@ def test_queued_approval_refusal_is_durable_and_retry_keeps_original_reason(cloc
         assert calls == 1
 
     asyncio.run(scenario())
+
+
+def test_queue_accepts_fifty_selected_evs_and_preserves_planning_mode():
+    request = QueuedRecommendationRequest(request_id=uuid4(), target_zone_id="cbd",
+        quantity=50, vehicle_ids=[f"ev-{index}" for index in range(50)],
+        planning_mode="FULFIL_REQUEST")
+    assert request.quantity == 50
+    assert request.vehicle_ids is not None
+    assert len(request.vehicle_ids) == 50
+    assert request.planning_mode == "FULFIL_REQUEST"
+    with pytest.raises(ValueError):
+        QueuedRecommendationRequest.model_validate({**request.model_dump(), "quantity": 51})

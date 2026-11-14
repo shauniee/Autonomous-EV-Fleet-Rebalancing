@@ -32,13 +32,14 @@ def create_app(settings=None, client=None, clock=None, background=True):
             app.state.persistence = service.repository
             await service.start()
             worker = asyncio.create_task(service.reconcile_loop()) if background else None
+            queue_worker = asyncio.create_task(service.queue_loop()) if background else None
             group_worker = (asyncio.create_task(service.batch_groups.run())
                             if background and service.repository.enabled else None)
             app.state.batch_group_worker = group_worker
             try:
                 yield
             finally:
-                workers = [task for task in (worker, group_worker) if task is not None]
+                workers = [task for task in (worker, queue_worker, group_worker) if task is not None]
                 for task in workers:
                     task.cancel()
                 if workers:
@@ -86,7 +87,11 @@ def create_app(settings=None, client=None, clock=None, background=True):
 
     @app.post("/api/v1/batches", status_code=202, response_model=BatchDispatch)
     async def approve_batch(body: BatchApproval):
-        return await app.state.service.approve_batch(body)
+        return await app.state.service.enqueue_batch(body)
+
+    @app.get("/api/v1/batches/{request_id}/items/{recommendation_id}/intent")
+    async def approved_batch_intent(request_id: UUID, recommendation_id: UUID):
+        return await app.state.service.batch_intent(request_id, recommendation_id)
 
     @app.get("/api/v1/batches", response_model=BatchApprovalLookup)
     async def lookup_batches(request_id: Annotated[list[UUID], Query(min_length=1, max_length=31)]):

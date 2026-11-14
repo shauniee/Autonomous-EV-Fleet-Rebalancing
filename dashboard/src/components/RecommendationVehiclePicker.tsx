@@ -10,7 +10,7 @@ export function RecommendationVehiclePicker({ vehicles, selected, onChange, disa
   const ids = [...new Set([...selected, ...fleet.keys()])].sort();
   return <fieldset className="recommendation-vehicle-picker" disabled={disabled}>
     <legend>Specific EVs</legend>
-    <p id="specific-ev-help" className="muted">Choose up to 20 EVs. CRDS may recommend fewer.</p>
+    <p id="specific-ev-help" className="muted">Choose up to 50 EVs. CRDS may recommend fewer.</p>
     {!ids.length && <p className="muted">Waiting for fleet data.</p>}
     <div className="recommendation-vehicle-options">
       {ids.map(id => {
@@ -20,7 +20,7 @@ export function RecommendationVehiclePicker({ vehicles, selected, onChange, disa
           : vehicle.effective_availability === 'AVAILABLE' ? 'Available' : 'Unavailable';
         return <label key={id}>
           <input type="checkbox" checked={checked} aria-describedby="specific-ev-help"
-            disabled={!checked && (status !== 'Available' || selected.length >= 20)}
+            disabled={!checked && (status !== 'Available' || selected.length >= 50)}
             onChange={event => onChange(event.target.checked ? [...selected, id].sort()
               : selected.filter(value => value !== id))}/>
           <span><strong>{id}</strong><span className="muted"> {status}

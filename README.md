@@ -28,6 +28,18 @@ The system also showcases distributed-system concerns: independent services,
 freshness and partial failures, eligibility and battery checks, competing claims,
 idempotent approvals, and recovery from uncertain outcomes.
 
+In the operator dashboard's facility-based Rebalance workflow, the requested EV
+count is an operational instruction: plan that many incoming relocations when
+feasible. Coverage scores rank the plan and warn about trade-offs; low benefit
+alone does not prevent explicit human approval. EVs already assigned to the
+destination do not fill the incoming count. The planner matches compatible
+parking/charging capacity across eligible destinations before checking road
+routes. Fresh data, routes, battery reserve, ownership, capacity and expiry still
+apply, so physical or evidence constraints can leave a request partly unfilled.
+Advisory API requests retain useful-only optimisation unless they explicitly set
+`planning_mode=FULFIL_REQUEST`; saved recommendations retain this intent during
+approval revalidation.
+
 Recommendations are **not** dispatch commands. A high-demand zone does not
 guarantee a move: the decision may legitimately be **MOVE** (useful, eligible
 relocation), **HOLD** (no useful verified move), or **DEFER** (assessment incomplete).
@@ -144,11 +156,12 @@ the map must not invent vehicle motion when telemetry is missing.
    **Approve**. Approval is deliberately separate from recommendation.
 4. Follow **Relocations** and the **Map**: observe command acknowledgement,
    reported movement, arrival, battery use, and eventual claim release.
-   If approval status is uncertain, **check/retry the original request ID**;
-   do not create a second approval blindly.
+   Accepted bulk jobs show queued, admitted and arrived counts and continue
+   automatically after refresh. For an ambiguous approval submission,
+   **check/retry the original request ID**; do not create a second approval blindly.
 
 A relocation can only succeed when an available EV, compatible destination,
-adequate battery reserve, useful fleet-wide benefit and **verified OneMap road
+adequate battery reserve, the applicable planning policy and **verified OneMap road
 route** all exist. Manual demand can become stale (default: **300 seconds**);
 refresh it if a subsequent recommendation reports expired observations.
 Traffic scenarios, rentals, and charging may temporarily make vehicles
@@ -334,10 +347,17 @@ Fleet telemetry + zone demand
 A recommendation is advisory. It does not reserve or move a vehicle. Only an
 explicit Dispatch approval can begin relocation.
 
-The operator can request one EV or a batch of up to 20. CRDS recomputes fleet-wide
-benefit after each proposed move, respects parking and charging capacity, and
-may return fewer EVs than requested. Approval revalidates current eligibility,
-facility capacity and modeled benefit.
+The operator can request one EV or a batch of up to 50. Batch recommendations rank
+vehicle-to-facility pairs, respect simulated parking capacity and may return partial
+fulfilment. A bulk approval durably queues the reviewed assignments for up to
+30 minutes. Dispatch starts at most four relocations at once by default and retries
+transient failures automatically. Every admission revalidates current vehicle,
+route, battery, parking and configured policy checks. See
+[human-approved bulk jobs](docs/paced-bulk-relocation.md).
+For coverage optimization, CRDS recalculates fleet-wide benefit after each move.
+Operator-requested quantity planning instead fulfils physically feasible demand,
+with modeled coverage trade-offs shown for human review. Recommendation requests
+can be queued, and several reviewed plans can be approved together.
 
 ### Demand and shortages
 
@@ -390,8 +410,15 @@ ineligible for relocation even if its ordinary telemetry says `AVAILABLE`. Retur
 use fresh telemetry received after rental start and remain visible after service
 restart.
 
-Charging alerts and ground-staff tasks are operator-reviewed simulation features.
-They do not connect to a real charging provider or physically charge a vehicle.
+Charging visits require a human handoff: an approved simulated EV arrives and
+waits for ground staff to confirm **Cable connected**. It then charges to its
+target (80% by default), stays unavailable while plugged in, and returns to
+service only after **Cable disconnected** and fresh EV telemetry. Named-team
+confirmations are recorded with the occupied charging allocation. The separate
+manual assistance task log remains available. These features do not connect to
+a real charging provider or physically charge a vehicle.
+
+See [Human charging handoff](docs/charging-cable-handoff.md) for the demonstration.
 
 See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md).
 

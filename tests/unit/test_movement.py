@@ -77,14 +77,14 @@ def test_charging_requires_allocated_position_and_stops_at_target():
     position = {"latitude": 1.283, "longitude": 103.8513}
     parking = {"facility_id": "lta-charging-demo", "position": position,
                "charging_allocated": True, "charging_power_kw": 12,
-               "charging_target_soc_pct": 80}
+               "charging_target_soc_pct": 80, "cable_status": "CONNECTED"}
     moving = Movement(position, 70)
     assert moving.park(parking)
     assert moving.telemetry()["availability"] == "UNAVAILABLE"
     moving.charge(1800)  # 6 kWh into a 60 kWh battery.
     assert moving.soc_pct == pytest.approx(80)
     assert moving.charging_state == "COMPLETE"
-    assert moving.telemetry()["availability"] == "AVAILABLE"
+    assert moving.telemetry()["availability"] == "UNAVAILABLE"
     moving.charge(1800)
     assert moving.soc_pct == pytest.approx(80)
     elsewhere = Movement({"latitude": 1.35, "longitude": 103.85}, 70)

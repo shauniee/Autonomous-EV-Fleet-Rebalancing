@@ -12,6 +12,9 @@ from .facilities import FacilitiesSnapshot, Facility
 from .vehicles import FleetSnapshot
 
 
+CrdsPlanningMode = Literal["OPTIMIZE_COVERAGE", "FULFIL_REQUEST"]
+
+
 class CrdsParameters(Model):
     horizon_minutes: int = Field(default=30, gt=0)
     slot_minutes: int = Field(default=1, gt=0)
@@ -84,6 +87,12 @@ class CrdsEvaluation(Model):
 
 
 class CrdsPlanningSnapshot(Model):
+    """Live journey observations with a commitment/health revision.
+
+    Delivery, ACK and routine progress update journey observations without
+    changing revision once that journey holds its claim and destination.
+    Claims, journey health, arrival, parking and recovery changes invalidate approvals.
+    """
     instance_id: UUID
     revision: int = Field(ge=0)
     observed_at: AwareDatetime
@@ -145,6 +154,8 @@ class CrdsRouteEstimate(Model):
 
 
 class CrdsMetadata(Model):
+    planning_mode: CrdsPlanningMode = "OPTIMIZE_COVERAGE"
+    coverage_tradeoff: bool = False
     decision: Literal["MOVE", "HOLD", "DEFER"]
     reason_code: str
     approval_allowed: bool = False
@@ -163,6 +174,7 @@ class CrdsMetadata(Model):
 
 
 class CrdsRevalidationRequest(Model):
+    approved_batch_request_id: UUID | None = None
     recommendation_id: UUID
     dispatch_id: UUID
     route: RoadRoute

@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import type { ChargerAdvice, ChargingAdvice, ChargingTask, Fleet, Vehicle } from '../api/contracts';
 import { api, message } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
+import { ChargingHandoffs } from './ChargingHandoffs';
 import type { Notify } from './Notifications';
 
-export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, adviceFresh, canPrepare, onPrepare, notify }: {
-  vehicles: Vehicle[]; onUpdated: () => void;
+export function ChargingOperations({ vehicles, fleetFresh, onUpdated, advice, adviceError, adviceFresh, canPrepare, onPrepare, notify }: {
+  vehicles: Vehicle[]; fleetFresh: boolean; onUpdated: () => void;
   advice?: ChargingAdvice; adviceError?: string; adviceFresh: boolean;
   notify: Notify; canPrepare: boolean; onPrepare: (item: ChargerAdvice) => void;
 }) {
@@ -61,6 +62,7 @@ export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, a
       <span className="muted">{low.length} low-SOC EVs · {active.length} open tasks</span></div>
     <p className="muted">Simulated threshold: 30% low, below 20% critical. Creating a task reserves the EV from new rentals and relocations; it does not start a real charger.</p>
     {tasks.error && <p className="warning" role="status">Charging task service unavailable. Do not assume an empty queue.</p>}
+    <ChargingHandoffs vehicles={vehicles} fleetFresh={fleetFresh} onUpdated={onUpdated} notify={notify} />
     <h3>Charger advice · 25% SOC or lower</h3>
     <p className="muted">Reachable chargers ranked by the backend using battery, estimated travel energy, a default 20% arrival reserve, and simulated capacity.</p>
     {(!adviceFresh || adviceError) && <p className="warning" role="status">Charging advice unavailable or stale. Do not assume there are no low-battery vehicles.</p>}
@@ -84,11 +86,12 @@ export function ChargingOperations({ vehicles, onUpdated, advice, adviceError, a
         <td>{v.telemetry!.soc_pct.toFixed(1)}%</td>
         <td><strong>{v.telemetry!.soc_pct < 20 ? 'CRITICAL' : 'LOW'}</strong></td>
         <td>{v.active_charging_task ? v.active_charging_task.status
-          : <button disabled={busy || !!tasks.error || !taskDataValid || !!v.active_rental || !!v.active_claim || v.effective_relocation_state !== 'IDLE'}
+          : <button disabled={busy || !fleetFresh || (!!v.telemetry?.charging_state && v.telemetry.charging_state !== 'NOT_CHARGING') || !!tasks.error || !taskDataValid || !!v.active_rental || !!v.active_claim || v.effective_relocation_state !== 'IDLE'}
               onClick={() => void create(v)}>Create charging task</button>}</td>
       </tr>)}</tbody></table></div>
     {!low.length && <p className="muted">No fresh online EV telemetry below the alert threshold.</p>}
-    <h3>Ground-staff task log</h3>
+    <h3>Manual assistance task log</h3>
+    <p className="muted">Use this separate queue for EVs needing manual assistance. Cable confirmations for an EV already at a charger belong in the handoff above.</p>
     <label>Assigned staff or team <input value={staff} maxLength={64} onChange={e => setStaff(e.target.value)} /></label>
     <div className="table-scroll"><table><thead><tr><th>EV</th><th>Task status</th><th>Staff</th><th>Action</th></tr></thead>
       <tbody>{active.map(t => <tr key={t.task_id}><td>{t.vehicle_id}</td><td>{t.status}</td>

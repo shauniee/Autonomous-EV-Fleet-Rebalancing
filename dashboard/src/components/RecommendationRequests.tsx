@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import type { BatchApproval, BatchApprovalLookup, RecommendationRequest, RecommendationRequestPage } from '../api/contracts';
 import { usePolling, type Resource } from '../hooks/usePolling';
-import { approvalErrorMessage, batchApprovalLabels } from './approvalMessages';
+import { approvalErrorMessage, batchInProgress, batchProgressLabel } from './approvalMessages';
 import { BatchConfirmation, BatchPanel, BatchResult } from './BatchPanel';
 import {
   BulkApprovalProgress, BulkApprovalReview, findVehicleConflicts, groupPlanLabels, isActiveGroupPlan, maxBulkPlans,
@@ -30,8 +30,8 @@ export function requestApprovalStatus(row: RecommendationRequest, now: number,
   const eligible = row.status === 'READY' && remaining > 0 && !outcome && !refusal && !unresolved;
   const ready = eligible && !!outcomes;
   const running = (eligible && !outcomes) || row.status === 'QUEUED' || row.status === 'EVALUATING' ||
-    (!refusal && (outcome ? outcome.status === 'UNKNOWN' : !!unresolved));
-  const status = refusal ? 'Approval rejected' : outcome ? batchApprovalLabels[outcome.status]
+    (!refusal && (outcome ? (batchInProgress(outcome) || outcome.status === 'UNKNOWN') : !!unresolved));
+  const status = refusal ? 'Approval rejected' : outcome ? batchProgressLabel(outcome)
     : unresolved ? 'Awaiting approval confirmation' : eligible && !outcomes ? 'Checking approval status' : row.status === 'READY' && !remaining
       ? labels.EXPIRED : labels[row.status];
   return { ready, running, status, outcome, refusal, unresolved, remaining };
@@ -86,12 +86,12 @@ export function RecommendationRequests(props: Props) {
     const outcome = individualOutcome && individualOutcome.status !== 'UNKNOWN'
       ? individualOutcome : groupPlan?.approval ?? individualOutcome;
     const status = waiting ? 'Bulk approval receipt unconfirmed' : groupActive ? groupPlanLabels[groupPlan.status]
-      : outcome ? batchApprovalLabels[outcome.status]
+      : outcome ? batchProgressLabel(outcome)
         : base.refusal || !groupPlan ? base.status : groupPlanLabels[groupPlan.status];
     return {
       ...base, row, outcome, groupPlan, status, groupManaged: waiting || !!groupActive,
       ready: base.ready && !groupPlan && !waiting,
-      running: groupActive || waiting || (outcome ? outcome.status === 'UNKNOWN' : base.running),
+      running: groupActive || waiting || (outcome ? (batchInProgress(outcome) || outcome.status === 'UNKNOWN') : base.running),
     };
   });
   const readyIds = new Set(states.filter(state => state.ready).map(state => state.row.request_id));
@@ -208,7 +208,7 @@ export function RecommendationRequests(props: Props) {
                     groupPlan?.status === 'REJECTED' ? 'Request again' : 'Revise request'}
                 </button>}
                 {ready && <button className="primary" disabled={!canApprove} onClick={() => setConfirming(row.request_id)}>Review approval</button>}
-                {!groupManaged && (outcome?.status === 'UNKNOWN' || !!unresolved) && !refusal && retry && <>
+                {!groupManaged && (!outcome?.job_status && (outcome?.status === 'UNKNOWN' || !!unresolved)) && !refusal && retry && <>
                   <button disabled={approvalBusy} onClick={() => onCheck(retry.request_id)}>Check approval status</button>
                   <button disabled={approvalBusy} onClick={() => onApprove(retry)}>Retry same approval</button>
                 </>}

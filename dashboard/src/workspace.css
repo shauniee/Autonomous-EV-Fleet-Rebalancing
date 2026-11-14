@@ -434,6 +434,34 @@
 .badge.low { background: var(--success-bg); color: var(--success-text); }
 .badge.moderate { background: var(--warning-bg); color: var(--warning-text); }
 
+
+/* Human handoff: a continuous process and compact operational rows. */
+.charging-handoffs { margin-block: 24px 32px; }
+.charging-handoffs > p { max-width: 72ch; }
+.charging-handoff-flow { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 16px 0 20px; padding: 0 0 16px; list-style-position: inside; border-bottom: 1px solid var(--border); }
+.charging-handoff-flow li { color: var(--text); font-weight: 600; }
+.charging-team { display: grid; gap: 6px; max-width: 26rem; font-weight: 600; }
+.charging-team input { width: 100%; min-height: 44px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; caret-color: var(--accent); }
+.charging-team input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.charging-handoff-note { margin-top: 8px; font-size: 13px; }
+.charging-visit { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(200px, 1.3fr) minmax(200px, 1fr); gap: 20px; padding-block: 20px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.charging-visit > div { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; }
+.charging-visit-identity strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.charging-visit-state > strong { color: var(--accent); }
+.charging-visit-action button { min-height: 44px; white-space: normal; text-align: start; }
+.charging-visit small { font-size: 13px; }
+.charging-visit-action p { margin: 6px 0 0; }
+.charging-confirmation { color: var(--success-text); }
+@media (max-width: 1100px) {
+  .charging-visit { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
+  .charging-visit-action { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .charging-visit { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .charging-handoff-flow { display: grid; gap: 8px; }
+  .charging-visit-action, .charging-visit-action button { width: 100%; }
+}
+
 .request-queue { min-width: 0; }
 .request-queue-group { margin-block: 1.25rem; }
 .request-queue-group h3 { margin-bottom: .375rem; }

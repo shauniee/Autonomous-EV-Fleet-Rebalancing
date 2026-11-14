@@ -21,6 +21,7 @@ class DispatchRecord:
     release_outcome: str | None = None
     recovery: dict | None = None
     resolution: dict | None = None
+    approval_intent: dict | None = None
 
     def view(self):
         result = deepcopy(self.data)

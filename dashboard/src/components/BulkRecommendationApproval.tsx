@@ -151,7 +151,9 @@ export function BulkApprovalReview({ rows, unavailable, conflicts, now, canSubmi
   useEffect(() => { dialog.current?.showModal(); }, []);
   return <dialog className="bulk-approval-review" ref={dialog} aria-labelledby="bulk-review-title" onCancel={onClose}>
     <h2 id="bulk-review-title">Approve selected plans</h2>
-    <p>Dispatch will check and approve each plan in the order shown. Some plans or EVs may be declined.</p>
+    <p>Dispatch accepts the selected plans in the order shown. The same EVs and destinations are authorized for up to 30 minutes; relocations start gradually after fresh safety and capacity checks. Some plans or EVs may be declined.</p>
+    {rows.some(row => row.planning_mode === 'FULFIL_REQUEST') && <p className="warning" role="status">These plans prioritize the requested quantities. Coverage changes are advisory and may increase shortages in other zones; review the evidence before approving.</p>}
+    <p className="muted">For charging assignments, staff confirm cable connection after arrival and disconnection after charging before the EV returns to service.</p>
     {conflicts.length > 0 && <p className="warning" role="status">Remove overlapping plans so each EV goes to one zone.</p>}
     {unavailable.size > 0 && <p className="warning" role="status">Remove expired or unavailable plans before confirming.</p>}
     {!canSubmit && !conflicts.length && !unavailable.size && rows.length > 0 &&

@@ -47,7 +47,7 @@ def availability_reason(vehicle: VehicleState) -> str:
         return "OFFLINE"
     if vehicle.active_rental:
         return "RENTED"
-    if vehicle.active_charging_task or vehicle.telemetry.charging_state == "CHARGING":
+    if vehicle.active_charging_task or vehicle.telemetry.charging_state != "NOT_CHARGING":
         return "CHARGING"
     if (vehicle.active_claim or vehicle.telemetry.active_dispatch_id
             or vehicle.telemetry.relocation_state != "IDLE"):
@@ -86,7 +86,7 @@ def ranked_decisions(result: CrdsEvaluation, minimum_gain: float,
     winner = result.ranked_candidates[0]
     for gain in result.ranked_candidates:
         if gain.vehicle_id == result.selected_vehicle_id:
-            outcome, reason = "RECOMMENDED", "USEFUL_SHORTAGE_REDUCTION"
+            outcome, reason = "RECOMMENDED", result.reason_code
         elif gain.worst_case_gain_vehicle_minutes <= minimum_gain:
             outcome, reason = "NOT_SELECTED", "NO_USEFUL_MOVE"
         elif gain.worst_case_gain_vehicle_minutes < winner.worst_case_gain_vehicle_minutes:

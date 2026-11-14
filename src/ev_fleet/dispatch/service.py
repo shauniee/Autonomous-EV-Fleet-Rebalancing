@@ -9,13 +9,13 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings, Settings, CrdsSettings
 from ev_fleet.contracts.crds import CrdsRevalidationRequest, CrdsRevalidationResult
 from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, VehicleClaim
-from ev_fleet.contracts.vehicles import FleetSnapshot, VehicleState
+from ev_fleet.contracts.vehicles import DashboardFleetSnapshot, FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
 from ev_fleet.contracts.dispatch import ApprovalDecision, DispatchApproval, queued_batch_approval_id
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
-from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.common.record_persistence import RecordSnapshotRepository
 from ev_fleet.rebalancing.policy import assess
 from .approval_evidence import (ApprovalCheckError, approval_evidence, record_approval,
                                 revalidation_rejection)
@@ -31,6 +31,7 @@ from ev_fleet.common.travel import distance_km
 
 
 TERMINAL = {"SUCCEEDED", "REJECTED", "FAILED"}
+DELIVERY_STATES = {"PENDING", "SENT", "ACKNOWLEDGED", "IN_PROGRESS"}
 
 
 class DispatchService:
@@ -41,16 +42,19 @@ class DispatchService:
         self.store = DispatchStore(self.clock)
         self.batch_lock = asyncio.Lock()
         self.persist_lock = asyncio.Lock()
+        self._pending_observations: dict[str, DispatchRecord] = {}
         self.admission_lock = asyncio.Lock()
+        self.queue_lock = asyncio.Lock()
         self.crds_settings = CrdsSettings.from_env()
         self.batches = {}
         self.batch_recommendations = {}
         self.batch_approval_refusals = {}
-        self.repository = repository or SnapshotRepository.from_env("dispatch")
+        self.repository = repository or RecordSnapshotRepository.from_env("dispatch", "records")
         self.persisted_snapshot = None
         self.batch_groups = BatchApprovalGroups(self)
         self.routing = RoutingSettings.from_env()
         self.planning_instance_id = uuid4()
+        # Commitment/health epoch, separate from routine delivery and motion.
         self.planning_revision = 0
         self.route_estimates = {}
         self.recovery = RecoveryCoordinator(self)
@@ -78,7 +82,7 @@ class DispatchService:
                 ack=item["ack"], events=item["events"],
                 event_sequence=item["event_sequence"],
                 release_outcome=item["release_outcome"], recovery=item.get("recovery"),
-                resolution=item.get("resolution"))
+                resolution=item.get("resolution"), approval_intent=item.get("approval_intent"))
             if record.data["delivery_attempts"]:
                 record.sent_tick = tick
             if record.claimed and record.data["state"] not in TERMINAL:
@@ -87,6 +91,9 @@ class DispatchService:
                 record.progress_tick = tick
             self.store.records[key] = record
         self.persisted_snapshot = deepcopy(payload)
+        if isinstance(self.repository, RecordSnapshotRepository) and self.repository.requires_promotion:
+            # The first vehicle request must not pay the legacy backfill cost.
+            await self.persist()
 
     async def close(self):
         # Do not retry an ambiguous write during shutdown: reconciliation must
@@ -111,11 +118,51 @@ class DispatchService:
             await self.save_snapshot(current)
             return True
 
+    async def persist_read(self, records: list[DispatchRecord]) -> None:
+        """Coalesce observations while every caller retains its commit barrier."""
+        own = {record.data["dispatch_id"]: record for record in records}
+        if own:
+            self._pending_observations.update(own)
+            await asyncio.sleep(.002)
+        async with self.persist_lock:
+            if not getattr(self.repository, "ready", True):
+                raise RuntimeError("PERSISTENCE_STATE_UNCERTAIN")
+            observed = dict(own)
+            if own:
+                observed = {**self._pending_observations, **own}
+                self._pending_observations.clear()
+            baseline = self.persisted_snapshot
+            committed = (baseline or {}).get("records", {})
+            changed = {record.data["dispatch_id"]: self.durable_record(record)
+                       for record in observed.values()
+                       if self.durable_record(record) != committed.get(record.data["dispatch_id"])}
+            if not changed:
+                return
+            if (baseline is not None and self.planning_revision == baseline.get("planning_revision", 0)
+                    and changed.keys() <= committed.keys()):
+                # Ordinary observations change known rows only. Reuse committed
+                # metadata so another admission's uncommitted indexes cannot leak.
+                frozen = {**baseline, "records": {**committed, **deepcopy(changed)}}
+                await self._commit_snapshot(frozen, set(changed))
+            else:
+                # New records and commitment/health epochs need a coherent frame.
+                await self.save_snapshot(self.current_snapshot())
+
     async def save_snapshot(self, snapshot):
         if not getattr(self.repository, "ready", True):
             raise RuntimeError("PERSISTENCE_STATE_UNCERTAIN")
-        frozen = deepcopy(snapshot)
-        await self.repository.save(frozen)
+        previous = (self.persisted_snapshot or {}).get("records", {})
+        changed = {key for key, item in snapshot["records"].items() if item != previous.get(key)}
+        frozen = deepcopy({key: value for key, value in snapshot.items() if key != "records"})
+        frozen["records"] = {key: deepcopy(item) if key in changed else previous[key]
+                             for key, item in snapshot["records"].items()}
+        await self._commit_snapshot(frozen, changed)
+
+    async def _commit_snapshot(self, frozen, changed):
+        if isinstance(self.repository, RecordSnapshotRepository):
+            await self.repository.save(frozen, changed_keys=changed)
+        else:
+            await self.repository.save(frozen)
         self.persisted_snapshot = frozen
 
     def current_snapshot(self):
@@ -144,13 +191,26 @@ class DispatchService:
             "release_outcome": record.release_outcome,
             "recovery": record.recovery,
             "resolution": record.resolution,
+            "approval_intent": record.approval_intent,
         }
 
     def record_checkpoint(self, record):
         return deepcopy(self.durable_record(record))
 
     def transition(self, record, state, reason=None):
-        if (record.data["state"], record.data["failure_reason"]) != (state, reason):
+        previous = (record.data["state"], record.data["failure_reason"])
+        if previous == (state, reason):
+            return
+        # Delivery/ACK/first movement report the same already-admitted journey.
+        # They do not acquire capacity or change its committed destination.
+        same_commitment = (
+            record.claimed and record.data["claim_held"] is True
+            and record.data["command"] is not None and not record.release_outcome
+            and not stop_pending(record)
+            and previous[0] in DELIVERY_STATES and state in DELIVERY_STATES
+            and previous[1] is None and reason is None
+        )
+        if previous != (state, reason) and not same_commitment:
             self.planning_revision += 1
         record.data.update(state=state, failure_reason=reason, updated_at=self.clock.now().isoformat())
 
@@ -208,8 +268,12 @@ class DispatchService:
              "duration_seconds": duration})
 
     async def prepare(self, record):
-        recommendation = await request_json(self.client, "GET",
-            f"{self.settings.rebalancing_url}/api/v1/recommendations/{record.data['recommendation_id']}", model=Recommendation)
+        if record.approval_intent:
+            from .batch_jobs import approved_recommendation
+            recommendation = approved_recommendation(self, record)
+        else:
+            recommendation = await request_json(self.client, "GET",
+                f"{self.settings.rebalancing_url}/api/v1/recommendations/{record.data['recommendation_id']}", model=Recommendation)
         if str(recommendation.recommendation_id) != record.data["recommendation_id"]:
             raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
         record_approval(record, "UNKNOWN", "APPROVAL_IN_PROGRESS", ApprovalDecision(
@@ -248,6 +312,18 @@ class DispatchService:
         vehicle = next((v for v in fleet.vehicles if v.vehicle_id == recommendation.selected_vehicle_id), None)
         if vehicle is None:
             raise HTTPException(409, "VEHICLE_NOT_FOUND")
+        if record.approval_intent:
+            from .batch_jobs import check_runtime
+            check_runtime(vehicle, self.clock.now())
+            if (vehicle.effective_availability != "AVAILABLE" and not vehicle.active_claim
+                    and not vehicle.active_rental and not vehicle.active_charging_task):
+                diagnostics = await request_json(self.client, "GET",
+                    f"{self.settings.fleet_url}/api/v1/dashboard/vehicles", model=DashboardFleetSnapshot)
+                observed = next((item for item in diagnostics.vehicles
+                                 if item.vehicle_id == vehicle.vehicle_id), None)
+                if diagnostics.instance_id != fleet.instance_id or observed is None:
+                    raise HTTPException(503, "DEPENDENCY_IDENTITY_MISMATCH")
+                check_runtime(observed, self.clock.now())
         policy = Settings(**recommendation.policy_settings)
         parking = None
         destination = target.position
@@ -344,7 +420,9 @@ class DispatchService:
                 body = CrdsRevalidationRequest(recommendation_id=recommendation.recommendation_id,
                     dispatch_id=record.data["dispatch_id"], route=route,
                     expected_planning_instance_id=self.planning_instance_id,
-                    expected_planning_revision=revision)
+                    expected_planning_revision=revision,
+                    approved_batch_request_id=(record.approval_intent["batch_request_id"]
+                                               if record.approval_intent else None))
                 try:
                     revalidated = await request_json(self.client, "POST",
                         f"{self.settings.rebalancing_url}/api/v1/crds/revalidate",
@@ -397,7 +475,14 @@ class DispatchService:
     async def acquire(self, record):
         # Applies to initial admission AND exact-request reconciliation retries.
         # Persistence failure prevents any subsequent remote resource mutation.
+        from .batch_jobs import authorization_expired, reconcile_expired
+        if authorization_expired(self, record):
+            await reconcile_expired(self, record)
+            return
         await self.persist()
+        if authorization_expired(self, record):
+            await reconcile_expired(self, record)
+            return
         if record.parking_request and record.data["parking_status"] != "RESERVED":
             hold = await request_json(self.client, "POST",
                 f"{self.settings.facilities_url}/api/v1/facilities/{record.data['parking_facility_id']}/holds",
@@ -408,7 +493,13 @@ class DispatchService:
                 raise HTTPException(503, "PARKING_HOLD_IDENTITY_MISMATCH")
             record.data["parking_status"] = hold.status
             self.planning_revision += 1
+        if authorization_expired(self, record):
+            await reconcile_expired(self, record)
+            return
         receipt = await request_json(self.client, "PUT", self.claim_url(record), record.claim_request, VehicleClaim)
+        await self.accept_claim(record, receipt)
+
+    async def accept_claim(self, record, receipt):
         self.check_receipt(record, receipt)
         record.claimed = True
         metrics = record.data.get("revalidated_metrics") or {}
@@ -525,6 +616,12 @@ class DispatchService:
             async with record.lock:
                 if record.claimed or record.data["state"] in TERMINAL:
                     return record.view()
+                if record.approval_intent:
+                    # Only the paced job worker may advance queued children.
+                    return record.view()
+                from .batch_jobs import active_count, reserves_slot
+                if not reserves_slot(record) and active_count(self) >= self.settings.dispatch_in_flight_limit:
+                    raise HTTPException(503, "ADMISSION_BUSY_RETRY_SAME_REQUEST")
                 try:
                     if not record.claim_request:
                         await self.prepare(record)
@@ -571,6 +668,9 @@ class DispatchService:
         if record.data["state"] in TERMINAL:
             await self.sync_parking(record)
             return
+        if record.approval_intent and not record.claimed:
+            # Pending and ambiguous queue work belongs to the paced worker.
+            return
         if not record.claimed:
             try:
                 if not record.claim_request:
@@ -605,11 +705,16 @@ class DispatchService:
             if record.data["state"] == "UNKNOWN" and not record.data["acknowledged_at"] and not record.release_outcome:
                 self.transition(record, "SENT" if record.sent_tick is not None else "PENDING")
             if telemetry and str(telemetry.active_dispatch_id) == record.data["dispatch_id"]:
-                record.data["last_contact_at"] = telemetry.observed_at.isoformat()
+                contact = telemetry.observed_at.isoformat()
+                if record.data["last_contact_at"] != contact:
+                    record.data["updated_at"] = self.clock.now().isoformat()
+                record.data["last_contact_at"] = contact
                 if (telemetry.distance_travelled_km is not None
                         and telemetry.distance_travelled_km > record.data["distance_travelled_km"]):
+                    # Progress remains observable and durable, but does not
+                    # change the admitted journey's commitment/lifecycle epoch.
                     record.data["distance_travelled_km"] = telemetry.distance_travelled_km
-                    self.planning_revision += 1
+                    record.data["updated_at"] = self.clock.now().isoformat()
                 state = telemetry.relocation_state
                 if state == "ARRIVED":
                     record.release_outcome = "ARRIVED"
@@ -654,13 +759,17 @@ class DispatchService:
         async with record.lock:
             await self.refresh(record)
             result = record.view()
-        await self.persist_if_changed()
+        await self.persist_read([record])
         return result
 
     async def commands(self, vehicle_id):
+        observed = []
         try:
             for record in list(self.store.records.values()):
                 if record.data["vehicle_id"] != vehicle_id:
+                    continue
+                observed.append(record)
+                if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
                     continue
                 async with record.lock:
                     await self.refresh(record)
@@ -675,7 +784,7 @@ class DispatchService:
                     return {"commands": [record.view()["command"]]}
             return {"commands": []}
         finally:
-            await self.persist_if_changed()
+            await self.persist_read(observed)
 
     def check_command(self, record, body):
         if stop_pending(record):
@@ -694,22 +803,22 @@ class DispatchService:
             if record.ack:
                 if record.ack != payload:
                     raise HTTPException(409, "ACK_CONFLICT")
-                return record.view()
-            if record.data["state"] in TERMINAL:
-                raise HTTPException(409, "DISPATCH_TERMINAL")
-            if not body.accepted and record.data["state"] in ("IN_PROGRESS", "ARRIVAL_PENDING"):
-                raise HTTPException(409, "COMMAND_ALREADY_STARTED")
-            record.ack = payload
-            if body.accepted:
-                record.data["acknowledged_at"] = self.clock.now().isoformat()
-                record.progress_tick = self.clock.monotonic()
-                if record.data["state"] not in ("IN_PROGRESS", "ARRIVAL_PENDING"):
-                    self.transition(record, "ACKNOWLEDGED")
             else:
-                record.release_outcome = "REJECTED"
-                await self.refresh(record)
+                if record.data["state"] in TERMINAL:
+                    raise HTTPException(409, "DISPATCH_TERMINAL")
+                if not body.accepted and record.data["state"] in ("IN_PROGRESS", "ARRIVAL_PENDING"):
+                    raise HTTPException(409, "COMMAND_ALREADY_STARTED")
+                record.ack = payload
+                if body.accepted:
+                    record.data["acknowledged_at"] = self.clock.now().isoformat()
+                    record.progress_tick = self.clock.monotonic()
+                    if record.data["state"] not in ("IN_PROGRESS", "ARRIVAL_PENDING"):
+                        self.transition(record, "ACKNOWLEDGED")
+                else:
+                    record.release_outcome = "REJECTED"
+                    await self.refresh(record)
             result = record.view()
-        await self.persist()
+        await self.persist_read([record])
         return result
 
     async def event(self, dispatch_id, body, *, simulator_generation=None, simulator_session_id=None):
@@ -719,39 +828,39 @@ class DispatchService:
             await self.recovery.guard(record, simulator_generation, simulator_session_id)
             payload = body.model_dump(mode="json")
             previous = record.events.get(body.sequence)
-            if previous == payload:
-                return record.view()
-            if body.sequence <= record.event_sequence:
-                raise HTTPException(409, "EVENT_SEQUENCE_CONFLICT")
-            if record.data["state"] in TERMINAL:
-                raise HTTPException(409, "DISPATCH_TERMINAL")
-            age = (self.clock.now() - body.observed_at).total_seconds()
-            if age < -5 or age >= self.settings.stale_seconds:
-                raise HTTPException(422, "EVENT_TIME_INVALID")
-            if body.distance_travelled_km < record.data["distance_travelled_km"]:
-                raise HTTPException(409, "DISTANCE_REGRESSION")
-            if record.release_outcome and body.kind == "PROGRESS":
-                raise HTTPException(409, "LIFECYCLE_REGRESSION")
-            if record.ack and not record.ack["accepted"]:
-                raise HTTPException(409, "COMMAND_REJECTED")
-            record.events[body.sequence] = payload
-            record.event_sequence = body.sequence
-            if body.distance_travelled_km != record.data["distance_travelled_km"]:
+            if previous != payload:
+                if body.sequence <= record.event_sequence:
+                    raise HTTPException(409, "EVENT_SEQUENCE_CONFLICT")
+                if record.data["state"] in TERMINAL:
+                    raise HTTPException(409, "DISPATCH_TERMINAL")
+                age = (self.clock.now() - body.observed_at).total_seconds()
+                if age < -5 or age >= self.settings.stale_seconds:
+                    raise HTTPException(422, "EVENT_TIME_INVALID")
+                if body.distance_travelled_km < record.data["distance_travelled_km"]:
+                    raise HTTPException(409, "DISTANCE_REGRESSION")
+                if record.release_outcome and body.kind == "PROGRESS":
+                    raise HTTPException(409, "LIFECYCLE_REGRESSION")
+                if record.ack and not record.ack["accepted"]:
+                    raise HTTPException(409, "COMMAND_REJECTED")
+                record.events[body.sequence] = payload
+                record.event_sequence = body.sequence
+                # Ordinary progress must not invalidate every concurrent approval.
+                # Arrival/failure still advances the epoch through transition().
                 record.data["distance_travelled_km"] = body.distance_travelled_km
-                self.planning_revision += 1
-            record.data["last_contact_at"] = body.observed_at.isoformat()
-            record.progress_tick = self.clock.monotonic()
-            if body.kind == "FAILED":
-                self.transition(record, "FAILED", body.reason or "EV_EXECUTION_FAILED")
-            elif body.kind == "ARRIVED":
-                record.release_outcome = "ARRIVED"
-                self.transition(record, "ARRIVAL_PENDING")
-                await self.refresh(record)
-            else:
-                record.data["acknowledged_at"] = record.data["acknowledged_at"] or self.clock.now().isoformat()
-                self.transition(record, "IN_PROGRESS")
+                record.data["last_contact_at"] = body.observed_at.isoformat()
+                record.data["updated_at"] = self.clock.now().isoformat()
+                record.progress_tick = self.clock.monotonic()
+                if body.kind == "FAILED":
+                    self.transition(record, "FAILED", body.reason or "EV_EXECUTION_FAILED")
+                elif body.kind == "ARRIVED":
+                    record.release_outcome = "ARRIVED"
+                    self.transition(record, "ARRIVAL_PENDING")
+                    await self.refresh(record)
+                else:
+                    record.data["acknowledged_at"] = record.data["acknowledged_at"] or self.clock.now().isoformat()
+                    self.transition(record, "IN_PROGRESS")
             result = record.view()
-        await self.persist()
+        await self.persist_read([record])
         return result
 
     @staticmethod
@@ -786,16 +895,60 @@ class DispatchService:
                 if record.data["state"] not in TERMINAL:
                     record_approval(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
                     self.transition(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
+                if record.approval_intent:
+                    record.approval_intent.update(queue_status="CANCELLED", retry_at=None)
                 await self.persist()
                 return self.approval_view(request_id)
 
-    def batch_view(self, data):
+    async def enqueue_batch(self, body):
+        from .batch_jobs import enqueue_batch
+        try:
+            return await enqueue_batch(self, body)
+        except HTTPException as exc:
+            key = str(body.request_id)
+            queued = body.request_id == queued_batch_approval_id(body.batch_recommendation_id)
+            if queued and exc.status_code in (404, 409, 422):
+                async with self.batch_lock:
+                    if key not in self.batches and key not in self.batch_approval_refusals:
+                        cutoff = self.clock.now() - timedelta(days=7)
+                        recent = [(saved_id, refusal) for saved_id, refusal in self.batch_approval_refusals.items()
+                                  if refusal["recorded_at"] > cutoff]
+                        self.batch_approval_refusals = dict(recent[-499:])
+                        self.batch_approval_refusals[key] = {
+                            "request_id": key, "batch_recommendation_id": str(body.batch_recommendation_id),
+                            "reason_code": str(exc.detail), "status_code": exc.status_code,
+                            "recorded_at": self.clock.now(),
+                        }
+                        await self.persist()
+            raise
+
+    async def queue_once(self):
+        from .batch_jobs import queue_once
+        return await queue_once(self)
+
+    async def batch_intent(self, request_id, recommendation_id):
+        from .batch_jobs import batch_intent
+        return batch_intent(self, request_id, recommendation_id)
+
+    async def queue_loop(self):
+        while True:
+            try:
+                await self.queue_once()
+            except Exception:
+                logging.exception("batch admission failed")
+            await asyncio.sleep(.25)
+
+    def batch_view(self, data, snapshot=None):
         items = []
+        requests = self.store.requests if snapshot is None else snapshot["requests"]
+        records = self.store.records if snapshot is None else {}
         for stored in data["items"]:
             item = dict(stored)
-            key = item.get("dispatch_id") or self.store.requests.get(
+            key = item.get("dispatch_id") or requests.get(
                 str(uuid5(UUID(data["request_id"]), item["recommendation_id"])))
-            child = self.store.records.get(key)
+            if snapshot is not None and key in snapshot["records"]:
+                records[key] = DispatchRecord(**snapshot["records"][key])
+            child = records.get(key)
             if child:
                 item.update(dispatch_id=key, state=child.data["state"], error=child.data["failure_reason"])
                 item["approval_status"] = self.approval_status(child)
@@ -807,7 +960,11 @@ class DispatchService:
         approved = sum(i["approval_status"] == "APPROVED" for i in items)
         status = ("UNKNOWN" if unknown else "APPROVED" if approved == len(items)
                   else "PARTIAL" if approved else "REJECTED")
-        return {**data, "items": items, "status": status}
+        result = {**data, "items": items, "status": status}
+        if data.get("accepted_at"):
+            from .batch_jobs import job_view
+            result = job_view(self, result, records)
+        return result
 
     async def close_batch_item(self, request_id: UUID, recommendation_id: UUID):
         async with self.batch_lock:
@@ -904,17 +1061,26 @@ class DispatchService:
 
     def lookup_batch_approvals(self, request_ids: list[UUID]):
         keys = dict.fromkeys(map(str, request_ids))
-        refusals = (self.persisted_snapshot or {}).get("batch_approval_refusals", {})
+        if not getattr(self.repository, "ready", True):
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
+        snapshot = self.persisted_snapshot or {}
+        batches = snapshot.get("batches", {})
+        refusals = snapshot.get("batch_approval_refusals", {})
         return {
-            "batches": [self.batch_view(self.batches[key]) for key in keys if key in self.batches],
+            "batches": [self.batch_view(batches[key], snapshot) for key in keys if key in batches],
             "refusals": [refusals[key] for key in keys if key in refusals],
         }
 
     async def get_batch(self, request_id):
-        data = self.batches.get(str(request_id))
-        if data is None:
-            raise HTTPException(404, "BATCH_NOT_FOUND")
-        return self.batch_view(data)
+        # Observation waits for a current commit but never advances queue work.
+        async with self.persist_lock:
+            if not getattr(self.repository, "ready", True):
+                raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
+            snapshot = self.persisted_snapshot or {}
+            data = snapshot.get("batches", {}).get(str(request_id))
+            if data is None:
+                raise HTTPException(404, "BATCH_NOT_FOUND")
+            return self.batch_view(data, snapshot)
 
     async def reconcile_once(self):
         changed = False
@@ -928,6 +1094,9 @@ class DispatchService:
                 if record.recovery and not (record.resolution and record.resolution["status"] == "ENDED"):
                     await self.recovery.advance(record)
                 if record.data["state"] in TERMINAL and record.data["parking_status"] != "RESERVED":
+                    continue
+                if (record.approval_intent and not record.claimed
+                        and record.data["state"] not in TERMINAL):
                     continue
                 async with record.lock:
                     if record.recovery and record.recovery["status"] == "REQUESTED":

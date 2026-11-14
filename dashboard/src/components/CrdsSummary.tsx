@@ -32,6 +32,10 @@ function decisionEvidence(result: CrdsMetadata) {
   return evidence?.version === 1 ? evidence : undefined;
 }
 
+export function CoverageTradeoffWarning() {
+  return <p className="warning" role="status">Some planned moves do not improve modeled fleet-wide coverage and may increase shortages in other zones. Approve only if this destination's requested quantity takes priority.</p>;
+}
+
 function headline(result: CrdsMetadata, vehicles: [string, CrdsVehicleDecision][],
   target: string | undefined, vehicle: string | null | undefined, batch: boolean) {
   const horizon = result.parameters.horizon_minutes;
@@ -62,6 +66,7 @@ function headline(result: CrdsMetadata, vehicles: [string, CrdsVehicleDecision][
 export function CrdsSummary({ result, batchStop, target, vehicle }: {
   result: CrdsMetadata; batchStop?: string | null; target?: string; vehicle?: string | null;
 }) {
+  const fulfilRequest = result.planning_mode === 'FULFIL_REQUEST';
   const evidence = decisionEvidence(result);
   const vehicles = Object.entries(evidence?.vehicles ?? {});
   const excluded = vehicles.map(([, row]) => row).filter(row => row.outcome === 'EXCLUDED');
@@ -74,22 +79,26 @@ export function CrdsSummary({ result, batchStop, target, vehicle }: {
     ? [...assessment, singleBlocker] : assessment.filter(reason => reason !== 'PARTIAL_ROUTE_COVERAGE');
   const stopMessages = [...new Set(batchReasons
     .filter(reason => !assessment.includes(reason) && !messages.includes(reason)).map(reason => crdsMessage(reason)))];
-  const label = result.decision === 'MOVE' ? 'Recommended'
+  const label = result.decision === 'MOVE' ? fulfilRequest ? 'Requested relocations planned' : 'Recommended'
     : result.decision === 'HOLD' ? 'No move recommended' : 'Assessment unavailable';
   const { horizon_minutes: horizon, minimum_gain_vehicle_minutes: minimum } = result.parameters;
 
   return <section aria-label="Fleet-wide availability assessment">
     <strong>{label}</strong>
     <p className="recommendation-reason" role={result.decision === 'DEFER' ? 'status' : undefined}>
-      {headline(result, vehicles, target, vehicle, batchStop !== undefined)
+      {result.decision === 'MOVE' && fulfilRequest
+        ? 'Feasible moves are planned to fulfil your requested quantity. Coverage impact is advisory; each vehicle still requires dispatcher approval and fresh safety checks.'
+        : headline(result, vehicles, target, vehicle, batchStop !== undefined)
         ?? [...new Set(messages.map(code => crdsMessage(code)))].join(' ')}
     </p>
+    {result.decision === 'MOVE' && fulfilRequest && result.coverage_tradeoff && <CoverageTradeoffWarning/>}
     {partialRoutes && <p className="warning" role="status">{crdsMessage('PARTIAL_ROUTE_COVERAGE')}</p>}
     {result.decision !== 'DEFER' && stopMessages.length > 0 &&
       <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">
-      <div><dt>Extra EV availability</dt><dd>{result.worst_case_gain_vehicle_minutes == null ? 'Unknown'
-        : minutesText(result.worst_case_gain_vehicle_minutes)}</dd></div>
+      <div><dt>{fulfilRequest ? 'Minimum modeled coverage change' : 'Extra EV availability'}</dt><dd>{result.worst_case_gain_vehicle_minutes == null ? 'Unknown'
+        : fulfilRequest ? number(result.worst_case_gain_vehicle_minutes, ' vehicle-minutes')
+          : minutesText(result.worst_case_gain_vehicle_minutes)}</dd></div>
       <div><dt>Arrival estimate</dt><dd>{number(result.arrival_minutes_min)}–{number(result.arrival_minutes_max)} min</dd></div>
     </dl>}
     {excluded.length > 0 && <p>{excluded.length} {excluded.length === 1 ? 'EV' : 'EVs'} could not be considered: {exclusionSummary(excluded.map(row => row.reason))}. Open Evidence for details.</p>}
@@ -100,8 +109,8 @@ export function CrdsSummary({ result, batchStop, target, vehicle }: {
         <li><strong>Purpose.</strong> CRDS moves idle EVs to where customers are expected to need them over the next {horizon} minutes, so fewer customers find no car.</li>
         <li><strong>Safety checks first.</strong> An EV is only considered if it is free (not rented, charging, or on another job), online with recent updates, able to reach the destination on a real road route with enough battery to spare, and there is a parking or charging space waiting for it.</li>
         <li><strong>Pick the most helpful EV.</strong> CRDS tries {result.scenario_count} possible demand patterns and judges each move by the least favourable one, so it never relies on optimistic demand. Taking an EV away from a zone that also needs it counts against the move.</li>
-        <li><strong>Only move when it is worth it.</strong> A move must add more than {minutesText(minimum)} of EV availability. Otherwise CRDS recommends waiting.</li>
-        <li><strong>You stay in control.</strong> Nothing moves until an operator approves, and Dispatch checks the route, battery and benefit again at approval.</li>
+        <li>{fulfilRequest ? <><strong>Fulfil the requested quantity.</strong> Feasible relocations can be planned even when they reduce fleet coverage. Review the coverage change and any trade-offs before approving.</> : <><strong>Only move when it is worth it.</strong> A move must add more than {minutesText(minimum)} of EV availability. Otherwise CRDS recommends waiting.</>}</li>
+        <li><strong>You stay in control.</strong> Nothing moves until an operator approves, and Dispatch checks the route, battery, capacity and applicable coverage policy again before each start.</li>
       </ol>
     </details>
   </section>;
@@ -158,7 +167,7 @@ export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; o
     {sites > 0 && <p>CRDS excluded {sites} {sites === 1 ? 'site' : 'sites'} while destination reservations are unconfirmed.</p>}
     {result.decision !== 'DEFER' && <details>
       <summary>Technical details</summary>
-      <p className="muted">CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes and recommends moves only above {number(result.parameters.minimum_gain_vehicle_minutes, ' vehicle-minutes')} of worst-case shortage reduction.
+      <p className="muted">CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes. {result.planning_mode === 'FULFIL_REQUEST' ? 'Coverage changes are advisory when fulfilling the requested quantity.' : <>Moves must exceed {number(result.parameters.minimum_gain_vehicle_minutes, ' vehicle-minutes')} of worst-case shortage reduction.</>}
         {(result.parameters.priority_coverage_pct ?? 0) > 0 &&
           <> Missing EVs count double up to the first {result.parameters.priority_coverage_pct}% of demand, rounded up to a whole EV.</>}
       </p>

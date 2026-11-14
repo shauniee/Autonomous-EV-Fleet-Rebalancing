@@ -41,15 +41,15 @@ These values are defaults. With age expansion enabled, the oldest still-valid dy
 A candidate leaves its origin at the start of the horizon and joins destination stock at the first slot boundary at or after travel and any charging. It contributes no destination stock if it becomes usable at or beyond the end of the horizon. For each zone and slot, the service computes:
 
 ```text
-raw shortage     = max(0, desired stock − usable stock)
-priority target  = ceil(0.20 × desired stock)
-weighted shortage = raw shortage + max(0, priority target − usable stock)
+raw shortage     = max(0, desired stock âˆ’ usable stock)
+priority target  = ceil(0.20 Ã— desired stock)
+weighted shortage = raw shortage + max(0, priority target âˆ’ usable stock)
 ```
 
 The total multiplies each slot's shortage by the slot length, then sums over all zones and slots. One EV missing for ten minutes is ten raw vehicle-minutes. Minutes below the priority target also count toward the extra term. The total is a stock-coverage metric.
 
 ```text
-gain in a future = weighted shortage without the move − weighted shortage with the move
+gain in a future = weighted shortage without the move âˆ’ weighted shortage with the move
 candidate gain   = minimum of that gain across the declared futures
 ```
 
@@ -62,7 +62,7 @@ Suppose CBD wants five usable EVs and has one. The near donor has three and want
 | Future | Near donor | Farther donor |
 |---|---:|---:|
 | Nominal. Cars become usable after 5 and 10 minutes respectively. | +25 | +20 |
-| Combined. Donor targets rise to three, CBD's falls to four, and trips take 5 minutes longer. | 20 saved in CBD − 30 added at origin = **−10** | 15 saved in CBD − 0 added at origin = **+15** |
+| Combined. Donor targets rise to three, CBD's falls to four, and trips take 5 minutes longer. | 20 saved in CBD âˆ’ 30 added at origin = **âˆ’10** | 15 saved in CBD âˆ’ 0 added at origin = **+15** |
 
 Under these illustrative inputs, the combined case gives the minimum for both candidates, and the priority term contributes zero. CRDS selects the farther EV. If only the near EV were available and evaluation completed, CRDS would return `HOLD`.
 
@@ -70,7 +70,7 @@ Under these illustrative inputs, the combined case gives the minimum for both ca
 
 - **MOVE** means an assessed candidate clears the gain threshold. A result can carry partial route coverage when a verified candidate clears the threshold and another candidate's route evidence was unavailable.
 - **HOLD** means the assessment found no eligible move (`NO_ELIGIBLE_RELOCATIONS`) or no move that clears the useful-gain threshold (`NO_USEFUL_MOVE`). **DEFER** means necessary evidence or computation was incomplete, such as stale inputs, unavailable routes or a decision deadline. Upstream reads can also fail as HTTP errors. Inspect the reason and per-EV evidence before retrying.
-- **Batches** accept a requested count of 1–20. The planner applies each selected move to every future, reduces the simulated capacity available for subsequent assignments, and recalculates marginal gains. It can stop early. This is a greedy search. The reported whole-batch gain compares the initial and final plans directly within each future, then takes the minimum. Individual step minima can come from different futures, so summing them does not give the reported batch gain.
+- **Batches** accept a requested count of 1â€“20. The planner applies each selected move to every future, reduces the simulated capacity available for subsequent assignments, and recalculates marginal gains. It can stop early. This is a greedy search. The reported whole-batch gain compares the initial and final plans directly within each future, then takes the minimum. Individual step minima can come from different futures, so summing them does not give the reported batch gain.
 - **Approval** is a separate Dispatch operation. Recommendations expire after 120 seconds by default. Dispatch serializes admission, rechecks the exact EV and facility against current observations and the final route, and asks Rebalancing to re-evaluate benefit against the current planning revision. Only after validation does acquisition of the parking hold and Fleet claim proceed. A prior recommendation can fail if demand, capacity, route or existing commitments changed. Approval outcomes and relocation progress have separate evidence.
 
 `crds` metadata records the decision, reason, parameters, scenario model version/count, source references and assessment evidence. A `MOVE` can include the limiting future, weighted gain and per-zone shortage changes. Positive per-zone changes mean added shortage. Negative changes mean relief. The per-zone changes are raw vehicle-minutes, so they need not sum to the weighted gain. The ETA range describes modeled travel arrival. The stock calculation also accounts for charging delay.
@@ -82,3 +82,5 @@ Under these illustrative inputs, the combined case gives the minimum for both ca
 The dashboard uses the single-writer recommendation-request queue for rebalancing when `DATABASE_URL` is configured and CRDS is enabled. Queue capacity defaults to 20 pending or evaluating requests. A queued request that reaches the default 300-second wait limit before evaluation defers. Queued requests are separate from approval and report statuses such as `READY`, `HOLD`, `DEFERRED`, `ADVISORY` and `EXPIRED`. Synchronous single and batch recommendation endpoints are also available. See [API contracts](api-contracts.md) and the [operator workflow](operator-dashboard.md).
 
 The futures are synthetic stress cases rather than probability-calibrated forecasts. The gain describes only those cases, within the horizon and candidate pool. The [archived selector evaluation](strategy-evaluation-verification.md) compares legacy energy-aware ranking with nearest eligible EV. Its numbers apply to those two policies. It provides no head-to-head CRDS measurement.
+
+Operator-requested quantity plans use `FULFIL_REQUEST`: physically feasible relocations may proceed even when the modeled coverage change is negative. Coverage trade-offs remain visible for human approval; routing, reserve, capacity, ownership and freshness checks still apply. Queued recommendation requests carry this planning mode and support up to 50 selected EVs. This recommendation queue is separate from the [durable dispatch queue](paced-bulk-relocation.md), which paces approved starts and automatically retries transient failures. Multi-plan approval uses the same global dispatch capacity limit.

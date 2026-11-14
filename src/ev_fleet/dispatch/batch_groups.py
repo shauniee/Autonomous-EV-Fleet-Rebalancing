@@ -44,10 +44,11 @@ class BatchApprovalGroups:
         self.wake = asyncio.Event()
 
     def approval(self, plan: BatchApprovalGroupPlan) -> BatchDispatch | None:
-        data = self.service.batches.get(str(plan.request_id))
+        snapshot = self.service.persisted_snapshot or {}
+        data = snapshot.get("batches", {}).get(str(plan.request_id))
         if data is None or data["batch_recommendation_id"] != str(plan.batch_recommendation_id):
             return None
-        return BatchDispatch.model_validate(self.service.batch_view(data))
+        return BatchDispatch.model_validate(self.service.batch_view(data, snapshot))
 
     def view(self, group: BatchApprovalGroup) -> BatchApprovalGroup:
         plans = []
@@ -56,7 +57,8 @@ class BatchApprovalGroups:
                 plan.status == "REJECTED" and plan.reason_code is None)
             approval = self.approval(plan) if admitted else None
             if approval:
-                status = plan.status if plan.status == "RUNNING" and approval.status == "UNKNOWN" else approval.status
+                status = ("RUNNING" if approval.status in ("QUEUED", "PROCESSING")
+                          or (plan.status == "RUNNING" and approval.status == "UNKNOWN") else approval.status)
                 plan = plan.model_copy(update={
                     "approval": approval,
                     "status": status,
@@ -64,11 +66,16 @@ class BatchApprovalGroups:
                 })
             plans.append(plan)
         status = group.status
-        if status == "COMPLETED" and any(plan.status == "UNKNOWN" for plan in plans):
-            status = "UNKNOWN"
+        if status == "COMPLETED":
+            if any(plan.status in ACTIVE for plan in plans):
+                status = "RUNNING"
+            elif any(plan.status == "UNKNOWN" for plan in plans):
+                status = "UNKNOWN"
         return group.model_copy(update={"plans": plans, "status": status})
 
     def committed(self) -> dict[str, GroupRecord]:
+        if not getattr(self.service.repository, "ready", True):
+            raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
         snapshot = self.service.persisted_snapshot or {}
         return snapshot.get("batch_approval_groups", {})
 
@@ -90,13 +97,7 @@ class BatchApprovalGroups:
         )
 
     def unresolved(self, group: BatchApprovalGroup) -> bool:
-        if group.status in (*ACTIVE, "UNKNOWN"):
-            return True
-        return group.status == "COMPLETED" and any(
-            plan.status == "UNKNOWN" and ((approval := self.approval(plan)) is None
-                                          or approval.status == "UNKNOWN")
-            for plan in group.plans
-        )
+        return self.view(group).status in (*ACTIVE, "UNKNOWN")
 
     def prune_history(self):
         cutoff = self.service.clock.now() - timedelta(days=7)
@@ -112,6 +113,8 @@ class BatchApprovalGroups:
             raise HTTPException(503, "BATCH_APPROVAL_QUEUE_DISABLED")
         key = str(body.group_id)
         async with self.lock:
+            if not getattr(self.service.repository, "ready", True):
+                raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN")
             record = self.records.get(key)
             if record:
                 group = record["group"]
@@ -119,8 +122,12 @@ class BatchApprovalGroups:
                     raise HTTPException(409, "BATCH_APPROVAL_GROUP_ID_CONFLICT")
                 view = self.view(group)
                 if view.status != "UNKNOWN":
-                    return view
-            if sum(record["group"].status in ACTIVE for record in self.records.values()) >= QUEUE_CAPACITY:
+                    # A cancelled first submit may leave only mutable intent.
+                    # Retrying must cross the same commit barrier as enqueue.
+                    await self.service.persist_if_changed()
+                    self.wake.set()
+                    return self.detail(body.group_id)
+            if sum(self.view(record["group"]).status in ACTIVE for record in self.records.values()) >= QUEUE_CAPACITY:
                 raise HTTPException(429, "BATCH_APPROVAL_QUEUE_FULL")
             now = self.service.clock.now()
             if record:
@@ -144,7 +151,7 @@ class BatchApprovalGroups:
             self.records[key] = {"group": group, "preflight_done": preflight_done}
             await self.service.persist()
             self.wake.set()
-            return self.view(group)
+            return self.detail(body.group_id)
 
     async def checkpoint(self, group: BatchApprovalGroup, preflight_done: bool, **updates) -> BatchApprovalGroup:
         async with self.lock:
@@ -164,10 +171,13 @@ class BatchApprovalGroups:
                 continue
             existing = self.approval(plan)
             if existing:
-                if existing.status == "UNKNOWN":
+                if existing.status in ("UNKNOWN", "QUEUED", "PROCESSING"):
+                    # Queued plans reserve exact EV intent before Fleet claims it.
                     for vehicle_id in {item.vehicle_id for item in existing.items if item.approval_status != "REJECTED"}:
                         owners.setdefault(vehicle_id, []).append(plan.batch_recommendation_id)
-                plans.append(plan.model_copy(update={"status": existing.status if existing.status != "UNKNOWN" else "QUEUED"}))
+                plans.append(plan.model_copy(update={"status": (
+                    "RUNNING" if existing.status in ("QUEUED", "PROCESSING")
+                    else existing.status if existing.status != "UNKNOWN" else "QUEUED")}))
                 continue
             if str(plan.batch_recommendation_id) in self.service.batch_recommendations:
                 plans.append(plan.model_copy(update={"status": "REJECTED", "reason_code": "BATCH_ALREADY_APPROVED"}))
@@ -213,9 +223,10 @@ class BatchApprovalGroups:
             plans[index] = plan.model_copy(update={"status": "RUNNING"})
             group = await self.checkpoint(group, True, plans=plans)
             try:
-                result = await self.service.approve_batch(BatchApproval(
+                result = await self.service.enqueue_batch(BatchApproval(
                     request_id=plan.request_id, batch_recommendation_id=plan.batch_recommendation_id))
-                updated = plan.model_copy(update={"status": result["status"], "reason_code": None})
+                status = "RUNNING" if result["status"] in ("QUEUED", "PROCESSING") else result["status"]
+                updated = plan.model_copy(update={"status": status, "reason_code": None})
             except HTTPException as exc:
                 updated = plan.model_copy(update={
                     "status": "REJECTED" if exc.status_code in DEFINITIVE_ERRORS else "UNKNOWN",

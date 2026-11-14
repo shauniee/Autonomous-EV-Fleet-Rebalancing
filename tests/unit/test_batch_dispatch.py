@@ -203,7 +203,7 @@ def test_closed_facility_and_invalid_quantity_rejected(clock):
     async def scenario():
         async with Cluster(clock) as cluster:
             await cluster.vehicle("ev-1")
-            for value in (0, 21):
+            for value in (0, 51):
                 response = await cluster.client.post(
                     "http://rebalancing.test/api/v1/batch-recommendations",
                     json={"target_zone_id": "cbd", "quantity": value})
