@@ -1,5 +1,5 @@
 import type { CrdsMetadata, CrdsVehicleDecision } from '../api/contracts';
-import { benefitPhrase, crdsMessage, exclusionSummary, minutesText } from './crdsMessages';
+import { benefitPhrase, coverText, crdsMessage, exclusionSummary, minutesText } from './crdsMessages';
 import { number } from './format';
 
 const groupLabels = {
@@ -17,6 +17,8 @@ const groupNotes = {
 } satisfies Record<CrdsVehicleDecision['outcome'], string>;
 
 const tiebreaks = ['HIGHER_ENERGY_TIEBREAK', 'STABLE_ORDER_TIEBREAK'];
+// A deferred assessment stopped early: show what blocked it before any provisional scores.
+const deferredOrder: CrdsVehicleDecision['outcome'][] = ['INCOMPLETE', 'EXCLUDED', 'NOT_SELECTED', 'RECOMMENDED'];
 
 // Gain is net of what the origin zone loses, so a non-positive gain means the move hurts or does nothing.
 function notUsefulReason(row: CrdsVehicleDecision) {
@@ -57,7 +59,8 @@ function headline(result: CrdsMetadata, vehicles: [string, CrdsVehicleDecision][
       .sort((a, b) => b[1].gain_vehicle_minutes! - a[1].gain_vehicle_minutes!)[0];
     if (best) {
       return `The best option, ${best[0]}, would give customers${where} ${benefitPhrase(best[1].gain_vehicle_minutes!, horizon)}. `
-        + `CRDS only recommends a trip that adds more than ${minutesText(result.parameters.minimum_gain_vehicle_minutes)} of availability, so it is better to wait.`;
+        + `CRDS only recommends a trip that adds more than ${minutesText(result.parameters.minimum_gain_vehicle_minutes)} of availability, so it is better to wait. `
+        + 'To move EVs anyway, choose Fulfil exact quantity.';
     }
   }
   return null;
@@ -70,6 +73,7 @@ export function CrdsSummary({ result, batchStop, target, vehicle }: {
   const evidence = decisionEvidence(result);
   const vehicles = Object.entries(evidence?.vehicles ?? {});
   const excluded = vehicles.map(([, row]) => row).filter(row => row.outcome === 'EXCLUDED');
+  const unchecked = vehicles.filter(([, row]) => row.outcome === 'INCOMPLETE').length;
   const singleBlocker = excluded.length > 0 && excluded.every(row => row.reason === excluded[0].reason)
     ? excluded[0].reason : null;
   const assessment = evidence?.assessment_reasons ?? result.reason_code.split(',');
@@ -96,11 +100,12 @@ export function CrdsSummary({ result, batchStop, target, vehicle }: {
     {result.decision !== 'DEFER' && stopMessages.length > 0 &&
       <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">
-      <div><dt>{fulfilRequest ? 'Minimum modeled coverage change' : 'Extra EV availability'}</dt><dd>{result.worst_case_gain_vehicle_minutes == null ? 'Unknown'
-        : fulfilRequest ? number(result.worst_case_gain_vehicle_minutes, ' vehicle-minutes')
+      <div><dt>{fulfilRequest ? 'Worst-case EV cover' : 'Extra EV availability'}</dt><dd>{result.worst_case_gain_vehicle_minutes == null ? 'Unknown'
+        : fulfilRequest ? coverText(result.worst_case_gain_vehicle_minutes)
           : minutesText(result.worst_case_gain_vehicle_minutes)}</dd></div>
       <div><dt>Arrival estimate</dt><dd>{number(result.arrival_minutes_min)}–{number(result.arrival_minutes_max)} min</dd></div>
     </dl>}
+    {result.decision === 'DEFER' && unchecked > 0 && <p>{unchecked} {unchecked === 1 ? 'EV' : 'EVs'} could not be checked, so CRDS could not compare every option and made no decision.</p>}
     {excluded.length > 0 && <p>{excluded.length} {excluded.length === 1 ? 'EV' : 'EVs'} could not be considered: {exclusionSummary(excluded.map(row => row.reason))}. Open Evidence for details.</p>}
     {result.decision === 'MOVE' && !result.approval_allowed && <p className="muted">Advisory mode. This move is available for review only.</p>}
     <details>
@@ -122,12 +127,15 @@ export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; o
   const sites = result.source_references.excluded_facility_ids?.length ?? 0;
   const winner = Object.entries(evidence?.vehicles ?? {}).find(([, row]) => row.outcome === 'RECOMMENDED');
   return <section aria-label="Fleet-wide assessment evidence">
-    {evidence ? Object.entries(groupLabels).map(([outcome, label]) => {
+    {evidence ? (result.decision === 'DEFER' ? deferredOrder : Object.keys(groupLabels) as CrdsVehicleDecision['outcome'][]).map(outcome => {
+      const label = groupLabels[outcome];
       const rows = Object.entries(evidence.vehicles).filter(([, row]) => row.outcome === outcome)
         .sort((a, b) => (b[1].gain_vehicle_minutes ?? -Infinity) - (a[1].gain_vehicle_minutes ?? -Infinity));
       return rows.length > 0 && <div key={outcome}>
         <h4>{label} ({rows.length})</h4>
-        <p className="muted">{groupNotes[outcome as CrdsVehicleDecision['outcome']]}</p>
+        <p className="muted">{result.decision === 'DEFER' && outcome === 'NOT_SELECTED'
+          ? 'Scored before the assessment stopped. Because other EVs could not be checked, these are not final decisions.'
+          : groupNotes[outcome]}</p>
         <ul>{rows.map(([id, row]) => {
           const compared = winner && row.reason === 'LOWER_MODELED_BENEFIT'
             && row.gain_vehicle_minutes != null && winner[1].gain_vehicle_minutes != null;
@@ -167,14 +175,14 @@ export function CrdsEvidence({ result, onRelocation }: { result: CrdsMetadata; o
     {sites > 0 && <p>CRDS excluded {sites} {sites === 1 ? 'site' : 'sites'} while destination reservations are unconfirmed.</p>}
     {result.decision !== 'DEFER' && <details>
       <summary>Technical details</summary>
-      <p className="muted">CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes. {result.planning_mode === 'FULFIL_REQUEST' ? 'Coverage changes are advisory when fulfilling the requested quantity.' : <>Moves must exceed {number(result.parameters.minimum_gain_vehicle_minutes, ' vehicle-minutes')} of worst-case shortage reduction.</>}
+      <p className="muted">CRDS checks {result.scenario_count} scenarios over {result.parameters.horizon_minutes} minutes. {result.planning_mode === 'FULFIL_REQUEST' ? 'Coverage changes are advisory when fulfilling the requested quantity.' : <>Moves must gain more than {number(result.parameters.minimum_gain_vehicle_minutes, ' min')} of EV cover in the worst scenario.</>}
         {(result.parameters.priority_coverage_pct ?? 0) > 0 &&
           <> Missing EVs count double up to the first {result.parameters.priority_coverage_pct}% of demand, rounded up to a whole EV.</>}
       </p>
       {Object.keys(result.shortage_changes_by_zone).length > 0 && <>
-        <p className="muted">Unweighted shortage changes in the lowest-scoring scenario. Positive values show more shortage and negative values show less.</p>
+        <p className="muted">EV cover by zone in the worst scenario. One minute of EV cover is one EV available for one minute where customers need it.</p>
         <dl className="candidate-metrics">{Object.entries(result.shortage_changes_by_zone).map(([zone, change]) =>
-          <div key={zone}><dt>{zone}</dt><dd>{number(change, ' vehicle-minutes')}</dd></div>)}</dl>
+          <div key={zone}><dt>{zone}</dt><dd>{coverText(-change)}</dd></div>)}</dl>
       </>}
     </details>}
     <small className="identifier">Assessment reference {result.epoch_id}</small>

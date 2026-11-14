@@ -494,10 +494,23 @@ def test_requested_ev_missing_and_road_reserve_are_distinct_exclusions(observati
     assert row["arrival_soc_pct"] < row["reserve_pct"]
 
 
+@pytest.mark.parametrize(("dispatch_code", "reason"), [
+    ("PARKING_DESTINATION_CHANGED", "DESTINATION_DATA_CHANGED"),
+    ("FACILITY_NOT_FOUND", "DESTINATION_DATA_CHANGED"),
+    ("ROUTE_ESTIMATE_INPUT_CHANGED", "ROUTE_ESTIMATE_IDENTITY_CHANGED"),
+])
+def test_destination_check_failure_is_not_reported_as_a_road_route_failure(
+        observations, clock, dispatch_code, reason):
+    _, (children, metadata, _) = asyncio.run(
+        plan(observations, clock, batch=True, route_error=dispatch_code))
+    assert not children and metadata.decision == "DEFER"
+    assert metadata.source_references["decision_evidence"]["assessment_reasons"] == [reason]
+
+
 def test_route_access_defers_without_reporting_eligible_evs_as_rejected(observations, clock):
     result, (children, metadata, reason) = asyncio.run(
         plan(observations, clock, batch=True, route_error="ONEMAP_AUTH_FAILED"))
-    assert not children and reason == "ROUTE_EVIDENCE_UNAVAILABLE"
+    assert not children and reason == "ROUTING_ACCESS_UNAVAILABLE"
     assert metadata.decision == result.evaluation.decision == "DEFER"
     evidence = metadata.source_references["decision_evidence"]
     assert evidence["assessment_reasons"] == ["ROUTING_ACCESS_UNAVAILABLE"]

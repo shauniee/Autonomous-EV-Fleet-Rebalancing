@@ -73,7 +73,7 @@ describe('dispatcher dashboard', () => {
       if (url === path && init?.method === 'POST') {
         const draft = JSON.parse(String(init.body));
         drafts.push(draft.request_id);
-        expect(draft).toMatchObject({ quantity: 2, vehicle_ids: ['ev-01', 'ev-02'], planning_mode: 'FULFIL_REQUEST' });
+        expect(draft).toMatchObject({ quantity: 2, vehicle_ids: ['ev-01', 'ev-02'], planning_mode: 'OPTIMIZE_COVERAGE' });
         saved = { ...draft, status: 'READY', batch_recommendation_id: batch.batch_recommendation_id,
           approval_request_id: 'stable-approval', submitted_at: batch.created_at,
           recommended_count: 1, expires_at: expires, assignments: batch.assignments, batch: null };
@@ -559,6 +559,26 @@ describe('dispatcher dashboard', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Recommend EV' })).toBeEnabled());
   });
 
+  it('sends a single-EV override to the batch endpoint, which accepts a planning mode', async () => {
+    const fetch = server({
+      '/api/rebalancing/batch-recommendations': {
+        batch_recommendation_id: 'override', target_zone_id: 'cbd', requested_count: 1, recommended_count: 0,
+        unfulfilled_count: 1, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30000).toISOString(),
+        explanation: 'No feasible relocation', assumptions: [], assignments: [],
+      },
+      '/api/facilities/facilities': { generated_at: new Date().toISOString(), data_source: 'MOCK', facilities: [] },
+    });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Planning mode'), { target: { value: 'FULFIL_REQUEST' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend EV' }));
+    await screen.findByTestId('batch-recommendation');
+    const sent = fetch.mock.calls.filter(([path, init]) =>
+      path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(sent[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1, planning_mode: 'FULFIL_REQUEST' });
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/rebalancing/recommendations' && init?.method === 'POST')).toBe(false);
+  });
+
   it('previews bulk parking-aware recommendations and requires explicit batch approval', async () => {
     const assignments = [{
       recommendation_id: 'rec-parking-1', vehicle_id: 'ev-01',
@@ -588,6 +608,8 @@ describe('dispatcher dashboard', () => {
     render(<App/>);
     fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
     fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Planning mode'), { target: { value: 'FULFIL_REQUEST' } });
+    expect(screen.getByText(/Overrides CRDS/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Recommend 3 EVs' }));
     expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 3 EVs recommended');
     expect(screen.getByTestId('batch-recommendation')).toHaveTextContent('CBD simulated parking 1');
@@ -644,7 +666,7 @@ describe('dispatcher dashboard', () => {
     await screen.findByTestId('batch-recommendation');
     const requests = fetch.mock.calls.filter(([path, init]) =>
       path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
-    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1, planning_mode: 'FULFIL_REQUEST' });
+    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1, planning_mode: 'OPTIMIZE_COVERAGE' });
     expect(fetch.mock.calls.some(([path, init]) => path === '/api/rebalancing/recommendations' && init?.method === 'POST')).toBe(false);
     expect(fetch.mock.calls.some(([, init]) => JSON.stringify(init ?? {}).includes('AccountKey'))).toBe(false);
   });
@@ -917,7 +939,7 @@ describe('CRDS recommendation explanations', () => {
     await selectAndRecommend();
     const result = screen.getByTestId('recommendation');
     expect(result).toHaveTextContent(
-      'The best option, ev-03, would give customers in CBD one extra EV available for less than a minute of the next 30 minutes. CRDS only recommends a trip that adds more than about 1 minute of availability, so it is better to wait.');
+      'The best option, ev-03, would give customers in CBD one extra EV available for less than a minute of the next 30 minutes. CRDS only recommends a trip that adds more than about 1 minute of availability, so it is better to wait. To move EVs anyway, choose Fulfil exact quantity.');
     fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
     expect(result).toHaveTextContent('ev-03 · Moving it would only add less than a minute of EV availability overall, which is not enough to be worth the trip.');
     expect(result).toHaveTextContent('ev-07 · Moving it would do more harm than good: customers in its current zone would be left without a car for about 30 minutes, which outweighs any benefit at the destination.');

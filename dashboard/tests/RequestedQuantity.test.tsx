@@ -35,7 +35,9 @@ describe('operator-requested quantity review', () => {
     expect(screen.getByRole('heading', { name: '2 of 2 EVs planned' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(
       'Some planned moves do not improve modeled fleet-wide coverage');
-    expect(screen.getByText(/Minimum modeled coverage change/)).toBeInTheDocument();
+    expect(screen.getByText('Worst-case EV cover')).toBeInTheDocument();
+    expect(screen.getAllByText(/loses \d+ min of EV cover/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/vehicle-minutes/)).not.toBeInTheDocument();
     expect(screen.queryByText(/The proposed moves improve/)).not.toBeInTheDocument();
   });
 
@@ -51,7 +53,7 @@ describe('operator-requested quantity review', () => {
     render(<BatchConfirmation batch={batch} expired={false} onApprove={vi.fn()} onClose={vi.fn()}/>);
     const dialog = screen.getByRole('dialog', { hidden: true });
     expect(dialog).toHaveTextContent('Some planned moves do not improve modeled fleet-wide coverage');
-    expect(dialog).toHaveTextContent('Minimum modeled coverage change: -15 points');
+    expect(dialog).toHaveTextContent('In the worst scenario the plan loses 15 min of EV cover.');
     expect(dialog).toHaveTextContent('staff must confirm cable connection');
     expect(dialog).not.toHaveTextContent('improves modeled fleet coverage');
     expect(dialog).not.toHaveTextContent('no separate plug-in confirmation');

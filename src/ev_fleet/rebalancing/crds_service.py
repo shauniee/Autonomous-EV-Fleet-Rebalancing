@@ -142,7 +142,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         return empty
 
     def defer_route_failure(failure):
-        reason = str(failure) if isinstance(failure, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
+        reason = str(failure) if isinstance(failure, ValueError) else route_failure_reason(failure)
         return defer(reason, route_failure_reason(failure))
 
     if inputs.issues:
