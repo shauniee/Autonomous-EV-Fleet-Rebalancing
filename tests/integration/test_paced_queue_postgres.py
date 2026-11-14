@@ -45,3 +45,61 @@ def test_paced_authorization_reload_admits_once_after_original_ttl(telemetry_dat
             finally:
                 await restored.close()
     asyncio.run(scenario())
+
+
+def test_group_metadata_and_paced_job_progress_survive_partitioned_reload(
+        telemetry_database_url, clock, monkeypatch):
+    from uuid import UUID
+    from ev_fleet.contracts.dispatch import BatchApprovalGroupRequest, queued_batch_approval_id
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            old = cluster.dispatch
+            namespace = "paced-group-" + uuid4().hex
+            old.repository = RecordSnapshotRepository(namespace, "records", telemetry_database_url)
+            await old.repository.start()
+            await old.persist()
+            await cluster.vehicle("persisted-group-ev")
+            response = await cluster.client.post(
+                "http://rebalancing.test/api/v1/batch-recommendations",
+                json={"target_zone_id": "cbd", "quantity": 1})
+            batch_id = UUID(response.json()["batch_recommendation_id"])
+            original_load = old.load_batch_preview
+
+            async def load(batch_id, *, queued):
+                return await original_load(batch_id, queued=False)
+
+            monkeypatch.setattr(old, "load_batch_preview", load)
+            request = BatchApprovalGroupRequest(group_id=uuid4(), batch_recommendation_ids=[batch_id])
+            await old.batch_groups.submit(request)
+            await old.batch_groups.process(old.batch_groups.records[str(request.group_id)])
+            before = old.batch_groups.detail(request.group_id)
+            child_id = before.plans[0].approval.items[0].dispatch_id
+            assert before.status == "RUNNING"
+            assert before.plans[0].approval.job_status == "QUEUED"
+            assert not cluster.facilities.holds
+            await old.close()
+            restored = DispatchService(cluster.client, old.settings, clock,
+                RecordSnapshotRepository(namespace, "records", telemetry_database_url))
+            await restored.start()
+            cluster.dispatch = restored
+            cluster.apps["dispatch.test"].state.service = restored
+            cluster.apps["dispatch.test"].state.persistence = restored.repository
+            try:
+                assert restored.batch_groups.detail(request.group_id) == before
+                assert restored.batch_groups.page(0, 10, unresolved=True).groups == [before]
+                clock.advance(11)
+                await cluster.telemetry("persisted-group-ev")
+                await restored.queue_once()
+                after = restored.batch_groups.detail(request.group_id)
+                assert after.status == "RUNNING"
+                assert after.plans[0].approval.admitted_count == 1
+                assert after.plans[0].approval.items[0].dispatch_id == child_id
+                assert after.plans[0].request_id == queued_batch_approval_id(batch_id)
+                assert len(cluster.facilities.holds) == 1
+                snapshot = await restored.repository.load()
+                assert snapshot["batch_approval_groups"][str(request.group_id)]["preflight_done"]
+                assert snapshot["records"][str(child_id)]["approval_intent"]["queue_status"] == "ADMITTED"
+            finally:
+                await restored.close()
+    asyncio.run(scenario())

@@ -16,6 +16,7 @@ function server(overrides: Record<string, unknown> = {}) {
     '/api/dispatch/dispatches': { dispatches: [] },
     '/api/dispatch/routing/status': { provider: 'ONEMAP', configured: true, reason_code: null },
     '/api/rebalancing/recommendations': makeRecommendation(),
+    '/api/rebalancing/recommendation-requests?offset=0&limit=30': { enabled: false, crds_mode: 'DISABLED', requests: [], next_offset: null },
     '/api/dispatch/dispatches/dispatch-1/recovery': {
       dispatch_id: 'dispatch-1', status: 'BLOCKED', reason_code: 'CHECKPOINT_UNAVAILABLE', can_resume: false,
       operation: null, blockers: [], evidence: { checkpoint_source: 'NONE', checkpoint_at: null },
@@ -27,6 +28,9 @@ function server(overrides: Record<string, unknown> = {}) {
   };
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
+    if (path.startsWith('/api/dispatch/batch-approval-groups?')) {
+      return Response.json({ enabled: true, groups: [], next_offset: null });
+    }
     if (path === '/api/dispatch/dispatches' && init?.method === 'POST') return new Response(JSON.stringify(makeDispatch()));
     const body = responses[path === '/api/fleet/dashboard/vehicles' ? '/api/fleet/vehicles' : path];
     if (body instanceof Error) throw body;
@@ -43,6 +47,169 @@ function openNotifications() {
   return within(screen.getByRole('region', { name: 'Notifications' }));
 }
 describe('dispatcher dashboard', () => {
+  it('queues a map request, reviews its plan, and reloads the approval refusal from Dispatch', async () => {
+    const path = '/api/rebalancing/recommendation-requests';
+    const expires = new Date(Date.now() + 60000).toISOString();
+    const batch = {
+      batch_recommendation_id: 'queued-batch', target_zone_id: 'cbd',
+      requested_count: 1, recommended_count: 1, unfulfilled_count: 0,
+      created_at: new Date().toISOString(), expires_at: expires, explanation: 'One EV', assumptions: [],
+      assignments: [{
+        recommendation_id: 'rec-1', vehicle_id: 'ev-01', facility_id: 'cbd-1',
+        facility_name: 'CBD parking', requires_charging: false, distance_km: 4, predicted_arrival_soc_pct: 72,
+      }],
+    };
+    let saved: Record<string, unknown> | undefined;
+    let rejected = false;
+    let lostResponse = true;
+    const drafts: string[] = [];
+    const fleet = makeFleet();
+    fleet.vehicles.push({ ...fleet.vehicles[0], vehicle_id: 'ev-02' },
+      { ...fleet.vehicles[0], vehicle_id: 'ev-03', stale: true });
+    const fetch = server({ '/api/fleet/vehicles': fleet });
+    const baseline = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === path && init?.method === 'POST') {
+        const draft = JSON.parse(String(init.body));
+        drafts.push(draft.request_id);
+        expect(draft).toMatchObject({ quantity: 2, vehicle_ids: ['ev-01', 'ev-02'], planning_mode: 'FULFIL_REQUEST' });
+        saved = { ...draft, status: 'READY', batch_recommendation_id: batch.batch_recommendation_id,
+          approval_request_id: 'stable-approval', submitted_at: batch.created_at,
+          recommended_count: 1, expires_at: expires, assignments: batch.assignments, batch: null };
+        if (lostResponse) { lostResponse = false; throw new Error('Lost response'); }
+        return Response.json(saved, { status: 202 });
+      }
+      if (url.startsWith(`${path}?`)) return Response.json({
+        enabled: true, crds_mode: 'ACTIVE', next_offset: null, requests: saved ? [saved] : [],
+      });
+      if (url.startsWith(`${path}/`)) return Response.json({ ...saved, batch });
+      if (url === '/api/dispatch/batches' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          request_id: 'stable-approval', batch_recommendation_id: 'queued-batch',
+        });
+        rejected = true;
+        return Response.json({ error: { code: 'BATCH_EXPIRED' } }, { status: 409 });
+      }
+      if (url.startsWith('/api/dispatch/batches?')) return Response.json({
+        batches: [], refusals: rejected ? [{
+          request_id: 'stable-approval', batch_recommendation_id: 'queued-batch', reason_code: 'BATCH_EXPIRED',
+        }] : [],
+      });
+      return baseline(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Vehicle selection'), { target: { value: 'specific' } });
+    expect(screen.getByRole('button', { name: 'Request recommendation' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /ev-03.*Telemetry stale/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /ev-02/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /ev-01/ }));
+    expect(screen.getByLabelText('Number of EVs needed')).toHaveValue(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Request recommendation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry same request' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View request' }));
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]).toBe(drafts[1]);
+    const review = await screen.findByRole('button', { name: 'Review approval' });
+    await waitFor(() => expect(review).toBeEnabled());
+    expect(await screen.findByText(/CBD parking · parking/)).toBeVisible();
+    fireEvent.click(review);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
+    expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
+    view.unmount();
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Recommendations' }));
+    expect(await screen.findByText('Approval rejected', { exact: true })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /Review recommendation for CBD/ }));
+    expect(await screen.findByText(/The batch recommendation expired before approval/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Request again' }));
+    expect(screen.getByRole('checkbox', { name: /ev-01/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /ev-02/ })).toBeChecked();
+    expect(drafts).toHaveLength(2);
+  }, 10000);
+
+  it('blocks overlapping plans and retries a lost bulk submission under the original group ID after reload', async () => {
+    const created = new Date().toISOString();
+    const expires = new Date(Date.now() + 60000).toISOString();
+    const rows = [
+      { id: 'cbd', ev: 'ev-01', parking: 'CBD parking' },
+      { id: 'bishan', ev: 'ev-01', parking: 'Bishan parking' },
+      { id: 'punggol', ev: 'ev-02', parking: 'Punggol parking' },
+      { id: 'tampines', ev: 'ev-03', parking: 'Tampines parking' },
+    ].map(row => ({
+      request_id: row.id, target_zone_id: row.id, submitted_at: created, quantity: 1, recommended_count: 1,
+      expires_at: row.id === 'tampines' ? new Date(Date.now() + 4000).toISOString() : expires, status: 'READY', batch_recommendation_id: `batch-${row.id}`,
+      approval_request_id: `approval-${row.id}`,
+      assignments: [{ vehicle_id: row.ev, facility_name: row.parking, facility_id: row.id }],
+    }));
+    const attempts: { group_id: string; batch_recommendation_ids: string[] }[] = [];
+    let saved: unknown;
+    const path = '/api/dispatch/batch-approval-groups';
+    const fetch = server({
+      '/api/rebalancing/recommendation-requests?offset=0&limit=30': {
+        enabled: true, crds_mode: 'ACTIVE', requests: rows, next_offset: null,
+      },
+    });
+    const baseline = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/dispatch/batches?')) return Response.json({ batches: [], refusals: [] });
+      if (url.startsWith(`${path}?`)) return Response.json({ enabled: true, groups: saved ? [saved] : [], next_offset: null });
+      if (url === path && init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body));
+        attempts.push(payload);
+        if (attempts.length === 1) throw new Error('Lost response');
+        saved = { group_id: payload.group_id, status: 'QUEUED', created_at: created, updated_at: created,
+          reason_code: null, conflicts: [], plans: payload.batch_recommendation_ids.map((id: string) => ({
+            batch_recommendation_id: id, status: 'QUEUED', reason_code: null, approval: null,
+          })) };
+        return Response.json(saved, { status: 202 });
+      }
+      return baseline(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select plan for CBD' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Bishan' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Punggol' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select plan for Tampines' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve selected' }));
+    const review = within(screen.getByRole('dialog', { name: 'Approve selected plans' }));
+    expect(review.getAllByText('Shared EVs ev-01')).toHaveLength(2);
+    expect(review.getByRole('button', { name: 'Confirm 4 plans' })).toBeDisabled();
+    expect(attempts).toHaveLength(0);
+    fireEvent.click(review.getByRole('button', { name: 'Remove Bishan plan' }));
+    const actualNow = Date.now.bind(Date);
+    const shiftedClock = vi.spyOn(Date, 'now').mockImplementation(() => actualNow() + 4500);
+    expect(await review.findByText('Expired', { exact: true })).toBeVisible();
+    expect(review.getByRole('button', { name: 'Confirm 3 plans' })).toBeDisabled();
+    fireEvent.click(review.getByRole('button', { name: 'Remove Tampines plan' }));
+    expect(review.getByText('ev-01 → CBD parking')).toBeVisible();
+    expect(review.getByText('ev-02 → Punggol parking')).toBeVisible();
+    fireEvent.click(review.getByRole('button', { name: 'Confirm 2 plans' }));
+    expect(await screen.findByText(/Dispatch did not confirm receipt/)).toBeVisible();
+    shiftedClock.mockRestore();
+    view.unmount();
+
+    const reloaded = render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    const retry = await screen.findByRole('button', { name: 'Retry same group' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    expect(await screen.findAllByText('Approval queued')).toHaveLength(2);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].batch_recommendation_ids).toEqual(['batch-cbd', 'batch-punggol']);
+    expect(attempts[1]).toEqual(attempts[0]);
+
+    reloaded.unmount();
+    render(<App/>);
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }));
+    expect(await screen.findAllByText('Approval queued')).toHaveLength(2);
+    expect(screen.queryByRole('checkbox', { name: 'Select plan for CBD' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select plan for Bishan' })).toBeEnabled();
+  });
+
   it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {
     const fetch = server({
       '/api/dispatch/routing/status': {
@@ -708,6 +875,54 @@ describe('CRDS recommendation explanations', () => {
     expect(result).toHaveTextContent('EVs with incomplete assessments (1)');
     expect(result).toHaveTextContent('ev-02 · The EV is offline.');
     expect(result).not.toHaveTextContent(/ONEMAP_AUTH_FAILED|ROUTE_EVIDENCE_UNAVAILABLE/);
+  });
+
+  it('explains a move in plain language and why other EVs were not chosen', async () => {
+    const row = { related_reasons: [], dispatch_ids: [] };
+    server({ '/api/rebalancing/recommendations': { ...makeRecommendation(), crds: { ...crds,
+      decision: 'MOVE', reason_code: 'USEFUL_SHORTAGE_REDUCTION', approval_allowed: true,
+      worst_case_gain_vehicle_minutes: 12, arrival_minutes_min: 6, arrival_minutes_max: 9,
+      source_references: { decision_evidence: { version: 1, assessment_reasons: ['USEFUL_SHORTAGE_REDUCTION'], batch_stop_reasons: [],
+        vehicles: {
+          'ev-01': { ...row, outcome: 'RECOMMENDED', reason: 'USEFUL_SHORTAGE_REDUCTION', gain_vehicle_minutes: 12 },
+          'ev-03': { ...row, outcome: 'NOT_SELECTED', reason: 'LOWER_MODELED_BENEFIT', gain_vehicle_minutes: 4 },
+          'ev-04': { ...row, outcome: 'EXCLUDED', reason: 'RENTED' },
+          'ev-05': { ...row, outcome: 'EXCLUDED', reason: 'RENTED' },
+          'ev-06': { ...row, outcome: 'EXCLUDED', reason: 'OFFLINE' },
+        } } } } } });
+    render(<App/>);
+    await selectAndRecommend();
+    const result = screen.getByTestId('recommendation');
+    expect(result).toHaveTextContent('Move ev-01 to CBD. Customers there would have one extra EV available for about 12 minutes of the next 30 minutes, even in the busiest of the 4 demand patterns CRDS checked.');
+    expect(result).toHaveTextContent('3 EVs could not be considered: 2 rented, 1 offline.');
+    expect(result).toHaveTextContent('How does CRDS decide?');
+    fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
+    expect(result).toHaveTextContent('ev-01 was chosen instead: it adds about 12 minutes of EV availability, compared with about 4 minutes for this EV.');
+    expect(result).not.toHaveTextContent(/points|coverage score/);
+  });
+
+  it('explains how close the best option came when CRDS recommends waiting', async () => {
+    server({ '/api/rebalancing/recommendations': { ...makeRecommendation(), selected_vehicle_id: null, crds: { ...crds,
+      decision: 'HOLD', reason_code: 'NO_USEFUL_MOVE',
+      source_references: { decision_evidence: { version: 1, assessment_reasons: ['NO_USEFUL_MOVE'], batch_stop_reasons: [],
+        vehicles: {
+          'ev-07': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: -39,
+            origin_shortage_increase: 30, related_reasons: [], dispatch_ids: [] },
+          'ev-08': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: 0,
+            related_reasons: [], dispatch_ids: [] },
+          'ev-03': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', gain_vehicle_minutes: 0.5,
+            related_reasons: [], dispatch_ids: [] },
+        } } } } } });
+    render(<App/>);
+    await selectAndRecommend();
+    const result = screen.getByTestId('recommendation');
+    expect(result).toHaveTextContent(
+      'The best option, ev-03, would give customers in CBD one extra EV available for less than a minute of the next 30 minutes. CRDS only recommends a trip that adds more than about 1 minute of availability, so it is better to wait.');
+    fireEvent.click(within(result).getByRole('tab', { name: 'Evidence' }));
+    expect(result).toHaveTextContent('ev-03 · Moving it would only add less than a minute of EV availability overall, which is not enough to be worth the trip.');
+    expect(result).toHaveTextContent('ev-07 · Moving it would do more harm than good: customers in its current zone would be left without a car for about 30 minutes, which outweighs any benefit at the destination.');
+    expect(result).toHaveTextContent('ev-08 · Moving it would not help: the destination is expected to have enough cars');
+    expect(result).not.toHaveTextContent(/points|coverage score|no time/);
   });
 
   it('requests a fresh recommendation from a deferred result', async () => {

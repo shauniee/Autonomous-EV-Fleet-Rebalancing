@@ -461,6 +461,26 @@ def test_batch_keeps_last_donor_ev_even_when_target_still_needs_coverage(observa
     assert evidence["batch_stop_reasons"] == ["BATCH_ORIGIN_STOCK_LIMIT"]
 
 
+def test_requested_shortlist_restricts_routes_without_filtering_fleet(observations, clock):
+    routed = set()
+
+    async def note_route(vehicle_id):
+        routed.add(vehicle_id)
+
+    async def evaluate():
+        return await plan(observations, clock, batch=True, vehicle_ids=["unknown", "healthy"],
+                          route_hook=note_route, traffic_slots=asyncio.Semaphore(4))
+
+    result, (children, metadata, _) = asyncio.run(evaluate())
+    assert routed == {"healthy"}
+    assert {vehicle.vehicle_id for vehicle in result.inputs.fleet.vehicles} == {"healthy", "healthy-2"}
+    assert result.metadata.source_references["requested_vehicle_ids"] == ["healthy", "unknown"]
+    assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy"], metadata.reason_code
+    rows = metadata.source_references["decision_evidence"]["vehicles"]
+    assert set(rows) == {"healthy", "unknown"}
+    assert rows["unknown"]["reason"] == "VEHICLE_MISSING"
+
+
 def test_requested_ev_missing_and_road_reserve_are_distinct_exclusions(observations, clock):
     missing = asyncio.run(plan(observations, clock, vehicle_id="unknown"))
     assert missing.metadata.decision == "HOLD"
@@ -824,3 +844,18 @@ def test_refreshed_snapshots_drive_parking_and_relocation_exclusions(observation
     assert inputs.excluded_vehicle_ids == [claimed["vehicle_id"]]
     assert inputs.relocation_exclusions[0].reason == "RELOCATION_UNCONFIRMED"
     assert inputs.issues == []
+
+
+def test_fulfil_request_respects_operator_shortlist_with_negative_coverage(observations, clock):
+    zones = observations["/api/v1/zones"]["zones"]
+    zones[0]["demand"]["desired_available_vehicles"] = 10
+    zones[1]["demand"]["desired_available_vehicles"] = 0
+    result, (children, metadata, _) = asyncio.run(plan(
+        observations, clock, batch=True, vehicle_ids=["healthy"], planning_mode="FULFIL_REQUEST"))
+    assert {vehicle.vehicle_id for vehicle in result.inputs.fleet.vehicles} == {"healthy", "healthy-2"}
+    assert [child.evaluation.selected_vehicle_id for child in children] == ["healthy"]
+    assert metadata.planning_mode == "FULFIL_REQUEST"
+    assert metadata.coverage_tradeoff is True
+    assert metadata.worst_case_gain_vehicle_minutes < 0
+    assert metadata.approval_allowed is True
+    assert set(metadata.source_references["decision_evidence"]["vehicles"]) == {"healthy"}

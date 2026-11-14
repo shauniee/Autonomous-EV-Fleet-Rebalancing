@@ -1,4 +1,6 @@
-# Local-first testing (Windows)
+# Local-first testing
+
+Windows commands come first; for macOS see [macOS and Linux](#macos-and-linux).
 
 Install Python 3.12+, Node.js 22+, and PowerShell. Install Python testing dependencies once:
 
@@ -20,11 +22,24 @@ For data persistence, telemetry, containers, Kubernetes, or deployment changes:
 
 This additionally uses Docker Desktop (Linux containers) and act (https://github.com/nektos/act; example installation: winget install nektos.act) to execute three existing CI jobs LOCALLY: disposable PostgreSQL telemetry tests, local Docker Compose smoke test, and Kubernetes manifest checks. act may download a large Linux runner image on first use. No real vehicle commands, external infrastructure, or production database are required.
 
-If Docker/act is unavailable, default checks still run; the additional integration suite is UNVERIFIED. Run infrastructure-sensitive changes through full local integration before merging. The script is designed for Windows PowerShell; using Linux/macOS requires running the equivalent commands individually.
+If Docker/act is unavailable, default checks still run; the additional integration suite is UNVERIFIED. Run infrastructure-sensitive changes through full local integration before merging. The script is designed for Windows PowerShell; on Linux/macOS run the [equivalent commands](#macos-and-linux) individually.
 
 If PowerShell restricts scripts:
 
     powershell -ExecutionPolicy Bypass -File .\scripts\test-local.ps1
+
+## macOS and Linux
+
+The PowerShell runner uses Windows-only executable paths. From the repository root, after creating `.venv` (see the README) and running `npm ci` in each frontend directory once:
+
+    env -u TELEMETRY_TEST_DATABASE_URL .venv/bin/python -m pytest -q
+    npm --prefix dashboard test -- --run
+    npm --prefix dashboard run build
+    npm --prefix simulation-console/frontend run build
+
+Keep `TELEMETRY_TEST_DATABASE_URL` unset for the default backend tests; the Windows runner does this automatically. On Node.js 25 or newer, run the dashboard tests with `NODE_OPTIONS=--no-experimental-webstorage`; Node's built-in `localStorage` otherwise replaces jsdom's and the test setup fails.
+
+For infrastructure or database changes, use `act` to run the `telemetry-postgres` and `compose-smoke` jobs in `.github/workflows/infrastructure-checks.yml` and the `manifests` job in `.github/workflows/kubernetes-portability.yml` locally. If Docker or `act` is unavailable, report the integration suite as UNVERIFIED.
 
 ## GitHub workflow fallback
 

@@ -1,7 +1,8 @@
 # Traffic-aware EV selection and road-disruption routing
 
-This feature expands PR #13. **It is optional** and disabled unless
-`TRAFFIC_SOURCE=LTA_DATAMALL` is set. All examples below use synthetic
+Live LTA traffic is optional and requires `TRAFFIC_SOURCE=LTA_DATAMALL`.
+The separate [traffic simulator](traffic-simulation-controller.md) can provide
+synthetic disruptions. All examples below use synthetic
 fixtures unless a valid LTA DataMall AccountKey is explicitly configured.
 
 ## 1. LTA feeds and dashboard
@@ -43,18 +44,21 @@ falls within ~120 m of a tested route's geometry.
 
 ## 2. Traffic-aware recommendation scoring
 
-Both single-EV and facility/batch recommendations use a
-deterministic, inspectable cost when route-overlapping traffic data exists:
+[CRDS](crds.md) applies traffic to verified OneMap geometry. It screens
+blocked routes and uses travel time to project when the EV becomes usable.
+It still ranks by modeled shortage reduction.
+
+The **legacy** single and facility/batch paths use a deterministic cost
+when route-overlapping traffic data is fresh:
 
 `cost = .45*normalised_ETA + .25*normalised_kWh + .20*disruption_risk + .10*origin_supply_penalty`
 
-The current supply penalty is 0 (not yet estimated from demand). Cost input
+The legacy callers use a zero origin supply penalty. Cost input
 normalisers: ETA cap 60 minutes; kWh cap 15; disruption risk cap 1.
 No claims of calibrated research weights. If no matching speed observation
 exists, current distance/energy ranking is retained: UNKNOWN != free-flow.
-The initial ranking uses **approximate direct point-to-point corridors**,
-not OneMap geometry, which is available at dispatch approval. Consequently
-an initial recommendation may be rejected or re-ordered at final road check.
+The legacy preview uses approximate point-to-point corridors. Dispatch
+checks actual road geometry at approval and can reject the selected move.
 LTA speed coverage is incomplete and does not reveal every traffic event.
 API output includes its traffic status and per-assignment annotations.
 
@@ -81,7 +85,9 @@ ship a preprocessed Singapore road graph. Configure an accessible
 `OSRM_ROUTING_URL` such as `http://osrm:5000` only after you provision
 the engine. Do not use a public demo server for production.
 OSRM's `alternatives` option does not guarantee distinct alternatives.
-No live, official detour guarantees exist.
+An OSRM alternate can be used for legacy approval. CRDS planning and
+benefit revalidation require a OneMap route, so a final route marked
+`OSRM` cannot pass CRDS revalidation.
 
 Once a journey is issued, its route and command are deliberately immutable.
 Dispatch exposes a read-only
@@ -123,8 +129,8 @@ OSRM_ROUTING_URL=http://osrm:5000
 ```
 
 The last setting is optional; without OSRM, unsafe blocked routes fail closed.
-With `TRAFFIC_SOURCE=DISABLED` (default) the previous route/recommendation
-behaviour remains and dashboard labels the traffic feed disabled.
+With `TRAFFIC_SOURCE=DISABLED` (default), live LTA observations are absent.
+CRDS can still use OneMap route evidence and any enabled simulated traffic.
 
 Compose reads .env directly. On Windows Docker Desktop Kubernetes,
 read .env and install/update the existing backend-only secrets securely:

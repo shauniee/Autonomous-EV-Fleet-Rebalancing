@@ -36,12 +36,22 @@ class RecommendationStore:
         self.records = {key: value for key, value in self.records.items() if value[0] > now}
 
     async def put(self, record, ttl):
+        await self.put_many([record], ttl=ttl)
+
+    async def put_many(self, records, *, ttl=None):
         async with self.lock:
             self.prune()
-            if len(self.records) >= 10000:
+            now, tick = self.clock.now(), self.clock.monotonic()
+            pending = {}
+            for record in records:
+                remaining = ttl if ttl is not None else (datetime.fromisoformat(record["expires_at"]) - now).total_seconds()
+                if remaining > 0:
+                    pending[record["recommendation_id"]] = (tick + remaining, deepcopy(record))
+            if len(self.records.keys() | pending.keys()) > 10000:
                 raise HTTPException(503, "RECOMMENDATION_CAPACITY_REACHED")
-            self.records[record["recommendation_id"]] = (self.clock.monotonic() + ttl, deepcopy(record))
-            await self.persist()
+            if pending:
+                await self.repository.save({key: value[1] for key, value in (self.records | pending).items()})
+                self.records.update(pending)
 
     async def get(self, key):
         async with self.lock:

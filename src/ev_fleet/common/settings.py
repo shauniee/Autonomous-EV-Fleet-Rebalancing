@@ -85,6 +85,8 @@ class CrdsSettings(Model):
     deadline_seconds: float = Field(default=30, gt=0, le=120)
     dispatch_url: str = "http://localhost:8004"
     execution_mode: Literal["LOCAL", "HTTP"] = "LOCAL"
+    request_queue_capacity: int = Field(default=20, ge=1, le=100)
+    request_queue_max_wait_seconds: float = Field(default=300, gt=0, le=3600)
     worker_urls: list[str] = Field(default_factory=list, max_length=8)
     worker_timeout_seconds: float = Field(default=5, gt=0, le=30)
     simulation_time_scale: float = Field(default=10, gt=0)

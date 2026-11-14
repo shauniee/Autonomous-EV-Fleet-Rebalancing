@@ -53,12 +53,14 @@ function updatePin(pin: L.Marker, position: L.LatLngTuple, icon: L.DivIcon, labe
   pin.setTooltipContent(label);
 }
 
+export type MapFocusTarget = { dispatchId: string } | { facility: Facility } | { zone: Zone };
+
 export function SingaporeMap({ zones, vehicles, placements, facilities = [], dispatches = [], traffic, telemetryFeedHealthy = true, selected, onSelect, selectedDispatch, onSelectDispatch, focusTarget, rentalDemandLevel }: {
   rentalDemandLevel: (zone: Zone) => DemandLevel;
   zones: Zone[]; vehicles: Vehicle[]; placements?: Record<string, VehiclePlacement> | null;
   facilities?: Facility[]; dispatches?: Dispatch[]; traffic?: TrafficSnapshot; telemetryFeedHealthy?: boolean; selected: string; onSelect: (id: string) => void;
   selectedDispatch: string; onSelectDispatch: (id: string) => void;
-  focusTarget?: { dispatchId: string } | { facility: Facility } | null;
+  focusTarget?: MapFocusTarget | null;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
@@ -126,7 +128,9 @@ export function SingaporeMap({ zones, vehicles, placements, facilities = [], dis
   ] as const;
   useEffect(() => { setFollowEV(false); }, [selected]);
   useEffect(() => {
-    const instance = L.map(element.current!, { preferCanvas: true, maxZoom: 18 }).setView([1.35, 103.82], 11);
+    // Leaflet can finish an earlier animated zoom after a zone focus and restore the old view.
+    const instance = L.map(element.current!, { preferCanvas: true, maxZoom: 18, zoomAnimation: false })
+      .setView([1.35, 103.82], 11);
     map.current = instance;
     instance.createPane('evPane').style.zIndex = '625';
     vehicleLayer.current = L.layerGroup().addTo(instance);
@@ -414,6 +418,13 @@ export function SingaporeMap({ zones, vehicles, placements, facilities = [], dis
     const instance = map.current;
     if (!mapVisible || !instance || !focusTarget || appliedFocus.current === focusTarget) return;
     setFollowEV(false);
+    if ('zone' in focusTarget) {
+      appliedFocus.current = focusTarget;
+      const { latitude, longitude } = focusTarget.zone.position;
+      instance.invalidateSize({ pan: false });
+      instance.setView([latitude, longitude], 13, { animate: false });
+      return;
+    }
     if (areaZone) {
       setSelectedZoneOnly(false);
       return;

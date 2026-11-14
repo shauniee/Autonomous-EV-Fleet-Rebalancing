@@ -1,6 +1,7 @@
-# Optional OneMap driving routes
+# OneMap driving routes
 
-Optional road-following simulation using the existing Dispatch, Fleet and map.
+A verified OneMap driving route is required for Dispatch approval. The default
+[CRDS](crds.md) policy also requires OneMap route evidence when planning.
 
 ## Configure
 
@@ -29,8 +30,8 @@ reloads configuration. Compose passes the same two variables only to Dispatch.
 For direct Python execution, export the variables yourself. Tokens never enter
 browser code, route records or log messages.
 
-Use `ROUTING_PROVIDER=SIMULATED` for the original straight-line model. OneMap mode
-does not silently fall back when a token, API request or route is invalid.
+`ROUTING_PROVIDER=SIMULATED` permits local observation and legacy previews.
+Dispatch refuses relocation approval without a verified OneMap route.
 
 ## Approved journey
 
@@ -46,13 +47,12 @@ Ground-team cable connection is assumed: simulated charging starts after verifie
 arrival/allocation and stops at 80%. There is no staff plug-in confirmation or
 physical charger control.
 
-1. Select an LTA parking or charging destination through the usual recommendation
-   and explicit approval workflow. Candidate ranking remains the existing
-   approximate-distance heuristic; this scaffold does not call routing for every pair.
-2. During approval, Dispatch calls the authenticated
-   [driving route endpoint](https://www.onemap.gov.sg/apidocs/routing) once. It
-   validates/decodes the geometry and instructions, then rechecks the EV's origin,
-   current version, battery reserve and destination charging requirement.
+1. Select a zone and request a recommendation. CRDS first screens facilities by
+   approximate distance and capacity, then asks Dispatch for a OneMap estimate
+   for each shortlisted EV and facility. Legacy previews use approximate corridors.
+2. During approval, Dispatch obtains a fresh road route. It validates the geometry
+   and rechecks the EV origin, current version, battery reserve and charging
+   requirement. For CRDS, the final route also goes through benefit revalidation.
 3. The command carries the immutable route. Fleet includes road distance in its
    atomic reserve check before claiming the car. No route credential is included.
 4. Before its first telemetry in the OneMap relocation mode, each of the
@@ -89,9 +89,9 @@ physical charger control.
 ## Limits and errors
 
 - Travel times are OneMap estimates. Live-traffic adjustment has not been verified.
-  Movement uses a uniform average speed: traffic signals, per-road speed changes,
-  live rerouting, charging taper and vehicle dynamics are not simulated.
-- The existing 30x clock accelerates journeys. UI durations are simulated journey
+  The route ETA supplies the nominal speed. Simulated traffic can cap speed
+  or stop movement on a covered segment. The issued route geometry stays fixed.
+- The configured simulation clock accelerates journeys (10× by default). UI durations are simulated journey
   minutes, not a promised wall-clock arrival time. Remaining time is proportional
   to distance and cannot infer waiting time during communication failures.
 - Tracking advances when telemetry arrives (five seconds by default, dashboard
@@ -108,10 +108,9 @@ physical charger control.
 - An off-road departure, missing road-access endpoint, or inconsistent road
   geometry fails closed (`ONEMAP_ORIGIN_NOT_ON_ROAD`,
   `ONEMAP_FACILITY_NO_ROAD_ACCESS`, or `ONEMAP_NO_SAFE_SPAWN_ROAD`).
-  Initial facility candidate scoring remains approximate: a recommended
-  facility can still fail strict road-access verification at approval, in
-  which case it is excluded from the approved dispatch; choose a different
-  site. No new facility/EV is silently substituted after approval.
+  Legacy previews can first encounter road-access failures at approval. CRDS
+  checks the route during planning and again at approval. Each approval is for
+  the exact selected EV and facility.
 - The **optional customer-rental workload** retains its separately modelled
   synthetic travel (straight-line movement); it is not presented as road-only
   OneMap navigation. This extension targets autonomous relocation and
@@ -123,5 +122,5 @@ physical charger control.
 - Once issued, the route is fixed. Existing active-journey restart limitations
   remain; there is no new crash-recovery or production navigation guarantee.
 
-Routing is disabled by default. Live authenticated responses and the full journey
-remain unverified until a token is supplied and the app is rebuilt.
+The default provider setting is `SIMULATED`. Configure OneMap and reload the
+Dispatch environment to exercise authenticated routing.

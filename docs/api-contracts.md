@@ -61,17 +61,33 @@ is displayed with its timestamp, not silently presented as a prediction.
 |---|---|
 | POST /recommendations | target_zone_id; 201 recommendation |
 | GET /recommendations/{id} | live recommendation; 404 if missing or expired |
+| POST /batch-recommendations | target_zone_id, quantity (1â€“20), optional purpose and vehicle/facility selection; 201 batch preview |
+| GET /batch-recommendations/{batch_id} | live batch preview; 404 if missing or expired |
+| POST /recommendation-requests | request_id, target_zone_id, quantity and optional vehicle selection; 202 queue receipt |
+| GET /recommendation-requests | Queue availability, mode and paginated requests, with optional status filter |
+| GET /recommendation-requests/{request_id} | Assessment status and batch preview when available |
+| POST /crds/revalidate | Internal Dispatch call with the exact route, recommendation and planning revision |
 
 Recommendation fields: recommendation_id, created_at, expires_at, policy_version,
 policy_settings, target, fleet_snapshot, selected_vehicle_id, ranked_candidates,
 excluded_candidates, decision_latency_ms, explanation and assumptions.
 
-Candidate fields include vehicle_id, state_version, eligible and exclusion_reasons.
-When telemetry exists, distance_km, energy_required_kwh, current_soc_pct and
-predicted_arrival_soc_pct are populated; otherwise they are null. Eligible candidates also include utilities,
-weighted_components, score and charging_assessment. No eligible EV is a successful
-201 with selected_vehicle_id=null, not an upstream error. Repeated POST creates a
-fresh advisory recommendation; it has no dispatch side effect.
+CRDS single recommendations and batch children use policy version `crds-v1`.
+Single and batch previews include a `crds` object with the decision, reason,
+approval flag, scenario parameters, source references and evidence. Ranked
+candidates and batch assignments include `crds_gain` in place of the legacy weighted
+score. Candidate details can include vehicle identity, distance, energy,
+predicted arrival SOC and traffic assessment. CRDS publishes per-EV exclusions
+in decision evidence. `HOLD` and `DEFER` previews have no selected EV or batch
+assignments. An upstream failure can still return an HTTP error.
+
+The synchronous endpoints create a new preview for each POST. The queued
+endpoint uses a caller-generated request UUID. Retry the same UUID with the
+same payload after an ambiguous response. A single `vehicle_id` requires
+quantity one. A queued `vehicle_ids` shortlist requires unique IDs and a
+quantity equal to its length. The queue requires configured persistence and
+CRDS in `ACTIVE` or `ADVISORY` mode. Recommendation requests do not reserve
+resources or dispatch vehicles. See [CRDS decisions and execution](crds.md).
 
 ## Errors and health
 
@@ -89,6 +105,10 @@ response schemas are also typed. Inapplicable candidate score fields are null.
 ## Implemented dispatch and relocation endpoints
 
 POST /dispatches approves a recommendation; GET /dispatches/{id} reports outcome.
+POST /batches approves a batch preview, with a stable request UUID. Dispatch
+exposes internal GET /dispatch-planning-state and POST /route-estimates for CRDS.
 EVs poll GET /vehicles/{id}/commands and POST acknowledgements/events under the
 dispatch ID. These operations are now implemented by the separate Dispatch Service
 and Fleet claim API. See [dispatch and relocation contracts and lifecycle](dispatch-relocation.md).
+
+Queued recommendation requests also accept `planning_mode` (`OPTIMIZE_COVERAGE` by default, or `FULFIL_REQUEST`) and up to 50 EVs. Multi-plan approval queues each reviewed batch through the durable Dispatch admission queue; accepted approval and completed relocation are separate outcomes. See [paced bulk relocation](paced-bulk-relocation.md).

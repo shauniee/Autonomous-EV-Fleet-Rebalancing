@@ -82,8 +82,9 @@ def traffic_identity(traffic):
 
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
-                   vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
-                   expand_age=None, for_batch=False,
+                   vehicle_id=None, vehicle_ids: list[str] | None = None, facility_id=None,
+                   route_override=None, exclude_dispatch_id=None,
+                   expand_age=None, for_batch=False, route_slots=None, traffic_slots=None,
                    planning_mode: CrdsPlanningMode = "OPTIMIZE_COVERAGE"):
     start = clock.monotonic()
     expand_age = settings.expand_age if expand_age is None else expand_age
@@ -94,11 +95,13 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if target is None:
         raise HTTPException(404, "TARGET_NOT_FOUND")
     params = parameters_for(settings)
+    requested_ids = set(vehicle_ids or ([vehicle_id] if vehicle_id else []))
+    shortlist = {"requested_vehicle_ids": sorted(requested_ids)} if vehicle_ids is not None else {}
     fingerprint = hashlib.sha256(json.dumps({
         "inputs": inputs.model_dump(mode="json", exclude={"traffic"}),
         "traffic": traffic_identity(inputs.traffic),
         "settings": settings.model_dump(), "model": MODEL_VERSION,
-        "expand_age": expand_age, "planning_mode": planning_mode,
+        "expand_age": expand_age, "planning_mode": planning_mode, **shortlist,
     }, sort_keys=True).encode()).hexdigest()
     metadata = CrdsMetadata(planning_mode=planning_mode,
         decision="DEFER", reason_code="INCOMPLETE_INPUTS", parameters=params,
@@ -114,23 +117,23 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             "planning_instance_id": str(inputs.planning.instance_id), "planning_revision": inputs.planning.revision,
             "traffic_instance_id": traffic.get("instance_id"), "traffic_version": traffic.get("scenario_version"),
             "traffic_mode": traffic.get("source"), "evaluated_at": inputs.evaluated_at.isoformat(),
-            "expand_age": expand_age,
+            "expand_age": expand_age, **shortlist,
             "simulation_time_scale": settings.simulation_time_scale})
     empty = CrdsPlan(inputs, CrdsEvaluation(decision="DEFER", reason_code="INCOMPLETE_INPUTS"),
                      [], [], {}, {}, metadata, start + settings.deadline_seconds)
     vehicles = {v.vehicle_id: VehicleDecision(outcome="INCOMPLETE", reason="ASSESSMENT_INCOMPLETE")
-                for v in inputs.fleet.vehicles if not vehicle_id or v.vehicle_id == vehicle_id}
+                for v in inputs.fleet.vehicles if not requested_ids or v.vehicle_id in requested_ids}
     for identifier, reason in inputs.telemetry_exclusions.items():
-        if not vehicle_id or identifier == vehicle_id:
+        if not requested_ids or identifier in requested_ids:
             vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason=reason)
     for row in inputs.relocation_exclusions:
-        if not vehicle_id or row.vehicle_id == vehicle_id:
+        if not requested_ids or row.vehicle_id in requested_ids:
             prior = vehicles.get(row.vehicle_id)
             reason = prior.reason if prior and row.reason == "TELEMETRY_UNAVAILABLE" else row.reason
             vehicles[row.vehicle_id] = VehicleDecision(
                 outcome="EXCLUDED", reason=reason, dispatch_ids=row.dispatch_ids)
-    if vehicle_id and vehicle_id not in vehicles:
-        vehicles[vehicle_id] = VehicleDecision(outcome="EXCLUDED", reason="VEHICLE_MISSING")
+    for identifier in requested_ids.difference(vehicles):
+        vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason="VEHICLE_MISSING")
 
     def defer(reason, evidence_reason=None):
         metadata.reason_code = reason
@@ -240,7 +243,21 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         for identifier in candidate_pools.keys() - assigned:
             vehicles[identifier] = VehicleDecision(
                 outcome="EXCLUDED", reason="DESTINATION_CAPACITY_LIMIT")
-    semaphore = asyncio.Semaphore(4)
+    semaphore = route_slots if route_slots is not None else asyncio.Semaphore(4)
+
+    async def traffic_work(function, *args, **kwargs):
+        if traffic_slots is None:
+            return await asyncio.to_thread(function, *args, **kwargs)
+        await traffic_slots.acquire()
+        work = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+
+        def release(task):
+            traffic_slots.release()
+            if not task.cancelled():
+                task.exception()
+
+        work.add_done_callback(release)
+        return await asyncio.shield(work)
 
     async def prepare(candidate):
         vehicle, site, assessment = candidate
@@ -264,7 +281,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                         or estimate.origin != vehicle.telemetry.position):
                     raise ValueError("ROUTE_ESTIMATE_IDENTITY_CHANGED")
                 route = estimate.route
-            evaluation = await asyncio.to_thread(
+            evaluation = await traffic_work(
                 assess_traffic, [p.model_dump() for p in route.geometry],
                 route.distance_km, route.duration_seconds, traffic, inputs.evaluated_at)
             if evaluation["blocked"]:
@@ -290,7 +307,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
             modeled_route = route if route.traffic_assessment is not None else route.model_copy(update={
                 "duration_seconds": evaluation["estimated_duration_seconds"] or route.duration_seconds,
                 "traffic_assessment": evaluation})
-            minutes = await asyncio.to_thread(
+            minutes = await traffic_work(
                 travel_minutes, modeled_route, traffic, inputs.evaluated_at,
                 time_scale=settings.simulation_time_scale)
             origin = inputs.vehicle_zones.get(vehicle.vehicle_id)
@@ -534,11 +551,12 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
                        f"{plan.metadata.worst_case_gain_vehicle_minutes:g} points. "
                        "Coverage trade-offs require explicit dispatcher approval.")
     elif selected:
-        explanation = (f"{selected} improves the modeled coverage score by at least "
-                       f"{plan.metadata.worst_case_gain_vehicle_minutes:g} points across "
-                       f"{plan.metadata.scenario_count} declared futures.")
+        explanation = (f"Move {selected} to {target.name}: customers there gain about "
+                       f"{plan.metadata.worst_case_gain_vehicle_minutes:.0f} minutes of extra EV availability, "
+                       f"even in the busiest of {plan.metadata.scenario_count} demand patterns checked.")
     else:
-        explanation = ("Wait: no assessed move has sufficient fleet-wide benefit." if plan.metadata.decision == "HOLD"
+        explanation = ("Wait: no possible move would help customers enough to be worth the trip."
+                       if plan.metadata.decision == "HOLD"
                        else "The relocation assessment could not be completed.")
     return {"recommendation_id": str(uuid4()), "created_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=policy.recommendation_ttl_seconds)).isoformat(),

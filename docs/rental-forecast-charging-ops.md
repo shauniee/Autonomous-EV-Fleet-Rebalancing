@@ -31,15 +31,12 @@ The Simulation Console shows the active rentals and an advisory 30-minute
 supply comparison using eligible-looking future arrivals. The Operator Dashboard
 shows possible inbound returns beside the backend projected shortage.
 
-These are **what-if estimates**, not Demand or Rebalancing inputs. The console
-uses the current approximate zone and energy assumptions; the operator outlook
-uses a simpler current-SOC filter. Neither promises available charging bays,
-arrival punctuality or sufficient battery after the trip. The existing
-backend recommendation/approval flow is unchanged.
-
-True pre-booked rentals *before* customer pickup, economic incentives for
-customer destinations, probabilistic ETA confidence and automatic integration
-with the rebalancing formula are **not implemented** in this iteration.
+These displays are advisory estimates. [CRDS](crds.md) builds its own forecasts
+from Fleet's active rental records, using the expected return zone, expected
+end time and a minimum current SOC of 30% or the configured reserve, whichever
+is higher. It tests cases where those returns are delayed or absent. A forecast
+never makes a rented EV eligible to move. Dispatch relies on current Fleet
+observations and separately revalidates the move's benefit before approval.
 
 ## Battery alerts and charging operations
 

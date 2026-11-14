@@ -1,14 +1,16 @@
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
+from typing import Annotated
 from uuid import UUID
 import httpx
-from fastapi import Header, Request
+from fastapi import Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from ev_fleet.common.logging import base_app
 from ev_fleet.contracts.common import Position
 from .routing import road_match_spawn, routing_configuration
 from ev_fleet.contracts.crds import CrdsRouteRequest, CrdsRouteEstimate
-from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchDispatch
+from ev_fleet.contracts.dispatch import DispatchApproval, CommandAcknowledgement, DispatchEvent, Dispatch, DispatchList, CommandList, BatchApproval, BatchApprovalLookup, BatchDispatch
+from ev_fleet.contracts.dispatch import BatchApprovalGroup, BatchApprovalGroupPage, BatchApprovalGroupRequest
 from .service import DispatchService
 from .approval_evidence import ApprovalCheckError
 from .recovery import assess_recovery
@@ -31,16 +33,17 @@ def create_app(settings=None, client=None, clock=None, background=True):
             await service.start()
             worker = asyncio.create_task(service.reconcile_loop()) if background else None
             queue_worker = asyncio.create_task(service.queue_loop()) if background else None
+            group_worker = (asyncio.create_task(service.batch_groups.run())
+                            if background and service.repository.enabled else None)
+            app.state.batch_group_worker = group_worker
             try:
                 yield
             finally:
-                for task in (worker, queue_worker):
-                    if task:
-                        task.cancel()
-                for task in (worker, queue_worker):
-                    if task:
-                        with suppress(asyncio.CancelledError):
-                            await task
+                workers = [task for task in (worker, queue_worker, group_worker) if task is not None]
+                for task in workers:
+                    task.cancel()
+                if workers:
+                    await asyncio.gather(*workers, return_exceptions=True)
                 await service.close()
 
     app.router.lifespan_context = lifespan
@@ -90,9 +93,31 @@ def create_app(settings=None, client=None, clock=None, background=True):
     async def approved_batch_intent(request_id: UUID, recommendation_id: UUID):
         return await app.state.service.batch_intent(request_id, recommendation_id)
 
+    @app.get("/api/v1/batches", response_model=BatchApprovalLookup)
+    async def lookup_batches(request_id: Annotated[list[UUID], Query(min_length=1, max_length=31)]):
+        return app.state.service.lookup_batch_approvals(request_id)
+
     @app.get("/api/v1/batches/{request_id}", response_model=BatchDispatch)
     async def batch(request_id: UUID):
         return await app.state.service.get_batch(request_id)
+
+    @app.post("/api/v1/batch-approval-groups", status_code=202, response_model=BatchApprovalGroup)
+    async def submit_batch_group(body: BatchApprovalGroupRequest):
+        worker = app.state.batch_group_worker
+        if not app.state.service.repository.enabled:
+            raise HTTPException(503, "BATCH_APPROVAL_QUEUE_DISABLED")
+        if worker is None or worker.done():
+            raise HTTPException(503, "BATCH_APPROVAL_QUEUE_UNAVAILABLE")
+        return await app.state.service.batch_groups.submit(body)
+
+    @app.get("/api/v1/batch-approval-groups", response_model=BatchApprovalGroupPage)
+    async def list_batch_groups(offset: int = Query(default=0, ge=0),
+                                limit: int = Query(default=30, ge=1, le=100), unresolved: bool = False):
+        return app.state.service.batch_groups.page(offset, limit, unresolved=unresolved)
+
+    @app.get("/api/v1/batch-approval-groups/{group_id}", response_model=BatchApprovalGroup)
+    async def batch_group(group_id: UUID):
+        return app.state.service.batch_groups.detail(group_id)
 
     @app.get("/api/v1/dispatches", response_model=DispatchList)
     async def dispatches(vehicle_id: str | None = None):

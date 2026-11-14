@@ -63,7 +63,7 @@
 - No additional files.
 
 **Interfaces:**
-- Consumes: repository test scripts required by `AGENTS.md`.
+- Consumes: repository test scripts described in `docs/local-testing.md`.
 
 - [x] Run `.\scripts\test-local.ps1`.
 - [ ] Run `.\scripts\test-local.ps1 -Integration` because this is database and Kubernetes sensitive. **NOT VERIFIED:** the script stops because `act` is not installed.

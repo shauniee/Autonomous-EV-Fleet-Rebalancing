@@ -149,7 +149,8 @@ the map must not invent vehicle motion when telemetry is missing.
    valid until updated. CRDS still needs a valid target in every zone.
 2. In the **Operator Dashboard → Dispatch**, confirm Fleet, Demand and Facilities
    observations are available. Select **CBD** on the map or zone list and
-   request a recommendation. Inspect **Evidence** if the result is HOLD/DEFER.
+   request a recommendation. For queued requests, select **View request** or open
+   **Recommendations**. Inspect **Evidence** if the result is HOLD/DEFER.
 3. If the result is **MOVE**, review the proposed EV, parking destination,
    arrival battery and checked road route. Click **Review dispatch** and then
    **Approve**. Approval is deliberately separate from recommendation.
@@ -278,7 +279,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
 ```
 
-For macOS development checks, see [the local checks in `AGENTS.md`](AGENTS.md#local-checks-on-windows-and-macos).
+For macOS development checks, see [Local-first testing on macOS and Linux](docs/local-testing.md#macos-and-linux).
 Local frontend checks require Node.js **22+** and `npm ci` in each frontend
 directory before the first run.
 
@@ -334,7 +335,7 @@ Shared models and utilities are intentionally separate:
 ```text
 Fleet telemetry + zone demand
         -> operator selects a shortage zone
-        -> Rebalancing ranks eligible EVs
+        -> CRDS evaluates verified moves against the no-additional-move baseline
         -> operator reviews a recommendation
         -> Dispatch receives explicit approval
         -> Fleet atomically claims the EV
@@ -353,6 +354,10 @@ fulfilment. A bulk approval durably queues the reviewed assignments for up to
 transient failures automatically. Every admission revalidates current vehicle,
 route, battery, parking and configured policy checks. See
 [human-approved bulk jobs](docs/paced-bulk-relocation.md).
+For coverage optimization, CRDS recalculates fleet-wide benefit after each move.
+Operator-requested quantity planning instead fulfils physically feasible demand,
+with modeled coverage trade-offs shown for human review. Recommendation requests
+can be queued, and several reviewed plans can be approved together.
 
 ### Demand and shortages
 
@@ -372,7 +377,8 @@ kilometres, energy in kWh and state of charge as a percentage.
 
 Rebalancing excludes EVs with missing or stale telemetry, offline connectivity,
 unavailability, a rental or active relocation/claim, insufficient predicted
-arrival charge, or another conflicting operation. CRDS is the default
+arrival charge, or another conflicting operation.
+[Counterfactual Rebalancing under Delayed State (CRDS)](docs/crds.md) is the default
 rebalancing policy (`CRDS_MODE=ACTIVE`). It compares
 eligible moves across declared futures, ranks their minimum fleet-wide shortage
 reduction, and can recommend MOVE, HOLD or DEFER. Each dispatch still requires

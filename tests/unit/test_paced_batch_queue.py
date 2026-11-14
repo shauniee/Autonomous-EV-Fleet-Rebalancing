@@ -451,3 +451,85 @@ def test_enqueue_replay_returns_the_committed_frame_after_its_barrier(clock, mon
             assert replay["completed_count"] == 0
             assert replay["job_status"] == "QUEUED"
     asyncio.run(scenario())
+
+
+def test_group_queues_frozen_jobs_without_acquiring_and_tracks_durable_progress(clock, monkeypatch):
+    from ev_fleet.contracts.dispatch import BatchApprovalGroupRequest, queued_batch_approval_id
+    from tests.unit.test_recommendation_requests import MemorySnapshot
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle("group-paced-ev")
+            response = await cluster.client.post(
+                "http://rebalancing.test/api/v1/batch-recommendations",
+                json={"target_zone_id": "cbd", "quantity": 1})
+            batch_id = UUID(response.json()["batch_recommendation_id"])
+            cluster.dispatch.repository = MemorySnapshot("dispatch", {})
+            await cluster.dispatch.repository.start()
+            original_load = cluster.dispatch.load_batch_preview
+
+            async def load(batch_id, *, queued):
+                return await original_load(batch_id, queued=False)
+
+            async def forbidden(*args, **kwargs):
+                pytest.fail("group admission must freeze jobs without synchronous approval")
+
+            monkeypatch.setattr(cluster.dispatch, "load_batch_preview", load)
+            monkeypatch.setattr(cluster.dispatch, "approve_batch", forbidden)
+            queue = cluster.dispatch.batch_groups
+            body = BatchApprovalGroupRequest(group_id=uuid4(), batch_recommendation_ids=[batch_id])
+            await queue.submit(body)
+            await queue.process(queue.records[str(body.group_id)])
+            result = queue.detail(body.group_id)
+            assert result.status == "RUNNING"
+            assert result.plans[0].status == "RUNNING"
+            assert result.plans[0].approval.job_status == "QUEUED"
+            assert result.plans[0].request_id == queued_batch_approval_id(batch_id)
+            assert not cluster.facilities.holds
+            assert queue.page(0, 10, unresolved=True).groups == [result]
+            assert cluster.dispatch.lookup_batch_approvals([result.plans[0].request_id])["batches"][0]["job_status"] == "QUEUED"
+            record = next(iter(cluster.dispatch.store.records.values()))
+            record.approval_intent["queue_status"] = "CANCELLED"
+            cluster.dispatch.transition(record, "REJECTED", "OPERATOR_CLOSED_UNSTARTED_APPROVAL")
+            # Polling must not publish changes until they commit.
+            assert queue.detail(body.group_id) == result
+            assert cluster.dispatch.lookup_batch_approvals([result.plans[0].request_id])["batches"][0]["job_status"] == "QUEUED"
+            await cluster.dispatch.persist()
+            finished = queue.detail(body.group_id)
+            assert finished.status == "COMPLETED"
+            assert finished.plans[0].status == "REJECTED"
+            assert finished.plans[0].approval.job_status == "COMPLETED"
+            assert queue.page(0, 10, unresolved=True).groups == []
+    asyncio.run(scenario())
+
+
+def test_queued_plan_enforces_active_crds_and_durably_replays_refusal(clock):
+    from ev_fleet.contracts.dispatch import queued_batch_approval_id
+    from tests.unit.test_recommendation_requests import MemorySnapshot
+
+    async def scenario():
+        async with Cluster(clock) as cluster:
+            await cluster.vehicle("advisory-queue-ev")
+            response = await cluster.client.post(
+                "http://rebalancing.test/api/v1/batch-recommendations",
+                json={"target_zone_id": "cbd", "quantity": 1})
+            batch_id = UUID(response.json()["batch_recommendation_id"])
+            cluster.dispatch.repository = MemorySnapshot("dispatch", {})
+            await cluster.dispatch.repository.start()
+            request = BatchApproval(request_id=queued_batch_approval_id(batch_id),
+                                    batch_recommendation_id=batch_id)
+            with pytest.raises(HTTPException) as error:
+                await cluster.dispatch.enqueue_batch(request)
+            assert error.value.detail == "CRDS_ADVISORY_ONLY"
+            assert not cluster.dispatch.store.records
+            lookup = cluster.dispatch.lookup_batch_approvals([request.request_id])
+            assert lookup["batches"] == []
+            assert lookup["refusals"][0]["reason_code"] == "CRDS_ADVISORY_ONLY"
+            restored = DispatchService(cluster.client, cluster.config, clock,
+                                       cluster.dispatch.repository)
+            await restored.start()
+            clock.advance(1801)
+            with pytest.raises(HTTPException) as replay:
+                await restored.enqueue_batch(request)
+            assert replay.value.detail == "CRDS_ADVISORY_ONLY"
+    asyncio.run(scenario())

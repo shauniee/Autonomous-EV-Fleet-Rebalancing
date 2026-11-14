@@ -9,9 +9,9 @@ from uuid import UUID, uuid5
 
 from fastapi import HTTPException
 
-from ev_fleet.contracts.dispatch import DispatchApproval, VehicleClaim
+from ev_fleet.contracts.dispatch import DispatchApproval, VehicleClaim, queued_batch_approval_id
 from ev_fleet.contracts.facilities import ParkingHold
-from ev_fleet.contracts.recommendations import BatchRecommendation, Recommendation
+from ev_fleet.contracts.recommendations import Recommendation
 from ev_fleet.contracts.vehicles import DashboardFleetSnapshot, FleetSnapshot
 from .approval_evidence import record_approval
 from .clients import request_json
@@ -79,17 +79,16 @@ async def enqueue_batch(service, body):
             # barrier. Never acknowledge only the surviving in-memory intent.
             await service.persist_if_changed()
             return await service.get_batch(key)
+        refused = service.batch_approval_refusals.get(key)
+        if refused is not None:
+            if refused["batch_recommendation_id"] != str(body.batch_recommendation_id):
+                raise HTTPException(409, "BATCH_REQUEST_ID_CONFLICT")
+            await service.persist_if_changed()
+            raise HTTPException(refused["status_code"], refused["reason_code"])
         if str(body.batch_recommendation_id) in service.batch_recommendations:
             raise HTTPException(409, "BATCH_ALREADY_APPROVED")
-        batch = await request_json(service.client, "GET",
-            f"{service.settings.rebalancing_url}/api/v1/batch-recommendations/{body.batch_recommendation_id}",
-            model=BatchRecommendation)
-        if batch.batch_recommendation_id != body.batch_recommendation_id:
-            raise HTTPException(503, "BATCH_IDENTITY_MISMATCH")
-        if batch.expires_at <= service.clock.now():
-            raise HTTPException(409, "BATCH_EXPIRED")
-        if not batch.assignments:
-            raise HTTPException(409, "NO_BATCH_ASSIGNMENTS")
+        batch = await service.load_batch_preview(body.batch_recommendation_id,
+            queued=body.request_id == queued_batch_approval_id(body.batch_recommendation_id))
         # Read all frozen recommendations before publishing any queue records.
         recommendations = []
         vehicles, recommendation_ids = set(), set()

@@ -1,9 +1,8 @@
 # Mock parking and charging facilities
 
-This is an additive, simulation-only first step. All 15 location names, coordinates,
-parking counts and charger counts are **fictional test data**, placed near the
-six simulated Singapore zone centres. They must not be represented as public
-carpark measurements, reservable bays, charging provider data or actual roads.
+The mock catalogue contains 15 fictional locations near the six simulated
+Singapore zone centres. For provider-backed observations see [LTA DataMall](lta-datamall.md).
+Both sources support simulated allocation.
 
 ## Implemented
 
@@ -17,11 +16,11 @@ carpark measurements, reservable bays, charging provider data or actual roads.
   outage handling. The existing dashboard can continue without Facilities.
 - Docker Compose and local Kubernetes wiring for Facilities as its own service.
 
-The data do not update dynamically yet and no reservations are held. Neither the
-EV ranking policy nor the dispatch endpoints consume Facilities data yet;
-**parking and charger pins are information-only**. Actual rental returns,
-multi-EV dispatch, parking-slot claiming and eventual PostgreSQL durability
-are later enhancements. Reuse this API contract for a future live data adapter.
+[CRDS](crds.md) reads facility freshness, parking and charger capacity before
+requesting road evidence. Dispatch rechecks the selected facility at approval
+and acquires a simulated hold before the Fleet claim. Verified arrival can
+turn that hold into occupancy. See [multi-EV allocation](multi-ev-parking-allocation.md)
+for the hold lifecycle.
 
 ## Development
 
@@ -40,8 +39,8 @@ For a local Python backend without containers:
 ```
 
 Dashboard: `http://127.0.0.1:8080` for Compose or its configured dev port.
-The Facilities data are read-only and the UI clearly labels them as mock.
-Existing Fleet/Demand/Dispatch endpoints and strategy evaluation experiment results are unchanged.
+The dashboard identifies the facility data source. Recommendation previews
+only read capacity. Approval can change simulated availability.
 
 ## Testing
 
@@ -60,11 +59,5 @@ runtime require verification in a Docker-enabled environment.
 
 ## Design boundary
 
-A public "available space" is never necessarily an operator-reserved space.
-Future selection must apply destination operating permissions, capacity freshness,
-battery viability and exclusive fleet slot claims **at approval/execution time**.
-
-
-multi-EV parking allocation extends this service with in-process mock parking reservations and
-occupancy. It is no longer read-only. See `docs/multi-ev-parking-allocation.md`
-for the POST hold endpoints. These are NOT reservations for real public bays.
+Available-space observations are planning inputs. Facility holds reserve
+capacity inside the simulation only.
