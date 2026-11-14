@@ -76,6 +76,13 @@ data:
             return 200 'ok';
         }
 
+        # Internal machine-to-machine routes: simulators and Dispatch only, never the browser.
+        # telemetry$ is anchored so the dashboard's GET .../telemetry-history stays allowed.
+        location ~ ^/api/fleet/vehicles/[^/]+/(claims/|telemetry$|telemetry-sessions$|simulator-) { return 403; }
+        location ~ ^/api/dispatch/vehicles/[^/]+/commands$ { return 403; }
+        location ~ ^/api/dispatch/dispatches/[^/]+/(acknowledgements|events|recovery/handoff)$ { return 403; }
+        location ~ ^/api/facilities/(holds/|facilities/[^/]+/holds$|vehicles/[^/]+/parking/(vacate|access-position)$) { return 403; }
+
         location /api/fleet/ {
             proxy_pass http://fleet:8000/api/v1/;
             proxy_connect_timeout 2s;
