@@ -27,11 +27,13 @@ import { RecommendationVehiclePicker } from './components/RecommendationVehicleP
 import { RelocationPanel } from './components/RelocationPanel';
 import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, readDemandThresholds } from './components/DemandThresholds';
 
+type PlanningMode = NonNullable<RecommendationDraft['planning_mode']>;
+
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
 type PendingBatchApproval = QueuedBatchApproval & { accepted?: boolean };
 interface RoutingConfiguration {
-  provider: 'SIMULATED' | 'ONEMAP';
+  provider: 'SIMULATED' | 'ONEMAP' | 'OFFLINE_DEMO';
   configured: boolean;
   reason_code: string | null;
 }
@@ -113,6 +115,7 @@ export default function App() {
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [purpose, setPurpose] = useState<'REBALANCE' | 'CHARGE'>('REBALANCE');
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('OPTIMIZE_COVERAGE');
   const [selectedVehicle, setSelectedVehicle] = useState('');
   const [selectedVehicles, setSelectedVehicles] = useState<string[] | null>(null);
   const [selectedFacility, setSelectedFacility] = useState('');
@@ -187,7 +190,9 @@ export default function App() {
   const sites = facilities.data?.facilities ?? [];
   const liveFacilities = facilities.data?.data_source === 'LTA_DATAMALL';
   // An unknown provider must not fall back to a zone-only destination.
-  const facilityWorkflow = facilities.data?.data_source !== 'MOCK' || quantity > 1 || purpose === 'CHARGE' || !!selectedVehicle;
+  // Only the batch endpoint accepts a planning mode, so a dispatcher override always uses it.
+  const facilityWorkflow = facilities.data?.data_source !== 'MOCK' || quantity > 1 || purpose === 'CHARGE' || !!selectedVehicle
+    || planningMode === 'FULFIL_REQUEST';
   const criticalZones = zones.filter(item => rentalDemandLevel(item) === 'Critical').length;
   const feedIssues = [heat, fleet, dispatches, facilities].filter(resource => resource.error).length;
   const feedsReady = [heat, fleet, dispatches, facilities].every(resource => resource.data);
@@ -222,7 +227,7 @@ export default function App() {
   const draft = drafts.find(item => {
     const ids = item.vehicle_ids ?? (item.vehicle_id ? [item.vehicle_id] : []);
     return item.target_zone_id === selected && item.quantity === requestQuantity &&
-      (item.planning_mode ?? 'OPTIMIZE_COVERAGE') === 'FULFIL_REQUEST' &&
+      (item.planning_mode ?? 'OPTIMIZE_COVERAGE') === planningMode &&
       ids.length === (shortlist?.length ?? 0) && ids.every(id => shortlist?.includes(id));
   });
   async function submitRecommendation(inputs: RecommendationDraft) {
@@ -254,7 +259,7 @@ export default function App() {
     if (queuedRebalance) {
       if (!requestQuantity) return;
       await submitRecommendation(draft ?? {
-        request_id: crypto.randomUUID(), target_zone_id: selected, quantity: requestQuantity, planning_mode: 'FULFIL_REQUEST',
+        request_id: crypto.randomUUID(), target_zone_id: selected, quantity: requestQuantity, planning_mode: planningMode,
         ...(shortlist ? { vehicle_ids: shortlist } : {}),
       });
       return;
@@ -271,7 +276,7 @@ export default function App() {
       } else {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
           method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected, quantity,
-            ...(purpose === 'CHARGE' ? { purpose } : { planning_mode: 'FULFIL_REQUEST' }),
+            ...(purpose === 'CHARGE' ? { purpose } : { planning_mode: planningMode }),
             ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
             ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
         });
@@ -565,6 +570,11 @@ export default function App() {
                   : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} ${criticalZones === 1 ? 'zone' : 'zones'} with critical demand` : 'No zones with critical demand')}</span>}
               </div>
               <div className="inspector-body" ref={inspectorBody}>
+                {routing.data?.provider === 'OFFLINE_DEMO' && <section className="warning routing-setup" role="status" aria-label="Offline demo routing">
+                  <strong>Offline demo routes: straight-line, not real roads.</strong>
+                  <p>EVs move in straight lines and may cross buildings or water. Set <code>ROUTING_PROVIDER=ONEMAP</code> and a
+                    {' '}valid <code>ONEMAP_ACCESS_TOKEN</code> for real road routes.</p>
+                </section>}
                 {routing.data && !routing.data.configured && <section className="warning routing-setup" role="status" aria-label="Road routing setup">
                   <strong>Road routing is not configured for dispatch.</strong>
                   <p>Demand, vehicles and the map can still be viewed, but this computer cannot verify the road routes needed for EV relocation.</p>
@@ -628,10 +638,16 @@ export default function App() {
                         clearFinishedBatches();
                       }}><option value="">Any eligible</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
                     </div>}
+                    {purpose === 'REBALANCE' && <div className="request-field request-planning"><label htmlFor="planning-mode">Planning mode</label>
+                      <div className="select-wrap"><select className="form-select" id="planning-mode" value={planningMode} disabled={recommending || sendingRequest || submitting} onChange={event => {
+                        setPlanningMode(event.target.value as PlanningMode); clearFinishedBatches();
+                      }}><option value="OPTIMIZE_COVERAGE">Optimise coverage</option><option value="FULFIL_REQUEST">Fulfil exact quantity</option></select></div>
+                      <p className="muted">{planningMode === 'FULFIL_REQUEST'
+                        ? 'Overrides CRDS: plans the requested number of safe moves even if they lose EV cover elsewhere. Trade-offs are shown before approval.'
+                        : 'CRDS only proposes moves that gain EV cover in every scenario it checks, and otherwise recommends waiting.'}</p></div>}
                   </div>
                   {shortlist !== null && <RecommendationVehiclePicker vehicles={vehicles} selected={shortlist}
                     onChange={setSelectedVehicles} disabled={sendingRequest || submitting}/>}
-                  {purpose === 'REBALANCE' && facilityWorkflow && <p className="muted">Plan the requested number of feasible relocations. Coverage trade-offs are shown for dispatcher review; safety and capacity checks still apply.</p>}
                   {purpose === 'CHARGE' ? <p className="muted">After arrival, ground staff connect the cable. Simulated charging runs to 80%; staff then disconnect it before the EV returns to service.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
                   {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => setSelectedFacility('')}>Clear advised charger</button></p>}
                 </section>}
@@ -701,6 +717,7 @@ export default function App() {
               if (!target) { notify('warning', 'This zone is unavailable on the map.'); return; }
               choose(target.zone_id);
               setPurpose('REBALANCE');
+              setPlanningMode(row.planning_mode ?? 'OPTIMIZE_COVERAGE');
               setQuantity(row.quantity);
               setSelectedVehicles(row.vehicle_ids ?? (row.vehicle_id ? [row.vehicle_id] : null));
               setMapFocus({ zone: target });

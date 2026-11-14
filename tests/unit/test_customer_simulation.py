@@ -192,3 +192,29 @@ def test_customer_rental_http_lifecycle_and_relocation_exclusion():
         await store.close()
 
     asyncio.run(exercise())
+
+
+def test_rental_start_vacates_parking_and_tolerates_facilities_failure():
+    import asyncio
+    import httpx
+    from ev_fleet.simulations.customer import RentalVehicle
+
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, str(request.url)))
+        return httpx.Response(503 if len(calls) > 1 else 200, json={})
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            node = RentalVehicle("http://fleet.test", "http://dispatch.test", "customer-ev-01",
+                                 ZONES["punggol"], 85, client=client,
+                                 parking_url="http://facilities.test")
+            await node.vacate_parking()
+            await node.vacate_parking()  # A Facilities outage must not abort the trip.
+            unwired = RentalVehicle("http://fleet.test", "http://dispatch.test", "customer-ev-02",
+                                    ZONES["punggol"], 85, client=client)
+            await unwired.vacate_parking()
+        assert calls == [("POST", "http://facilities.test/api/v1/vehicles/customer-ev-01/parking/vacate")] * 2
+
+    asyncio.run(exercise())

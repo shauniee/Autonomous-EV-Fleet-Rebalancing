@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from .common import Model, Position
 from .dispatch import CommandAcknowledgement, DispatchEvent, DispatchState, RelocationCommand, RecoveryOperation
+from .routing import APPROVED_ROUTE_SOURCES
 from .vehicles import TelemetryUpdate
 
 
@@ -91,7 +92,7 @@ class SimulatorCheckpoint(Model):
                 or self.accepted is None):
             raise ValueError("checkpoint execution identity or physical state is inconsistent")
         if self.accepted:
-            if (command.route is None or command.route.source != "ONEMAP"
+            if (command.route is None or command.route.source not in APPROVED_ROUTE_SOURCES
                     or physical.relocation_state not in ("DISPATCHED", "RELOCATING", "ARRIVED", "FAILED")
                     or physical.charging_state != "NOT_CHARGING" or physical.parked_facility_id is not None
                     or physical.distance_travelled_km > command.route.distance_km + 1e-9):

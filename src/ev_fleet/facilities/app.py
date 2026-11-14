@@ -100,6 +100,10 @@ def create_app(store=None, cache=None, charging_client=None):
              response_model=VehicleParking)
     async def repair_vehicle_parking_access(vehicle_id: str, position: Position):
         return await state.repair_vehicle_parking_access(vehicle_id, position)
+    @app.post("/api/v1/vehicles/{vehicle_id}/parking/vacate", response_model=VehicleParking)
+    async def vacate_vehicle_parking(vehicle_id: str):
+        return await state.vacate(vehicle_id)
+
     @app.get("/api/v1/vehicles/{vehicle_id}/parking-observation",
              response_model=ParkingObservation)
     async def parking_observation(vehicle_id: str, request_id: UUID,

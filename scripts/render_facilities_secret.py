@@ -53,8 +53,8 @@ def settings(path, defaults=DEFAULTS, use_environment=True):
                          ("LTA_PARKING_MAX_AGE_SECONDS", 60), ("LTA_CHARGING_MAX_AGE_SECONDS", 300)):
         if key in values and (not values[key].isdigit() or int(values[key]) < minimum):
             raise ValueError(f"{key} must be an integer >= {minimum}")
-    if "ROUTING_PROVIDER" in values and values["ROUTING_PROVIDER"] not in ("SIMULATED", "ONEMAP"):
-        raise ValueError("ROUTING_PROVIDER must be SIMULATED or ONEMAP")
+    if "ROUTING_PROVIDER" in values and values["ROUTING_PROVIDER"] not in ("SIMULATED", "ONEMAP", "OFFLINE_DEMO"):
+        raise ValueError("ROUTING_PROVIDER must be SIMULATED, ONEMAP or OFFLINE_DEMO")
     if ("TRAFFIC_SIMULATION_ENABLED" in values
             and values["TRAFFIC_SIMULATION_ENABLED"].lower() not in ("true", "false")):
         raise ValueError("TRAFFIC_SIMULATION_ENABLED must be true or false")

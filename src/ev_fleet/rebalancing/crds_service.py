@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.travel import distance_km
+from ev_fleet.contracts.routing import APPROVED_ROUTE_SOURCES
 from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsFuture, CrdsInputs, CrdsMetadata, CrdsMove,
                                    CrdsMoveOutcome, CrdsPlanningMode, CrdsRouteEstimate, CrdsRouteRequest)
 from .crds import apply_move, shortage_by_zone, shortage_score
@@ -142,7 +143,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         return empty
 
     def defer_route_failure(failure):
-        reason = str(failure) if isinstance(failure, ValueError) else "ROUTE_EVIDENCE_UNAVAILABLE"
+        reason = str(failure) if isinstance(failure, ValueError) else route_failure_reason(failure)
         return defer(reason, route_failure_reason(failure))
 
     if inputs.issues:
@@ -264,7 +265,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         async with semaphore:
             if route_override is not None:
                 route = route_override
-                if route.source != "ONEMAP" or distance_km(
+                if route.source not in APPROVED_ROUTE_SOURCES or distance_km(
                         vehicle.telemetry.position.model_dump(), route.geometry[0].model_dump()) > .005:
                     raise ValueError("ROUTE_ORIGIN_CHANGED")
             else:

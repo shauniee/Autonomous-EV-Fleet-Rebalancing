@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { BatchDispatch, CrdsMetadata, RecommendationRequest } from '../src/api/contracts';
-import { CrdsSummary } from '../src/components/CrdsSummary';
+import { CrdsEvidence, CrdsSummary } from '../src/components/CrdsSummary';
 import { requestApprovalStatus } from '../src/components/RecommendationRequests';
 
 const request: RecommendationRequest = {
@@ -46,8 +46,33 @@ describe('queued recommendation dispatch progress', () => {
     };
     render(<CrdsSummary result={result} batchStop={null}/>);
     const summary = screen.getByRole('region', { name: 'Fleet-wide availability assessment' });
-    expect(summary).toHaveTextContent('-12 vehicle-minutes');
+    expect(summary).toHaveTextContent('loses 12 min of EV cover');
     expect(summary).toHaveTextContent('may increase shortages in other zones');
     expect(summary).toHaveTextContent('Feasible relocations can be planned even when they reduce fleet coverage');
+  });
+
+  it('leads a deferred assessment with the EVs that could not be checked', () => {
+    const result: CrdsMetadata = {
+      decision: 'DEFER', reason_code: 'ROUTE_EVIDENCE_UNAVAILABLE', approval_allowed: false,
+      worst_case_gain_vehicle_minutes: null, worst_case_future_id: null, shortage_changes_by_zone: {},
+      arrival_minutes_min: null, arrival_minutes_max: null, scenario_count: 6, scenario_model_version: 'test',
+      epoch_id: 'epoch', input_fingerprint: 'input',
+      parameters: { horizon_minutes: 30, slot_minutes: 1, minimum_gain_vehicle_minutes: 1 },
+      source_references: { decision_evidence: { version: 1, assessment_reasons: ['DESTINATION_DATA_CHANGED'],
+        batch_stop_reasons: [], vehicles: {
+          'ev-scored': { outcome: 'NOT_SELECTED', reason: 'NO_USEFUL_MOVE', related_reasons: [], dispatch_ids: [],
+            gain_vehicle_minutes: -5, origin_shortage_increase: 5 },
+          'ev-unchecked': { outcome: 'INCOMPLETE', reason: 'DESTINATION_DATA_CHANGED', related_reasons: [], dispatch_ids: [] },
+        } } },
+    } as CrdsMetadata;
+    render(<><CrdsSummary result={result} batchStop={null}/><CrdsEvidence result={result}/></>);
+    const summary = screen.getByRole('region', { name: 'Fleet-wide availability assessment' });
+    expect(summary).toHaveTextContent('Destination parking data changed or became unavailable');
+    expect(summary).not.toHaveTextContent('road routes');
+    expect(summary).toHaveTextContent('1 EV could not be checked');
+    const evidence = screen.getByRole('region', { name: 'Fleet-wide assessment evidence' });
+    expect(screen.getAllByRole('heading', { level: 4 }).map(h => h.textContent))
+      .toEqual(['EVs with incomplete assessments (1)', 'EVs not selected (1)']);
+    expect(evidence).toHaveTextContent('these are not final decisions');
   });
 });

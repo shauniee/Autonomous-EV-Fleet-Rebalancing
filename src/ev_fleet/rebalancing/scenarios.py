@@ -62,7 +62,7 @@ class TrafficScenarios:
         self._active()
         if self.version != body.expected_version:
             raise HTTPException(409, "TRAFFIC_SCENARIO_VERSION_CONFLICT")
-        if route is None or route.source not in ("ONEMAP", "OSRM"):
+        if route is None or route.source not in ("ONEMAP", "OSRM", "OFFLINE_DEMO"):
             raise HTTPException(409, "APPROVED_ROAD_GEOMETRY_REQUIRED")
         points = route.geometry
         if body.segment_index >= len(points) - 1:

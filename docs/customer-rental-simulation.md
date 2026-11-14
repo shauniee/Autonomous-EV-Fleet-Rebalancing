@@ -86,6 +86,12 @@ when they have no active rental/claim.
   *not* a Dispatch relocation. When the car arrives, its node sends fresh
   telemetry, confirms the rental return with Fleet, and only then restores
   the available status.
+- After Fleet confirms a rental, the node calls Facilities
+  `POST /api/v1/vehicles/{vehicle_id}/parking/vacate` (`--facilities-url`,
+  default `FACILITIES_URL`). This frees the carpark bay of a car that an
+  earlier relocation parked there. Facilities refuses while a charging cable is
+  still connected. A failed call is logged and the trip continues; the bay then
+  stays counted until the car's next carpark arrival.
 - The finite Job finishes when scheduled requests and active trips are complete. The persistent Deployment instead retains telemetry and dispatch polling after the generator completes.
   Logs contain customer START/RETURN records and a JSON SUMMARY of attempted,
   returned, unfulfilled and failed requests. The operator Dashboard can show

@@ -12,6 +12,7 @@ from ev_fleet.contracts.dispatch import ClaimRequest, RelocationCommand, Vehicle
 from ev_fleet.contracts.vehicles import DashboardFleetSnapshot, FleetSnapshot, VehicleState
 from ev_fleet.contracts.demand import ZoneState
 from ev_fleet.contracts.recommendations import Recommendation, BatchRecommendation
+from ev_fleet.contracts.routing import APPROVED_ROUTE_SOURCES
 from ev_fleet.contracts.facilities import Facility, ParkingHold, ParkingHoldRequest
 from ev_fleet.contracts.dispatch import ApprovalDecision, DispatchApproval, queued_batch_approval_id
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
@@ -247,7 +248,7 @@ class DispatchService:
         route = await driving_route(self.client, self.routing, origin.model_dump(),
                                     facility.position.model_dump(), self.settings.arrival_tolerance_km,
                                     facility=True)
-        if route is None or route.source != "ONEMAP":
+        if route is None or route.source not in APPROVED_ROUTE_SOURCES:
             raise HTTPException(409, "ONEMAP_ROUTE_REQUIRED")
         result = CrdsRouteEstimate(vehicle_id=vehicle.vehicle_id, facility_id=facility.facility_id,
             fleet_instance_id=fleet.instance_id, control_version=vehicle.control_version, origin=origin, route=route)
@@ -353,7 +354,7 @@ class DispatchService:
         route = await driving_route(self.client, self.routing, origin, destination.model_dump(),
                                     self.settings.arrival_tolerance_km,
                                     facility=parking is not None) if origin else None
-        if route is None or route.source != "ONEMAP":
+        if route is None or route.source not in APPROVED_ROUTE_SOURCES:
             raise ApprovalCheckError(409, "ONEMAP_ROUTE_REQUIRED", ApprovalDecision(
                 status="REJECTED", reason_code="NO_TELEMETRY" if origin is None else "ONEMAP_ROUTE_REQUIRED"))
         if route and self.traffic_enabled:

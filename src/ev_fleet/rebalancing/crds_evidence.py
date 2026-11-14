@@ -72,6 +72,11 @@ def route_failure_reason(error: BaseException) -> str:
             return "ROAD_ROUTE_NOT_FOUND"
         if code == "ONEMAP_TIMEOUT":
             return "ROUTE_LOOKUP_TIMEOUT"
+        # Dispatch rechecks the destination before routing; a failing parking feed lands here.
+        if code in ("PARKING_DESTINATION_CHANGED", "FACILITY_NOT_FOUND"):
+            return "DESTINATION_DATA_CHANGED"
+        if code == "ROUTE_ESTIMATE_INPUT_CHANGED":
+            return "ROUTE_ESTIMATE_IDENTITY_CHANGED"
     if isinstance(error, ValueError) and str(error) in (
             "ROUTE_ORIGIN_CHANGED", "ROUTE_ESTIMATE_IDENTITY_CHANGED", "CHARGING_AVAILABILITY_UNKNOWN"):
         return str(error)

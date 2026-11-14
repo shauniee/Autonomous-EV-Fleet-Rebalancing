@@ -88,8 +88,12 @@ Both the Docker context and Kubernetes context should target your local
 Docker Desktop installation, and the Kubernetes node should report `Ready`.
 Do not deploy to an unintended remote cluster.
 
-Follow the [shared credential setup](#configuration-and-optional-integrations)
-before launch if you want live LTA data or an end-to-end relocation demo.
+**Recommended:** follow the [shared credential setup](#configuration-and-optional-integrations)
+(LTA DataMall Account Key and OneMap access token) before launch. This gives the
+full experience: live LTA data and EVs that drive along real roads. Without a
+OneMap token, relocations cannot be approved. If you have no credentials, use the
+optional [offline demo mode](#optional-offline-demo-mode-no-credentials), which
+has a reduced user experience.
 
 ### Step 2 — Prepare, test, and launch
 
@@ -183,7 +187,7 @@ To reload credentials or other `.env` edits, see [Apply `.env` changes](#apply-e
 
 | Symptom | Check |
 |---|---|
-| OneMap routing is unavailable | Check the routing-status banner and the [OneMap configuration and token expiry](#onemap-rest-access-token-for-relocations). After updating `.env`, run normal startup. |
+| OneMap routing is unavailable | Check the routing-status banner and the [OneMap configuration and token expiry](#onemap-rest-access-token-for-relocations). After updating `.env`, run normal startup. With no token, use the optional [offline demo mode](#optional-offline-demo-mode-no-credentials). |
 | No recommendation / **DEFER** | Open the recommendation **Evidence** panel for stale demand, Fleet or routing issues. An unavailable route is not proof that no EV is eligible. |
 | No useful move / **HOLD** | Inspect EV availability, parking, battery reserve and the *fleet-wide* shortage effect; high demand in one zone alone is insufficient. |
 | Data is stale | Confirm simulator Pods and services are healthy; refresh demand observations and try again. |
@@ -233,8 +237,12 @@ From the repository root, create `.env` only if it is missing.
 if [ ! -e .env ]; then cp .env.example .env; fi
 ```
 
-Follow the [shared credential setup](#configuration-and-optional-integrations)
-before launch if you want live LTA data or an end-to-end relocation demo.
+**Recommended:** follow the [shared credential setup](#configuration-and-optional-integrations)
+(LTA DataMall Account Key and OneMap access token) before launch. This gives the
+full experience: live LTA data and EVs that drive along real roads. Without a
+OneMap token, relocations cannot be approved. If you have no credentials, use the
+optional [offline demo mode](#optional-offline-demo-mode-no-credentials), which
+has a reduced user experience.
 
 ### 3. Start the local system
 
@@ -488,7 +496,12 @@ experimental tools and are not part of application startup.
 On Windows and macOS, put your own credentials in the repository-root `.env`
 and keep it out of version control. The dashboards, simulated demand, and
 telemetry work with the defaults in `.env.example` and require no API credentials.
-Enable the integrations you need for your demo.
+
+**The recommended way to run the app is with both credentials below**: an LTA
+DataMall Account Key and a OneMap REST access token. OneMap is what lets an
+approved relocation follow real Singapore roads. If you cannot get credentials,
+the [offline demo mode](#optional-offline-demo-mode-no-credentials) is an
+optional fallback with a reduced user experience.
 
 ### LTA DataMall Account Key for live observations
 
@@ -530,6 +543,31 @@ Each OneMap token lasts **3 days**.
    and [apply the change](#apply-env-changes) if the project is already deployed.
 
 See [OneMap routing configuration](docs/onemap-routing.md) for more details.
+
+### Optional offline demo mode (no credentials)
+
+Use this only if you cannot get a OneMap token. It lets you run the full
+recommend, approve and move flow without any credentials:
+
+```dotenv
+ROUTING_PROVIDER=OFFLINE_DEMO
+```
+
+Then [apply the change](#apply-env-changes). **This mode affects the user
+experience:**
+
+- Routes are straight lines between the EV and its destination, not real roads.
+  EVs on the map appear to float across buildings, parks and water.
+- Route distances and travel times are straight-line estimates at 30 km/h, so
+  they are shorter than real driving routes.
+- Turn-by-turn instructions are empty and EVs are not snapped to a road at start.
+- The dashboard shows an "Offline demo routes" banner, and every route and
+  approval record is labelled `OFFLINE_DEMO`, so it is never mistaken for a
+  OneMap road route.
+
+Facilities and traffic still use mock or disabled data unless you also add an LTA
+DataMall key. Switch back to `ROUTING_PROVIDER=ONEMAP` with a token for the
+intended experience.
 
 ### Apply `.env` changes
 

@@ -244,7 +244,7 @@
 .target-panel .relocation-request { margin: 12px 0 0; padding: 10px 0 0; }
 .target-panel .request-fields { grid-template-columns: minmax(0, 1fr) 84px; align-items: end; gap: 8px; margin: 0; }
 .request-field { min-width: 0; }
-.request-vehicle { grid-column: 1 / -1; }
+.request-vehicle, .request-planning { grid-column: 1 / -1; }
 .target-panel .request-field label { margin-bottom: 4px; font-size: 11px; line-height: 1.35; }
 .request-field .form-select, .request-count input { width: 100%; height: 38px; min-height: 38px; border-radius: 8px; }
 .request-field .form-select { padding: 7px 24px 7px 7px; }

@@ -233,14 +233,15 @@ class FleetStore:
                 "telemetry": deepcopy(sample["telemetry"])})
 
     async def telemetry_history(self, vehicle_id, limit=100):
+        durable = getattr(self.repository, "enabled", False)
         async with self.lock:
             self.record(vehicle_id)
-            if getattr(self.repository, "enabled", False):
-                samples = await self.repository.telemetry_history(vehicle_id, limit)
-            else:
-                samples = list(self.history_cache.get(vehicle_id, []))[-limit:]
+            samples = [] if durable else list(self.history_cache.get(vehicle_id, []))[-limit:]
+        if durable:
+            # Committed rows only; never hold the writer lock across database I/O.
+            samples = await self.repository.telemetry_history(vehicle_id, limit)
         return {"vehicle_id": vehicle_id, "samples": deepcopy(samples),
-                "storage": "postgresql" if getattr(self.repository, "enabled", False) else "ephemeral",
+                "storage": "postgresql" if durable else "ephemeral",
                 "limit": limit}
 
     async def report_runtime(self, vehicle_id: str, report: SimulatorRuntimeReport):

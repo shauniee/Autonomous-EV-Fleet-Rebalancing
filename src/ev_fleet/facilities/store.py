@@ -148,10 +148,6 @@ class FacilitiesStore:
             "parking_available": parking_available, "charging_available": charging_available,
             "status": "UNKNOWN" if stale else facility.status})
 
-    async def snapshot(self, zone_id=None):
-        return [self.effective(site) for site in self.catalogue.values()
-                if zone_id is None or site.zone_id == zone_id]
-
     async def get(self, facility_id):
         site = self.catalogue.get(facility_id)
         if site is not None:
@@ -239,6 +235,22 @@ class FacilitiesStore:
             await self.persist()
             return deepcopy(entry["receipt"])
 
+    async def vacate(self, vehicle_id):
+        """The car has left its bay (a confirmed customer rental): free its occupied hold."""
+        # shortcut: a Dispatch retry of a lost "complete" reply after vacate gets 409
+        # PARKING_HOLD_TERMINAL and only logs; needs a sub-second race, revisit if seen.
+        async with self.lock:
+            occupied = [entry for entry in self.holds.values()
+                        if entry["receipt"]["vehicle_id"] == vehicle_id and entry["status"] == "OCCUPIED"]
+            if any(entry.get("cable", {}).get("status") == "CONNECTED" for entry in occupied):
+                raise HTTPException(409, "CHARGING_CABLE_CONNECTED")
+            for entry in occupied:
+                entry["status"] = entry["receipt"]["status"] = "RELEASED"
+            if occupied:
+                self.version += 1
+                await self.persist()
+            return self._vehicle_parking(vehicle_id)
+
     async def get_hold(self, dispatch_id):
         entry = self.holds.get(str(dispatch_id))
         if not entry:
@@ -307,17 +319,11 @@ class FacilitiesStore:
             if distance_km(position.model_dump(), site.position.model_dump()) > MAX_FACILITY_ROAD_ACCESS_KM:
                 raise HTTPException(409, "PARKING_ROAD_ACCESS_TOO_FAR")
 
-            previous_request = occupied["request"]
-            previous_version = self.version
-            occupied["request"] = previous_request.model_copy(
+            occupied["request"] = occupied["request"].model_copy(
                 update={"access_position": position})
             self.version += 1
-            try:
-                await self.persist()
-            except Exception:
-                occupied["request"] = previous_request
-                self.version = previous_version
-                raise
+            # A failed save faults the repository; base_app then refuses requests until reload.
+            await self.persist()
             return self._vehicle_parking(vehicle_id)
 
     async def parking_observation(self, vehicle_id, request_id):

@@ -4,7 +4,7 @@ import { number, time } from './format';
 import { approvalDetails, approvalLabels, batchInProgress, batchProgressLabel, journeyIssue, journeyLabel } from './approvalMessages';
 import { OperationalTabs } from './OperationalTabs';
 import { CoverageTradeoffWarning, CrdsEvidence, CrdsSummary } from './CrdsSummary';
-import { benefitPhrase, minutesText } from './crdsMessages';
+import { benefitPhrase, coverText, minutesText } from './crdsMessages';
 
 export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation; onRelocation?: (id: string) => void }) {
   return <div className="recommendation" data-testid="batch-recommendation">
@@ -16,7 +16,7 @@ export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation
       Eligible vehicles and parking spaces could not be matched.</p>}
     <OperationalTabs label="Recommendation details" tabs={[
       { id: 'assignments', label: 'Assignments', content: batch.assignments.length ? <div className="table-scroll" tabIndex={0} role="region" aria-label="Proposed assignments"><table aria-label="Batch vehicle-to-parking assignments">
-      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>{batch.crds ? batch.crds.planning_mode === 'FULFIL_REQUEST' ? 'Step coverage change' : 'Extra EV availability' : 'Score'}</th></tr></thead>
+      <thead><tr><th>EV</th><th>Facility destination</th><th>Distance</th><th>Arrival SOC</th><th>Baseline ETA*</th><th>Condition ETA</th><th>{batch.crds ? batch.crds.planning_mode === 'FULFIL_REQUEST' ? 'EV cover (worst case)' : 'Extra EV availability' : 'Score'}</th></tr></thead>
       <tbody>{batch.assignments.map(item => <tr key={item.recommendation_id}>
         <td>{item.vehicle_id}</td><td>{item.facility_name}{item.requires_charging ? ' · charging required' : ' · parking'}</td>
         <td>{number(item.distance_km, ' km')}</td><td>{number(item.predicted_arrival_soc_pct, '%')}</td>
@@ -26,7 +26,7 @@ export function BatchPanel({ batch, onRelocation }: { batch: BatchRecommendation
             {item.traffic_assessment.blocked ? ' · Route blocked' : item.traffic_assessment.delay_factor != null && item.traffic_assessment.delay_factor > 1 ? ' · delayed' : ''}
           </> : 'Unknown'}</td>
         <td>{item.crds_gain ? batch.crds?.planning_mode === 'FULFIL_REQUEST'
-          ? number(item.crds_gain.worst_case_gain_vehicle_minutes, ' vehicle-minutes')
+          ? coverText(item.crds_gain.worst_case_gain_vehicle_minutes)
           : minutesText(item.crds_gain.worst_case_gain_vehicle_minutes) : number(item.score)}</td>
       </tr>)}</tbody>
     </table></div> : <p className="muted">No vehicle-to-facility assignments were proposed.</p> },
@@ -51,7 +51,7 @@ export function BatchConfirmation({ batch, expired, onApprove, onClose }: {
     <h2 id="batch-title">Confirm {batch.recommended_count} EV {batch.recommended_count === 1 ? 'relocation' : 'relocations'}</h2>
     <p>{batch.target_zone_id.toUpperCase()} · {batch.unfulfilled_count} unfulfilled of {batch.requested_count} requested</p>
     {batch.crds && (batch.crds.planning_mode === 'FULFIL_REQUEST' ? <>
-      <p>This plan covers {batch.recommended_count} of {batch.requested_count} requested relocations, subject to fresh safety and capacity checks. Minimum modeled coverage change: {number(batch.crds.worst_case_gain_vehicle_minutes, ' points')} across the scenarios.</p>
+      <p>This plan covers {batch.recommended_count} of {batch.requested_count} requested relocations, subject to fresh safety and capacity checks. In the worst scenario the plan {coverText(batch.crds.worst_case_gain_vehicle_minutes ?? 0)}.</p>
       {batch.crds.coverage_tradeoff && <CoverageTradeoffWarning/>}
     </> : <p>Together these moves give customers {benefitPhrase(batch.crds.worst_case_gain_vehicle_minutes ?? 0, batch.crds.parameters.horizon_minutes, true)}, even in the busiest demand pattern checked. Each move is checked again before it starts.</p>)}
     <ol>{batch.assignments.map(a => <li key={a.recommendation_id}>{a.vehicle_id} → {a.facility_name} · {a.requires_charging ? 'charging' : 'parking'}</li>)}</ol>

@@ -44,6 +44,7 @@ const reasons: Readonly<Record<string, string>> = {
   ROUTE_LOOKUP_TIMEOUT: 'Route verification did not finish in time. Try requesting a fresh recommendation.',
   PARTIAL_ROUTE_COVERAGE: 'Some routes could not be verified. The recommendation covers only EVs with completed route checks.',
   ROUTE_EVIDENCE_UNAVAILABLE: 'CRDS could not verify the road routes. Try requesting a fresh recommendation.',
+  DESTINATION_DATA_CHANGED: 'Destination parking data changed or became unavailable while CRDS checked routes. Check the parking feed status on the Facilities tab, then request again.',
   ROUTE_ORIGIN_CHANGED: 'The EV’s location changed before the route could be verified.',
   ROUTE_ESTIMATE_IDENTITY_CHANGED: 'The vehicle or its location changed during the route check.',
   CHARGING_AVAILABILITY_UNKNOWN: 'CRDS could not verify the charging needed after arrival.',
@@ -77,6 +78,13 @@ export function minutesText(minutes: number) {
   if (minutes < 1) return 'less than a minute';
   const whole = Math.round(minutes);
   return `about ${whole} ${whole === 1 ? 'minute' : 'minutes'}`;
+}
+
+// One minute of EV cover = one EV available for one minute where modelled demand needs it.
+export function coverText(minutes: number) {
+  const whole = Math.round(Math.abs(minutes));
+  if (whole === 0) return 'no change in EV cover';
+  return `${minutes > 0 ? 'gains' : 'loses'} ${whole} min of EV cover`;
 }
 
 export function benefitPhrase(minutes: number, horizon: number, combined = false) {

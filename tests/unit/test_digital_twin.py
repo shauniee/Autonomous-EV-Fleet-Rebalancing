@@ -162,3 +162,36 @@ def test_control_change_or_moved_route_origin_still_rejects_delayed_claim(clock)
                 await cluster.fleet.claim("ev-1", uuid4(), request())
             assert blocked.value.detail == "VEHICLE_VERSION_CONFLICT"
     asyncio.run(scenario())
+
+
+def test_durable_history_read_does_not_hold_fleet_writer_lock(clock):
+    from ev_fleet.contracts.vehicles import VehicleRegistration
+    from ev_fleet.fleet.store import FleetStore
+    from tests.unit.test_persistence import MemoryRepository
+
+    class SlowHistoryRepository(MemoryRepository):
+        def __init__(self):
+            super().__init__()
+            self.reading = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def telemetry_history(self, vehicle_id, limit=100):
+            self.reading.set()
+            await self.release.wait()
+            return []
+
+    async def scenario():
+        repository = SlowHistoryRepository()
+        store = FleetStore(clock=clock, repository=repository)
+        await store.start()
+        await store.register(VehicleRegistration(
+            vehicle_id="ev-1", battery_capacity_kwh=60, consumption_kwh_per_km=.18))
+        history = asyncio.create_task(store.telemetry_history("ev-1"))
+        await repository.reading.wait()
+        # A write must not queue behind the in-flight database read.
+        await asyncio.wait_for(store.register(VehicleRegistration(
+            vehicle_id="ev-2", battery_capacity_kwh=60, consumption_kwh_per_km=.18)), .5)
+        repository.release.set()
+        assert (await history)["storage"] == "postgresql"
+
+    asyncio.run(scenario())
