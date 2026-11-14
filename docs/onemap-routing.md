@@ -31,6 +31,9 @@ For direct Python execution, export the variables yourself. Tokens never enter
 browser code, route records or log messages.
 
 `ROUTING_PROVIDER=SIMULATED` permits local observation and legacy previews.
+`ROUTING_PROVIDER=OFFLINE_DEMO` is an optional credential-free fallback: Dispatch
+approves straight-line routes labelled `OFFLINE_DEMO` (never `ONEMAP`), so EVs move
+but do not follow roads. OneMap remains the recommended provider.
 Dispatch refuses relocation approval without a verified OneMap route.
 
 ## Approved journey

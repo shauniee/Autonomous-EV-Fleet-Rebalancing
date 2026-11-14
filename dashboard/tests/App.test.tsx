@@ -210,6 +210,16 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByRole('checkbox', { name: 'Select plan for Bishan' })).toBeEnabled();
   });
 
+  it('labels offline demo routes as straight lines, not real roads', async () => {
+    server({
+      '/api/dispatch/routing/status': { provider: 'OFFLINE_DEMO', configured: true, reason_code: 'OFFLINE_DEMO_ROUTES' },
+    });
+    render(<App/>);
+    const banner = await screen.findByRole('status', { name: 'Offline demo routing' });
+    expect(banner).toHaveTextContent('straight-line, not real roads');
+    expect(screen.queryByRole('status', { name: 'Road routing setup' })).not.toBeInTheDocument();
+  });
+
   it('explains when local routing prevents a real relocation instead of silently offering approval', async () => {
     const fetch = server({
       '/api/dispatch/routing/status': {

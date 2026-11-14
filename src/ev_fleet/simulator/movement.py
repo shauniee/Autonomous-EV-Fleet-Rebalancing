@@ -105,7 +105,7 @@ class Movement:
         route = command.get("route")
         # The signed-off command carries validated on-road geometry. OneMap
         # remains primary; a configured OSRM alternate is equally road-only.
-        if not route or route.get("source") not in ("ONEMAP", "OSRM"):
+        if not route or route.get("source") not in ("ONEMAP", "OSRM", "OFFLINE_DEMO"):
             self.command = deepcopy(command)
             self.accepted = False
             self.reason = "ONEMAP_ROUTE_REQUIRED"

@@ -19,7 +19,7 @@ MAX_INITIAL_ROAD_MATCH_KM = .20
 
 
 class RoutingSettings(BaseModel):
-    provider: Literal["SIMULATED", "ONEMAP"] = "SIMULATED"
+    provider: Literal["SIMULATED", "ONEMAP", "OFFLINE_DEMO"] = "SIMULATED"
     access_token: SecretStr = SecretStr("")
 
     @classmethod
@@ -30,6 +30,8 @@ class RoutingSettings(BaseModel):
 
 def routing_configuration(settings: RoutingSettings) -> dict:
     """Report configuration only; never expose or imply validation of an access token."""
+    if settings.provider == "OFFLINE_DEMO":
+        return {"provider": "OFFLINE_DEMO", "configured": True, "reason_code": "OFFLINE_DEMO_ROUTES"}
     token_present = bool(settings.access_token.get_secret_value().strip())
     configured = settings.provider == "ONEMAP" and token_present
     return {
@@ -105,9 +107,18 @@ async def _onemap_route(client, settings, origin, destination):
         raise HTTPException(503, "ONEMAP_INVALID_RESPONSE") from None
 
 
+def offline_route(origin, destination):
+    """Straight-line route for credential-free runs, labelled OFFLINE_DEMO (not a road)."""
+    distance = distance_km(origin, destination)
+    return RoadRoute(source="OFFLINE_DEMO", fetched_at=utcnow(), geometry=[origin, destination],
+                     distance_km=distance, duration_seconds=distance * 120.0)  # 30 km/h
+
+
 async def driving_route(client, settings, origin, destination, tolerance_km, *, facility=False):
     if settings.provider == "SIMULATED":
         return None
+    if settings.provider == "OFFLINE_DEMO":
+        return offline_route(origin, destination)
     route = await _onemap_route(client, settings, origin, destination)
     # An EV must already be on the road at journey start. Do not append a
     # connector or enlarge the strict origin/physical-arrival tolerance.
@@ -134,7 +145,7 @@ async def road_match_spawn(client, settings, origin):
     the EV has begun an active journey. Return an error instead of retaining a
     known off-road position or inserting an artificial road connector.
     """
-    if settings.provider == "SIMULATED":
+    if settings.provider in ("SIMULATED", "OFFLINE_DEMO"):
         return {"position": origin, "source": "SIMULATED"}
     # Multiple small probes increase the odds of a routable road without
     # silently expanding the maximum permissible initial placement offset.

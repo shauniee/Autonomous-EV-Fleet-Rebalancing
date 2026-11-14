@@ -33,7 +33,7 @@ const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
 type PendingBatchApproval = QueuedBatchApproval & { accepted?: boolean };
 interface RoutingConfiguration {
-  provider: 'SIMULATED' | 'ONEMAP';
+  provider: 'SIMULATED' | 'ONEMAP' | 'OFFLINE_DEMO';
   configured: boolean;
   reason_code: string | null;
 }
@@ -570,6 +570,11 @@ export default function App() {
                   : result ? <button onClick={editRequest}>Edit request</button> : <span className="muted">{fresh && heat.data?.status === 'COMPLETE' && (criticalZones ? `${criticalZones} ${criticalZones === 1 ? 'zone' : 'zones'} with critical demand` : 'No zones with critical demand')}</span>}
               </div>
               <div className="inspector-body" ref={inspectorBody}>
+                {routing.data?.provider === 'OFFLINE_DEMO' && <section className="warning routing-setup" role="status" aria-label="Offline demo routing">
+                  <strong>Offline demo routes: straight-line, not real roads.</strong>
+                  <p>EVs move in straight lines and may cross buildings or water. Set <code>ROUTING_PROVIDER=ONEMAP</code> and a
+                    {' '}valid <code>ONEMAP_ACCESS_TOKEN</code> for real road routes.</p>
+                </section>}
                 {routing.data && !routing.data.configured && <section className="warning routing-setup" role="status" aria-label="Road routing setup">
                   <strong>Road routing is not configured for dispatch.</strong>
                   <p>Demand, vehicles and the map can still be viewed, but this computer cannot verify the road routes needed for EV relocation.</p>

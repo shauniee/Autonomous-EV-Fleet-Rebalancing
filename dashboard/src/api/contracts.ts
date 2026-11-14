@@ -31,7 +31,7 @@ export interface TrafficSnapshot {
   roadworks: {id: string; road: string; start_date: string; end_date: string}[];
 }
 export interface RoadRoute {
-  source: 'ONEMAP' | 'OSRM'; fetched_at: string; geometry: Position[];
+  source: 'ONEMAP' | 'OSRM' | 'OFFLINE_DEMO'; fetched_at: string; geometry: Position[];
   rerouted?: boolean; traffic_assessment?: TrafficRouteAssessment | null;
   distance_km: number; duration_seconds: number;
   instructions: { text: string; distance_m: number }[];
