@@ -100,6 +100,8 @@ class Movement:
             return self.seen[identity]["accepted"]
         if self.command:
             raise ValueError("another command is active")
+        if self.charging_state != "NOT_CHARGING":
+            raise ValueError("charging cable handoff must finish before movement")
         route = command.get("route")
         # The signed-off command carries validated on-road geometry. OneMap
         # remains primary; a configured OSRM alternate is equally road-only.
@@ -215,7 +217,7 @@ class Movement:
                 "power_kw": round(traction_kw - charging_kw, 3),
                 "battery_soh_pct": 98.0, "gps_quality": "SIMULATED",
                 "fault_codes": ["BATTERY_DEPLETED"] if self.state == "FAILED" and self.reason == "BATTERY_DEPLETED" else [],
-                "availability": "UNAVAILABLE" if self.command or self.charging_state == "CHARGING" else "AVAILABLE",
+                "availability": "UNAVAILABLE" if self.command or self.charging_state != "NOT_CHARGING" else "AVAILABLE",
                 "relocation_state": self.state,
                 "distance_travelled_km": self.distance if self.command else None,
                 "active_dispatch_id": self.command["dispatch_id"] if self.command else None,
@@ -231,7 +233,11 @@ class Movement:
         self.speed_kph = 0.0
         self.parking = deepcopy(parking)
         if parking["charging_allocated"]:
-            self.charging_state = ("CHARGING" if self.soc_pct < parking["charging_target_soc_pct"] else "COMPLETE")
+            cable = parking.get("cable_status", "AWAITING_CONNECTION")
+            if cable == "CONNECTED":
+                self.charging_state = ("CHARGING" if self.soc_pct < parking["charging_target_soc_pct"] else "COMPLETE")
+            elif cable != "DISCONNECTED":
+                self.charging_state = "AWAITING_CONNECTION"
         return True
 
     def charge(self, elapsed_seconds):

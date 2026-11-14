@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, model_validator
 from .common import Model, Position
 from .demand import ZoneState
-from .crds import CrdsCandidateGain, CrdsMetadata
+from .crds import CrdsCandidateGain, CrdsMetadata, CrdsPlanningMode
 
 
 class RecommendationRequest(Model):
@@ -56,13 +56,16 @@ class Recommendation(Model):
     crds: CrdsMetadata | None = None
 
 class BatchRecommendationRequest(RecommendationRequest):
-    quantity: int = Field(ge=1, le=20)
+    planning_mode: CrdsPlanningMode = "OPTIMIZE_COVERAGE"
+    quantity: int = Field(ge=1, le=50)
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
     vehicle_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     facility_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def selected_vehicle_quantity(self):
+        if self.purpose == "CHARGE" and self.planning_mode != "OPTIMIZE_COVERAGE":
+            raise ValueError("requested-quantity planning is for REBALANCE only")
         if self.vehicle_id and self.quantity != 1:
             raise ValueError("a selected vehicle requires quantity one")
         if self.facility_id and (self.purpose != "CHARGE" or not self.vehicle_id or self.quantity != 1):
@@ -88,9 +91,9 @@ class BatchRecommendation(Model):
     batch_recommendation_id: UUID
     target_zone_id: str
     purpose: Literal["REBALANCE", "CHARGE"] = "REBALANCE"
-    requested_count: int = Field(ge=1, le=20)
-    recommended_count: int = Field(ge=0, le=20)
-    unfulfilled_count: int = Field(ge=0, le=20)
+    requested_count: int = Field(ge=1, le=50)
+    recommended_count: int = Field(ge=0, le=50)
+    unfulfilled_count: int = Field(ge=0, le=50)
     created_at: AwareDatetime
     expires_at: AwareDatetime
     assignments: list[ParkingAssignment]

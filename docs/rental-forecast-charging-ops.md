@@ -59,10 +59,13 @@ Task requests are version-checked and idempotent, with the task queue saved in
 the existing Fleet PostgreSQL snapshot. This remains a single-writer Fleet
 process, consistent with existing state ownership.
 
-The existing 20 EV movement simulators do not yet respond to tasks by
-automatically travelling to a charger or increasing SOC. Ground staff actions
-are simulated, and physical charging requires a separate EV telemetry
-simulation. No assignment or task status bypasses the Dispatch approval API.
+The manual assistance task queue remains separate from an approved charger
+relocation and does not command an EV to move. The moving simulators now support
+an allocation-bound [human cable handoff](charging-cable-handoff.md): wait after
+arrival, charge only after connection confirmation, and stay unavailable until
+disconnection confirmation and fresh telemetry. Ground-team confirmations are
+simulation records; they do not operate physical chargers. No task or cable
+action bypasses the Dispatch approval API.
 
 ## Deployment reliability
 

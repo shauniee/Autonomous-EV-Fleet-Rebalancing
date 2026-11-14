@@ -14,7 +14,12 @@ function decisionEvidence(result: CrdsMetadata) {
   return evidence?.version === 1 ? evidence : undefined;
 }
 
+export function CoverageTradeoffWarning() {
+  return <p className="warning" role="status">Some planned moves do not improve modeled fleet-wide coverage and may increase shortages in other zones. Approve only if this destination's requested quantity takes priority.</p>;
+}
+
 export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batchStop?: string | null }) {
+  const fulfilRequest = result.planning_mode === 'FULFIL_REQUEST';
   const evidence = decisionEvidence(result);
   const excluded = Object.values(evidence?.vehicles ?? {}).filter(row => row.outcome === 'EXCLUDED');
   const singleBlocker = excluded.length > 0 && excluded.every(row => row.reason === excluded[0].reason)
@@ -26,21 +31,24 @@ export function CrdsSummary({ result, batchStop }: { result: CrdsMetadata; batch
     ? [...assessment, singleBlocker] : assessment.filter(reason => reason !== 'PARTIAL_ROUTE_COVERAGE');
   const stopMessages = [...new Set(batchReasons
     .filter(reason => !assessment.includes(reason) && !messages.includes(reason)).map(reason => crdsMessage(reason)))];
-  const label = result.decision === 'MOVE' ? 'Recommended'
+  const label = result.decision === 'MOVE' ? fulfilRequest ? 'Requested relocations planned' : 'Recommended'
     : result.decision === 'HOLD' ? 'No move recommended' : 'Assessment unavailable';
 
   return <section aria-label="Fleet-wide availability assessment">
     <strong>{label}</strong>
     <p className="recommendation-reason" role={result.decision === 'DEFER' ? 'status' : undefined}>
-      {result.decision === 'MOVE' && batchStop !== undefined
+      {result.decision === 'MOVE' && fulfilRequest
+        ? 'Feasible moves are planned to fulfil your requested quantity. Coverage impact is advisory; each vehicle still requires dispatcher approval and fresh safety checks.'
+        : result.decision === 'MOVE' && batchStop !== undefined
         ? 'The proposed moves improve the modeled fleet coverage score, even in the least favorable scenario checked.'
         : [...new Set(messages.map(code => crdsMessage(code)))].join(' ')}
     </p>
+    {result.decision === 'MOVE' && fulfilRequest && result.coverage_tradeoff && <CoverageTradeoffWarning/>}
     {partialRoutes && <p className="warning" role="status">{crdsMessage('PARTIAL_ROUTE_COVERAGE')}</p>}
     {result.decision !== 'DEFER' && stopMessages.length > 0 &&
       <p className="warning" role="status">{stopMessages.join(' ')}</p>}
     {result.decision === 'MOVE' && <dl className="candidate-metrics">
-      <div><dt>Minimum modeled coverage gain</dt><dd>{number(result.worst_case_gain_vehicle_minutes, ' points')}</dd></div>
+      <div><dt>{fulfilRequest ? 'Minimum modeled coverage change' : 'Minimum modeled coverage gain'}</dt><dd>{number(result.worst_case_gain_vehicle_minutes, ' points')}</dd></div>
       <div><dt>Arrival estimate</dt><dd>{number(result.arrival_minutes_min)}–{number(result.arrival_minutes_max)} min</dd></div>
     </dl>}
     {excluded.length > 0 && <p>{excluded.length} {excluded.length === 1 ? 'EV was' : 'EVs were'} excluded. Open Evidence to see why.</p>}

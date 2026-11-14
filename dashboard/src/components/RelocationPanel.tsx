@@ -46,11 +46,13 @@ function RelocationRoute({ dispatch, origin, destination }: { dispatch: Dispatch
 }
 
 function needsRelocationResolution(dispatch: Dispatch, vehicle?: Vehicle) {
+  if (dispatch.state === 'QUEUED') return false;
   return dispatch.state === 'UNKNOWN' || dispatch.state === 'FAILED'
     || dispatch.state === 'REJECTED' && (dispatch.claim_held !== false || dispatch.parking_status === 'RESERVED')
     || dispatch.claim_held !== false && (vehicle?.stale || vehicle?.connectivity === 'OFFLINE');
 }
 function RelocationIssue({ dispatch }: { dispatch: Dispatch }) {
+  if (dispatch.state === 'QUEUED') return <p className="muted"><strong>Human approval accepted.</strong> Queued for admission. Starts and temporary retries run automatically; follow the batch progress in Dispatch.</p>;
   const status = approvalStatus(dispatch);
   const evidence = dispatch.revalidated_metrics?.approval_decision;
   const issue = status === 'APPROVED' ? journeyIssue(dispatch.state, dispatch.failure_reason) : '';

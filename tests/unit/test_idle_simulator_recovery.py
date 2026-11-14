@@ -24,7 +24,7 @@ class CheckpointRepository(MemoryRepository):
         await super().save(payload)
 
 
-async def idle_vehicle(clock, charging_state="NOT_CHARGING"):
+async def idle_vehicle(clock, charging_state="NOT_CHARGING", soc=None):
     config = SimulatorRecoverySettings(enabled=True, vehicle_ids=["ev-idle"], dispatch_url="http://dispatch")
     store = FleetStore(settings=DispatchSettings(), clock=clock, repository=CheckpointRepository(),
                        recovery_settings=config)
@@ -37,8 +37,8 @@ async def idle_vehicle(clock, charging_state="NOT_CHARGING"):
         expected_checkpoint_revision=0))
     physical = TelemetryUpdate(session_id=receipt.session_id, sequence=0, observed_at=clock.now(),
         position={"latitude": 1.32, "longitude": 103.81},
-        soc_pct=60 if charging_state == "CHARGING" else 85.4, odometer_km=15.2,
-        availability="UNAVAILABLE" if charging_state == "CHARGING" else "AVAILABLE",
+        soc_pct=soc if soc is not None else (60 if charging_state == "CHARGING" else 85.4), odometer_km=15.2,
+        availability="UNAVAILABLE" if charging_state != "NOT_CHARGING" else "AVAILABLE",
         heading_deg=90, speed_kph=0, charging_state=charging_state,
         parked_facility_id="charger-idle" if charging_state != "NOT_CHARGING" else None,
         charging_power_kw=3.7 if charging_state != "NOT_CHARGING" else None)
@@ -85,7 +85,7 @@ def completed_parking():
     return {"vehicle_id": "ev-idle", "pending": False, "parking": {
         "facility_id": "charger-idle", "name": "Idle charger", "zone_id": "bishan", "source": "MOCK",
         "position": {"latitude": 1.32, "longitude": 103.81}, "charging_allocated": True,
-        "charging_power_kw": 3.7, "charging_target_soc_pct": 85.4}}
+        "charging_power_kw": 3.7, "charging_target_soc_pct": 85.4, "cable_status": "CONNECTED"}}
 
 
 @pytest.mark.parametrize("charging_state", ["NOT_CHARGING", "COMPLETE", "CHARGING"])

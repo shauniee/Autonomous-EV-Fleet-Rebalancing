@@ -11,13 +11,16 @@ from ev_fleet.contracts.facilities import FacilitiesSnapshot, Facility, ParkingH
 from ev_fleet.contracts.facilities import ParkingObservation
 from ev_fleet.demand.store import SINGAPORE_ZONES
 from .store import FacilitiesStore
+from .charging import ChargingHandoffs
+from ev_fleet.contracts.facilities import ChargingCableUpdate
 from .datamall import DataMallClient, poll_feed
 
 
-def create_app(store=None, cache=None):
+def create_app(store=None, cache=None, charging_client=None):
     app = base_app("Parking and Charging Simulation Service")
     state = store or FacilitiesStore()
     app.state.store = state
+    charging = ChargingHandoffs(state, charging_client)
     app.state.persistence = state.repository
     display_cache = cache if cache is not None else DashboardCache.from_env('facilities', state.instance_id, 2)
     app.state.dashboard_cache = display_cache
@@ -41,6 +44,7 @@ def create_app(store=None, cache=None):
             await asyncio.gather(*app.state.feed_tasks, return_exceptions=True)
             if getattr(app.state, "datamall_client", None):
                 await app.state.datamall_client.aclose()
+            await charging.close()
             await display_cache.aclose()
             await state.close()
 
@@ -85,6 +89,12 @@ def create_app(store=None, cache=None):
     @app.get("/api/v1/vehicles/{vehicle_id}/parking", response_model=VehicleParking)
     async def vehicle_parking(vehicle_id: str):
         return await state.vehicle_parking(vehicle_id)
+
+    @app.post("/api/v1/vehicles/{vehicle_id}/charging-cable", response_model=VehicleParking)
+    async def confirm_charging_cable(vehicle_id: str, body: ChargingCableUpdate,
+                                    response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return await charging.confirm(vehicle_id, body)
 
     @app.put("/api/v1/vehicles/{vehicle_id}/parking/access-position",
              response_model=VehicleParking)

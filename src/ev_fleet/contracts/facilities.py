@@ -90,6 +90,21 @@ class ParkingHold(Model):
     status: Literal["RESERVED", "OCCUPIED", "RELEASED"]
 
 
+class ChargingCableUpdate(Model):
+    """A named person's simulated physical handoff for one occupied allocation."""
+    dispatch_id: UUID
+    request_id: UUID
+    action: Literal["CONNECT", "DISCONNECT"]
+    staff_name: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def named_team(self):
+        self.staff_name = self.staff_name.strip()
+        if not self.staff_name:
+            raise ValueError("a ground-team name is required")
+        return self
+
+
 class ParkedFacility(Model):
     facility_id: str
     name: str
@@ -99,6 +114,13 @@ class ParkedFacility(Model):
     charging_allocated: bool
     charging_power_kw: float = Field(gt=0, le=1000)
     charging_target_soc_pct: float = Field(gt=0, le=100)
+    charging_session_id: UUID | None = None
+    cable_status: Literal["AWAITING_CONNECTION", "CONNECTED", "DISCONNECTED"] = "AWAITING_CONNECTION"
+    cable_state_recorded: bool = False
+    cable_connected_by: str | None = None
+    cable_connected_at: AwareDatetime | None = None
+    cable_disconnected_by: str | None = None
+    cable_disconnected_at: AwareDatetime | None = None
 
 
 class VehicleParking(Model):

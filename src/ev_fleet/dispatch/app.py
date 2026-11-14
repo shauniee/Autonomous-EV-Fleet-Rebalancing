@@ -30,13 +30,17 @@ def create_app(settings=None, client=None, clock=None, background=True):
             app.state.persistence = service.repository
             await service.start()
             worker = asyncio.create_task(service.reconcile_loop()) if background else None
+            queue_worker = asyncio.create_task(service.queue_loop()) if background else None
             try:
                 yield
             finally:
-                if worker:
-                    worker.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await worker
+                for task in (worker, queue_worker):
+                    if task:
+                        task.cancel()
+                for task in (worker, queue_worker):
+                    if task:
+                        with suppress(asyncio.CancelledError):
+                            await task
                 await service.close()
 
     app.router.lifespan_context = lifespan
@@ -80,7 +84,11 @@ def create_app(settings=None, client=None, clock=None, background=True):
 
     @app.post("/api/v1/batches", status_code=202, response_model=BatchDispatch)
     async def approve_batch(body: BatchApproval):
-        return await app.state.service.approve_batch(body)
+        return await app.state.service.enqueue_batch(body)
+
+    @app.get("/api/v1/batches/{request_id}/items/{recommendation_id}/intent")
+    async def approved_batch_intent(request_id: UUID, recommendation_id: UUID):
+        return await app.state.service.batch_intent(request_id, recommendation_id)
 
     @app.get("/api/v1/batches/{request_id}", response_model=BatchDispatch)
     async def batch(request_id: UUID):

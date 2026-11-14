@@ -91,7 +91,7 @@ async def add_other_vehicle(store):
             checkpoint=saved, publish_telemetry=True))
 
 
-async def occupy(facilities, vehicle_id="ev-idle"):
+async def occupy(facilities, vehicle_id="ev-idle", connected=True):
     site = facilities.catalogue["charger-idle"]
     dispatch_id = uuid4()
     await facilities.reserve(site.facility_id, ParkingHoldRequest(
@@ -99,12 +99,15 @@ async def occupy(facilities, vehicle_id="ev-idle"):
         expected_zone_id=site.zone_id, expected_position=site.position,
         requires_charging=True))
     await facilities.change(dispatch_id, "OCCUPIED")
+    # This fixture starts after an explicit ground-team connection.
+    facilities.holds[str(dispatch_id)]["cable"] = {"status": "CONNECTED" if connected else "AWAITING_CONNECTION"}
+    await facilities.persist()
     return dispatch_id
 
 
 @asynccontextmanager
-async def charging_cluster(clock, monkeypatch):
-    async with idle_runner(clock, monkeypatch, "CHARGING") as data:
+async def charging_cluster(clock, monkeypatch, charging_state="CHARGING", soc=None):
+    async with idle_runner(clock, monkeypatch, charging_state, soc=soc) as data:
         runner, store, _, _ = data
         facilities = FacilitiesStore(repository=MemoryRepository(), clock=clock)
         facilities.catalogue = {"charger-idle": Facility(
@@ -115,7 +118,7 @@ async def charging_cluster(clock, monkeypatch):
             connector_types=["TYPE_2"], status="OPEN")}
         app = facilities_app(facilities)
         async with app.router.lifespan_context(app):
-            await occupy(facilities)
+            await occupy(facilities, connected=charging_state != "AWAITING_CONNECTION")
             await store.simulator_recovery.close()
             client = AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://facilities")
@@ -308,7 +311,10 @@ def test_changed_allocation_requires_new_baseline_even_at_same_charger(
             before = await facilities.vehicle_parking("ev-idle")
             old_proof = deepcopy(store.record("ev-idle")["simulator_checkpoint"]["charging"])
             await occupy(facilities)
-            assert await facilities.vehicle_parking("ev-idle") == before
+            after = await facilities.vehicle_parking("ev-idle")
+            assert after["parking"]["charging_session_id"] != before["parking"]["charging_session_id"]
+            assert {k: v for k, v in after["parking"].items() if k != "charging_session_id"} == {
+                k: v for k, v in before["parking"].items() if k != "charging_session_id"}
             clock.advance(1)
             with pytest.raises(HTTPException, match="CHARGING_BASELINE_REQUIRED"):
                 await store.simulator_recovery.checkpoint(

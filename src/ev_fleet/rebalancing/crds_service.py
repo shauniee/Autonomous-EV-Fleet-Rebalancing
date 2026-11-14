@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from ev_fleet.common.parking import CHARGE_ON_ARRIVAL_BELOW_PCT, CHARGING_TARGET_SOC_PCT
 from ev_fleet.common.travel import distance_km
 from ev_fleet.contracts.crds import (CrdsEvaluation, CrdsFuture, CrdsInputs, CrdsMetadata, CrdsMove,
-                                   CrdsMoveOutcome, CrdsRouteEstimate, CrdsRouteRequest)
+                                   CrdsMoveOutcome, CrdsPlanningMode, CrdsRouteEstimate, CrdsRouteRequest)
 from .crds import apply_move, shortage_by_zone, shortage_score
 from .crds_evidence import (DecisionEvidence, VehicleDecision, availability_reason, publish_evidence,
                             ranked_decisions, route_failure_reason)
@@ -21,6 +21,7 @@ from .crds_futures import MODEL_VERSION, build_futures, parameters_for
 from .crds_inputs import collect_inputs, selected_vehicles_are_current
 from .crds_routes import travel_minutes
 from .policy import assess
+from .quantity_destinations import assign_destinations
 from .traffic import assess_traffic
 
 
@@ -39,13 +40,30 @@ class CrdsPlan:
     deadline: float = float("inf")
 
 
-def has_donor_stock(futures: list[CrdsFuture], origin_zone_id: str | None) -> bool:
+def has_donor_stock(futures: list[CrdsFuture], origin_zone_id: str | None, *,
+                    protect_service_floor: bool = True) -> bool:
     if origin_zone_id is None:
         return True
-    # The first future is nominal. Protect one EV where there is observed demand.
-    minimum_before_departure = 2 if futures[0].zones[origin_zone_id].desired_stock[0] else 1
+    # Advisory mode protects one EV where nominal demand exists. Explicit
+    # requests may use it, but every departure must still have actual stock.
+    minimum_before_departure = (2 if protect_service_floor
+                                and futures[0].zones[origin_zone_id].desired_stock[0] else 1)
     return all(min(future.zones[origin_zone_id].usable_stock) >= minimum_before_departure
                for future in futures)
+
+
+def fulfil_requested_move(result: CrdsEvaluation, mode: CrdsPlanningMode) -> CrdsEvaluation:
+    """Keep scenario ranking, but make coverage gain advisory for explicit requests."""
+    if (mode != "FULFIL_REQUEST" or not result.ranked_candidates
+            or result.decision == "DEFER"
+            or (result.decision == "HOLD" and result.reason_code != "NO_USEFUL_MOVE")):
+        return result
+    winner = result.ranked_candidates[0]
+    return result.model_copy(update={
+        "decision": "MOVE", "reason_code": "OPERATOR_REQUESTED_QUANTITY",
+        "selected_vehicle_id": winner.vehicle_id,
+        "selected_facility_id": winner.facility_id,
+    })
 
 
 def traffic_identity(traffic):
@@ -65,7 +83,8 @@ def traffic_identity(traffic):
 
 async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                    vehicle_id=None, facility_id=None, route_override=None, exclude_dispatch_id=None,
-                   expand_age=None, for_batch=False):
+                   expand_age=None, for_batch=False,
+                   planning_mode: CrdsPlanningMode = "OPTIMIZE_COVERAGE"):
     start = clock.monotonic()
     expand_age = settings.expand_age if expand_age is None else expand_age
     inputs = await collect_inputs(client, policy, settings.dispatch_url, clock, traffic,
@@ -79,9 +98,10 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         "inputs": inputs.model_dump(mode="json", exclude={"traffic"}),
         "traffic": traffic_identity(inputs.traffic),
         "settings": settings.model_dump(), "model": MODEL_VERSION,
-        "expand_age": expand_age,
+        "expand_age": expand_age, "planning_mode": planning_mode,
     }, sort_keys=True).encode()).hexdigest()
-    metadata = CrdsMetadata(decision="DEFER", reason_code="INCOMPLETE_INPUTS", parameters=params,
+    metadata = CrdsMetadata(planning_mode=planning_mode,
+        decision="DEFER", reason_code="INCOMPLETE_INPUTS", parameters=params,
         scenario_model_version=MODEL_VERSION, scenario_count=0, epoch_id=uuid4(), input_fingerprint=fingerprint,
         source_references={"fleet_instance_id": str(inputs.fleet.instance_id),
             "fleet_version": inputs.fleet.snapshot_version, "demand_instance_id": str(inputs.demand.instance_id),
@@ -133,6 +153,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     metadata.scenario_count = len(futures)
     reserved = {d.vehicle_id: d.dispatch_id for d in inputs.planning.dispatches}
     assessments, sites, candidates = {}, {}, []
+    candidate_pools = {}
     target_sites = [
         site for site in inputs.facilities.facilities
         if site.zone_id == target_zone_id and (not facility_id or site.facility_id == facility_id)
@@ -152,6 +173,11 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         if vehicle.effective_availability != "AVAILABLE":
             vehicles[identifier] = VehicleDecision(
                 outcome="EXCLUDED", reason=availability_reason(vehicle))
+            continue
+        if (planning_mode == "FULFIL_REQUEST"
+                and inputs.vehicle_zones.get(identifier) == target_zone_id):
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED", reason="ALREADY_IN_TARGET_ZONE")
             continue
         choices = []
         blockers = {"DESTINATION_HOLD_UNCONFIRMED"} if has_withheld_site else set()
@@ -186,11 +212,17 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                 continue
             choices.append((assessment["distance_km"], site.facility_id, site, assessment))
         if choices:
-            if not has_donor_stock(futures, inputs.vehicle_zones.get(identifier)):
+            if not has_donor_stock(futures, inputs.vehicle_zones.get(identifier),
+                                   protect_service_floor=planning_mode != "FULFIL_REQUEST"):
                 vehicles[identifier] = VehicleDecision(outcome="EXCLUDED", reason="DONOR_SERVICE_FLOOR")
                 continue
-            _, _, site, assessment = min(choices, key=lambda x: (x[0], x[1]))
-            candidates.append((vehicle, site, assessment))
+            choices.sort(key=lambda choice: (choice[0], choice[1]))
+            if planning_mode == "FULFIL_REQUEST":
+                candidate_pools[identifier] = [
+                    (vehicle, site, assessment) for _, _, site, assessment in choices]
+            else:
+                _, _, site, assessment = choices[0]
+                candidates.append((vehicle, site, assessment))
         elif blockers == {"BELOW_OPERATIONAL_RESERVE"} and reserve_evidence:
             arrival, site_id = reserve_evidence
             vehicles[identifier] = VehicleDecision(
@@ -202,6 +234,12 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
                 outcome="EXCLUDED",
                 reason=reasons[0] if len(reasons) == 1 else "NO_SUITABLE_DESTINATION",
                 related_reasons=reasons if len(reasons) > 1 else [])
+    if planning_mode == "FULFIL_REQUEST":
+        candidates = assign_destinations(candidate_pools)
+        assigned = {vehicle.vehicle_id for vehicle, _, _ in candidates}
+        for identifier in candidate_pools.keys() - assigned:
+            vehicles[identifier] = VehicleDecision(
+                outcome="EXCLUDED", reason="DESTINATION_CAPACITY_LIMIT")
     semaphore = asyncio.Semaphore(4)
 
     async def prepare(candidate):
@@ -316,6 +354,7 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
         "moves": [m.model_dump(mode="json") for m in moves]}, sort_keys=True).encode()).hexdigest()
     result, metadata.execution = await evaluate_candidates(client, settings, metadata.epoch_id,
         futures, moves, params, timeout_seconds=deadline - clock.monotonic())
+    result = fulfil_requested_move(result, planning_mode)
     selected_id = result.selected_vehicle_id
     if (not for_batch and selected_id and not await selected_vehicles_are_current(
             client, policy, clock, inputs.fleet, {selected_id}, deadline)):
@@ -330,6 +369,8 @@ async def plan_one(client, policy, settings, clock, traffic, target_zone_id, *,
     if result.decision == "MOVE":
         winner = result.ranked_candidates[0]
         move = next(m for m in moves if m.vehicle_id == winner.vehicle_id and m.facility_id == winner.facility_id)
+        metadata.coverage_tradeoff = (planning_mode == "FULFIL_REQUEST"
+            and winner.worst_case_gain_vehicle_minutes <= params.minimum_gain_vehicle_minutes)
         metadata.worst_case_gain_vehicle_minutes = winner.worst_case_gain_vehicle_minutes
         metadata.worst_case_future_id = winner.worst_case_future_id
         metadata.shortage_changes_by_zone = winner.shortage_changes_by_zone
@@ -345,6 +386,7 @@ async def plan_batch(plan, quantity, client, settings, clock, *, policy):
     if plan.metadata.decision == "DEFER" or not plan.moves:
         return [], plan.metadata, plan.metadata.reason_code
     params = plan.metadata.parameters
+    fulfil_request = plan.metadata.planning_mode == "FULFIL_REQUEST"
     futures = plan.futures
     remaining = list(plan.moves)
     parking = {s.facility_id: s.parking_available for s in plan.sites.values()}
@@ -382,7 +424,8 @@ async def plan_batch(plan, quantity, client, settings, clock, *, policy):
             elif (assessment["predicted_arrival_soc_pct"] < CHARGE_ON_ARRIVAL_BELOW_PCT
                   and chargers[site_id] <= 0):
                 reason = "BATCH_CHARGING_LIMIT"
-            elif not has_donor_stock(futures, move.origin_zone_id):
+            elif not has_donor_stock(futures, move.origin_zone_id,
+                                     protect_service_floor=not fulfil_request):
                 reason = "BATCH_ORIGIN_STOCK_LIMIT"
             else:
                 eligible.append(move)
@@ -393,13 +436,20 @@ async def plan_batch(plan, quantity, client, settings, clock, *, policy):
             if constrained:
                 stop_reason = "CAPACITY_OR_STOCK_LIMIT"
                 stop_details = sorted({row.reason for row in constrained.values()})
+            elif fulfil_request and any(
+                    row.reason == "DESTINATION_CAPACITY_LIMIT"
+                    for row in original_evidence.vehicles.values()):
+                stop_reason = "CAPACITY_OR_STOCK_LIMIT"
+                stop_details = ["DESTINATION_CAPACITY_LIMIT"]
             else:
-                stop_reason = PARTIAL_ROUTE_COVERAGE if partial_routes else "NO_USEFUL_MOVE"
+                stop_reason = (PARTIAL_ROUTE_COVERAGE if partial_routes else
+                               "NO_MORE_ELIGIBLE_EVS" if fulfil_request else "NO_USEFUL_MOVE")
                 stop_details = [PARTIAL_ROUTE_COVERAGE if partial_routes else "NO_MORE_ELIGIBLE_EVS"]
             break
         result, execution = await evaluate_candidates(client, settings, plan.metadata.epoch_id,
             futures, eligible, params, timeout_seconds=plan.deadline - clock.monotonic())
         executions.append(execution)
+        result = fulfil_requested_move(result, plan.metadata.planning_mode)
         if result.decision == "DEFER":
             metadata = plan.metadata.model_copy(deep=True)
             return defer_batch(metadata, result.reason_code)
@@ -412,7 +462,9 @@ async def plan_batch(plan, quantity, client, settings, clock, *, policy):
         move = next(m for m in eligible if (m.vehicle_id, m.facility_id) == (gain.vehicle_id, gain.facility_id))
         metadata = plan.metadata.model_copy(deep=True)
         metadata.execution = execution
-        metadata.decision, metadata.reason_code = "MOVE", "USEFUL_SHORTAGE_REDUCTION"
+        metadata.decision, metadata.reason_code = "MOVE", result.reason_code
+        metadata.coverage_tradeoff = (fulfil_request
+            and gain.worst_case_gain_vehicle_minutes <= params.minimum_gain_vehicle_minutes)
         metadata.worst_case_gain_vehicle_minutes = gain.worst_case_gain_vehicle_minutes
         metadata.worst_case_future_id = gain.worst_case_future_id
         metadata.shortage_changes_by_zone = gain.shortage_changes_by_zone
@@ -447,6 +499,7 @@ async def plan_batch(plan, quantity, client, settings, clock, *, policy):
         metadata.arrival_minutes_min = min(c.metadata.arrival_minutes_min for c in children)
         metadata.arrival_minutes_max = max(c.metadata.arrival_minutes_max for c in children)
         metadata.decision = "MOVE"
+        metadata.coverage_tradeoff = any(c.metadata.coverage_tradeoff for c in children)
     else:
         metadata.decision, metadata.reason_code, metadata.approval_allowed = "HOLD", stop_reason, False
     if not stop_details:
@@ -475,7 +528,12 @@ def recommendation_record(plan, policy, clock, target_zone_id, *, started_at=Non
         assessment = dict(plan.assessments[gain.vehicle_id])
         assessment["crds_gain"] = gain.model_dump(mode="json")
         assessments.append(assessment)
-    if selected:
+    if selected and plan.metadata.planning_mode == "FULFIL_REQUEST":
+        explanation = (f"{selected} fulfils an operator-requested relocation. "
+                       f"Minimum modeled coverage change: "
+                       f"{plan.metadata.worst_case_gain_vehicle_minutes:g} points. "
+                       "Coverage trade-offs require explicit dispatcher approval.")
+    elif selected:
         explanation = (f"{selected} improves the modeled coverage score by at least "
                        f"{plan.metadata.worst_case_gain_vehicle_minutes:g} points across "
                        f"{plan.metadata.scenario_count} declared futures.")

@@ -9,7 +9,24 @@ export const approvalLabels: Record<ApprovalStatus, string> = {
 
 export const batchApprovalLabels: Record<BatchDispatch['status'], string> = {
   APPROVED: 'Approved', PARTIAL: 'Partially approved', REJECTED: 'Rejected', UNKNOWN: 'Approvals unconfirmed',
+  QUEUED: 'Queued', PROCESSING: 'Processing',
 };
+
+export function batchInProgress(result: BatchDispatch) {
+  return result.status === 'PROCESSING' || result.job_status === 'QUEUED' || result.job_status === 'RUNNING'
+    || (!result.job_status && result.status === 'QUEUED');
+}
+
+export function batchProgressLabel(result: BatchDispatch) {
+  if (result.job_status === 'EXPIRED') return batchInProgress(result)
+    ? 'Authorization expired; existing work finishing' : 'Approval window expired';
+  if (result.job_status === 'COMPLETED') return result.recommended_count > 0
+    && result.completed_count === result.recommended_count
+    ? 'All approved relocations arrived' : 'Finished with issues';
+  if (result.job_status === 'RUNNING' || result.status === 'PROCESSING') return 'Relocations in progress';
+  if (result.job_status === 'QUEUED' || result.status === 'QUEUED') return 'Human approval accepted';
+  return batchApprovalLabels[result.status];
+}
 
 const approvalReasons: Readonly<Record<string, string>> = {
   APPROVAL_CONFIRMED: 'Dispatch confirmed the vehicle assignment.',
@@ -18,6 +35,8 @@ const approvalReasons: Readonly<Record<string, string>> = {
   RECOMMENDATION_EXPIRED: 'The recommendation expired before approval.',
   RECOMMENDATION_MISSING_OR_EXPIRED: 'The recommendation is no longer available. It may have expired.',
   BATCH_EXPIRED: 'The batch recommendation expired before approval.',
+  BATCH_AUTHORIZATION_EXPIRED: 'The 30-minute approval window expired before this EV could start.',
+  SIMULATOR_LEASE_EXPIRED: 'The simulator owner lease expired. An operator must recover the simulator before requesting another relocation.',
   CRDS_APPROVAL_DISABLED: 'CRDS approval is unavailable for this recommendation.',
   CRDS_ADVISORY_ONLY: 'This recommendation is available for review in advisory mode.',
   CRDS_POLICY_CHANGED: 'CRDS settings changed after the recommendation was made.',
@@ -70,7 +89,7 @@ const approvalReasons: Readonly<Record<string, string>> = {
 };
 
 const journeyLabels: Readonly<Record<string, string>> = {
-  PENDING: 'Awaiting delivery', SENT: 'Sent to EV', ACKNOWLEDGED: 'Accepted by EV',
+  QUEUED: 'Queued for admission', PENDING: 'Awaiting delivery', SENT: 'Sent to EV', ACKNOWLEDGED: 'Accepted by EV',
   IN_PROGRESS: 'In progress', ARRIVAL_PENDING: 'Confirming arrival', SUCCEEDED: 'Arrived',
   REJECTED: 'Declined by EV', FAILED: 'Failed', UNKNOWN: 'Unconfirmed',
 };

@@ -52,11 +52,11 @@ class FacilitiesStore:
     async def close(self):
         await self.repository.close()
 
-    async def persist(self):
+    async def persist(self, *, holds=None, version=None):
         live_source = self.settings.source == "LTA_DATAMALL"
         await self.repository.save({"instance_id": self.instance_id,
-                                    "version": self.version,
-                                    "holds": self.holds,
+                                    "version": self.version if version is None else version,
+                                    "holds": self.holds if holds is None else holds,
                                     "catalogue": {} if live_source else self.catalogue,
                                     "feeds": {} if live_source else self.feeds})
 
@@ -212,6 +212,8 @@ class FacilitiesStore:
                                "facility": site,
                                "receipt": receipt, "charging_allocated": charging,
                                "status": "RESERVED"}
+            if charging:
+                self.holds[key]["cable"] = {"status": "AWAITING_CONNECTION"}
             await self.persist()
             return deepcopy(receipt)
 
@@ -261,7 +263,13 @@ class FacilitiesStore:
                     "zone_id": site.zone_id, "source": site.source,
                     "charging_allocated": occupied["charging_allocated"],
                     "charging_power_kw": site.charging_power_kw or DEFAULT_CHARGING_POWER_KW,
-                    "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT}
+                    "charging_target_soc_pct": CHARGING_TARGET_SOC_PCT,
+                    "charging_session_id": occupied["receipt"]["dispatch_id"] if occupied["charging_allocated"] else None,
+                    "cable_status": occupied.get("cable", {}).get("status", "AWAITING_CONNECTION"),
+                    "cable_state_recorded": "cable" in occupied,
+                    **{key: occupied.get("cable", {}).get(key) for key in (
+                        "cable_connected_by", "cable_connected_at",
+                        "cable_disconnected_by", "cable_disconnected_at")}}
         return {"vehicle_id": vehicle_id, "parking": parking,
                 "pending": any(entry["status"] == "RESERVED" for entry in entries),
                 "access_position_missing": access_position_missing}

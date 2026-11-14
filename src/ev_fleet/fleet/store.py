@@ -8,6 +8,7 @@ from ev_fleet.common.clock import Clock
 from ev_fleet.common.settings import DispatchSettings
 from ev_fleet.common.travel import distance_km, predicted_soc
 from ev_fleet.common.persistence import SnapshotRepository
+from ev_fleet.common.record_persistence import RecordSnapshotRepository
 from ev_fleet.contracts.vehicles import SimulatorRuntimeReport
 from .recovery import SimulatorRecovery
 
@@ -21,7 +22,7 @@ class FleetStore:
         self.charging_tasks = {}
         self.instance_id = str(uuid4())
         self.version = 0
-        self.repository = repository or SnapshotRepository.from_env("fleet")
+        self.repository = repository or RecordSnapshotRepository.from_env("fleet", "vehicles")
         self.history_cache = {}  # bounded ephemeral-only cache; PostgreSQL is durable
         self.runtime_reports = {}  # Diagnostic only; never part of a durable snapshot.
         self.persistence_uncertain = False
@@ -47,7 +48,11 @@ class FleetStore:
                     received_at = record["received_at"]
                     record["initial_age"] = max(0, (now - received_at).total_seconds())
                     record["received_tick"] = tick
-            self._publish_committed_state()
+            if isinstance(self.repository, RecordSnapshotRepository) and self.repository.requires_promotion:
+                # Upgrade while startup still owns the store, before requests.
+                await self.persist()
+            else:
+                self._publish_committed_state()
         else:
             await self.persist()
 
@@ -82,18 +87,36 @@ class FleetStore:
         self.ensure_consistent()
         payload = {"instance_id": self.instance_id, "version": self.version,
                    "vehicles": self.vehicles, "charging_tasks": self.charging_tasks}
+        changed = self._changed_record_keys()
         try:
-            if telemetry_sample is None:
+            if isinstance(self.repository, RecordSnapshotRepository):
+                await self.repository.save(payload, changed_keys=changed, telemetry_sample=telemetry_sample)
+            elif telemetry_sample is None:
                 await self.repository.save(payload)
             else:
                 await self.repository.save(payload, telemetry_sample=telemetry_sample)
-            self._publish_committed_state()
+            self._publish_committed_updates(changed)
         except asyncio.CancelledError:
             self.mark_persistence_uncertain()
             raise
         except Exception as exc:
             self.mark_persistence_uncertain()
             raise HTTPException(503, "PERSISTENCE_STATE_UNCERTAIN") from exc
+
+    def _changed_record_keys(self):
+        previous = self._committed_state[2]
+        return {key for key, record in self.vehicles.items() if record != previous.get(key)}
+
+    def _publish_committed_updates(self, changed_keys):
+        # Unchanged entries are already frozen. Never substitute live records.
+        previous = self._committed_state[2]
+        records = {key: value for key, value in previous.items() if key in self.vehicles}
+        for key in changed_keys:
+            records[key] = deepcopy(self.vehicles[key])
+        tasks = self._committed_state[3]
+        if self.charging_tasks != tasks:
+            tasks = deepcopy(self.charging_tasks)
+        self._committed_state = (self.instance_id, self.version, records, tasks)
 
     def _publish_committed_state(self):
         self._committed_state = (
@@ -310,7 +333,7 @@ class FleetStore:
                     and (not record.get("stranded_after_stop")
                          or telemetry.parked_facility_id and telemetry.soc_pct > 0)
                     and telemetry.availability == "AVAILABLE" and telemetry.relocation_state == "IDLE"
-                    and telemetry.charging_state != "CHARGING"
+                    and telemetry.charging_state == "NOT_CHARGING"
                     and telemetry.active_dispatch_id is None) else "UNAVAILABLE",
                 "connectivity": "OFFLINE" if age is None or age >= self.settings.offline_seconds else "ONLINE"}
 
@@ -590,8 +613,13 @@ class FleetStore:
             return deepcopy(receipt)
 
     async def get(self, vehicle_id):
-        async with self.lock:
-            return self.view(self.record(vehicle_id))
+        self.ensure_consistent()
+        if self.lock.locked():
+            records, tasks = self._committed_state[2:4]
+            if vehicle_id not in records:
+                raise HTTPException(404, "VEHICLE_NOT_FOUND")
+            return self.view(records[vehicle_id], charging_tasks=tasks)
+        return self.view(self.record(vehicle_id))
 
     @staticmethod
     def active_snapshot_vehicle(state):

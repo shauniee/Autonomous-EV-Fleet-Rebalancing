@@ -426,7 +426,7 @@ describe('dispatcher dashboard', () => {
     expect(screen.getByTestId('batch-recommendation')).toHaveTextContent('CBD simulated parking 1');
     const recommendations = fetch.mock.calls.filter(([path, init]) =>
       path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
-    expect(JSON.parse(String(recommendations[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 3 });
+    expect(JSON.parse(String(recommendations[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 3, planning_mode: 'FULFIL_REQUEST' });
     expect(fetch.mock.calls.filter(([path, init]) =>
       path === '/api/dispatch/batches' && init?.method === 'POST')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
@@ -477,7 +477,7 @@ describe('dispatcher dashboard', () => {
     await screen.findByTestId('batch-recommendation');
     const requests = fetch.mock.calls.filter(([path, init]) =>
       path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
-    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1 });
+    expect(JSON.parse(String(requests[0][1]!.body))).toEqual({ target_zone_id: 'cbd', quantity: 1, planning_mode: 'FULFIL_REQUEST' });
     expect(fetch.mock.calls.some(([path, init]) => path === '/api/rebalancing/recommendations' && init?.method === 'POST')).toBe(false);
     expect(fetch.mock.calls.some(([, init]) => JSON.stringify(init ?? {}).includes('AccountKey'))).toBe(false);
   });
@@ -824,5 +824,184 @@ describe('approval decision explanations', () => {
     fireEvent.click(notifications.getByRole('button', { name: 'Check status' }));
     expect(await notifications.findByText(/ev-01 · Approved/)).toHaveTextContent('ran out of battery during relocation');
     expect(notifications.queryByText(/BATTERY_DEPLETED|unexpected/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe('durable paced batch lifecycle', () => {
+  const recommendation = () => ({
+    batch_recommendation_id: 'paced-batch', target_zone_id: 'cbd', requested_count: 50,
+    recommended_count: 1, unfulfilled_count: 49, created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60000).toISOString(), explanation: 'One eligible assignment',
+    assumptions: [], assignments: [{ recommendation_id: 'paced-child', vehicle_id: 'ev-01',
+      facility_id: 'parking-1', facility_name: 'CBD parking',
+      target_position: { latitude: 1.28, longitude: 103.85 }, requires_charging: false,
+      distance_km: 1, predicted_arrival_soc_pct: 85, score: 1 }],
+  });
+  const progress = (requestId: string, done = false) => ({
+    request_id: requestId, batch_recommendation_id: 'paced-batch', requested_count: 50,
+    recommended_count: 1, status: done ? 'APPROVED' : 'QUEUED',
+    job_status: done ? 'COMPLETED' : 'QUEUED', accepted_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 1800000).toISOString(),
+    admitted_count: done ? 1 : 0, completed_count: done ? 1 : 0, queued_count: done ? 0 : 1,
+    in_flight_limit: 4, items: [{ recommendation_id: 'paced-child', vehicle_id: 'ev-01',
+      facility_id: 'parking-1', dispatch_id: 'paced-dispatch', state: done ? 'SUCCEEDED' : 'QUEUED',
+      approval_status: done ? 'APPROVED' : 'UNKNOWN', queue_status: done ? 'ADMITTED' : 'QUEUED',
+      attempts: done ? 1 : 0, retry_at: null, error: null }],
+  });
+
+  it('accepts 50, preserves the accepted job through reload, and polls completion without submitting again', async () => {
+    const fetch = server({ '/api/rebalancing/batch-recommendations': recommendation() });
+    const base = fetch.getMockImplementation()!;
+    let requestId = '';
+    let done = false;
+    fetch.mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === '/api/dispatch/batches' && init?.method === 'POST') {
+        requestId = JSON.parse(String(init.body)).request_id;
+        return new Response(JSON.stringify(progress(requestId)), { status: 202 });
+      }
+      if (path === `/api/dispatch/batches/${requestId}` && requestId) {
+        return new Response(JSON.stringify(progress(requestId, done)));
+      }
+      return base(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 50 EVs' }));
+    await screen.findByTestId('batch-recommendation');
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('30 minutes');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
+    const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(result).toHaveTextContent('Human approval accepted');
+    expect(JSON.parse(sessionStorage.getItem('fleet.pending-batch')!)[0]).toMatchObject({ request_id: requestId, accepted: true });
+    const notifications = openNotifications();
+    expect(notifications.queryByRole('button', { name: 'Retry same batch approval' })).not.toBeInTheDocument();
+    view.unmount();
+    render(<App/>);
+    const restored = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(restored).toHaveTextContent('1 queued');
+    done = true;
+    await waitFor(() => expect(restored).toHaveTextContent('All approved relocations arrived'), { timeout: 4000 });
+    expect(sessionStorage.getItem('fleet.pending-batch')).toBeNull();
+    expect(fetch.mock.calls.filter(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([path, init]) => path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('retains progress after a failed status check and automatically checks the same accepted job again', async () => {
+    sessionStorage.setItem('fleet.pending-batch', JSON.stringify([{
+      request_id: 'restored-batch', batch_recommendation_id: 'paced-batch', accepted: true,
+    }]));
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    let checks = 0;
+    fetch.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/dispatch/batches/restored-batch') {
+        checks++;
+        if (checks === 2) throw new Error('Connection lost');
+        return new Response(JSON.stringify(progress('restored-batch', checks > 2)));
+      }
+      return base(input, init);
+    });
+    render(<App/>);
+    const result = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(result).toHaveTextContent('1 queued');
+    await waitFor(() => expect(result).toHaveTextContent('Progress update unavailable'), { timeout: 4000 });
+    expect(result).toHaveTextContent('1 queued');
+    await waitFor(() => expect(result).toHaveTextContent('All approved relocations arrived'), { timeout: 4000 });
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('retries an ambiguous batch POST with its original ID after reload and adopts the accepted job on a status check', async () => {
+    const fetch = server({ '/api/rebalancing/batch-recommendations': recommendation() });
+    const base = fetch.getMockImplementation()!;
+    const bodies: string[] = [];
+    fetch.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/dispatch/batches' && init?.method === 'POST') {
+        bodies.push(String(init.body));
+        throw new Error('Response lost after acceptance');
+      }
+      if (String(input).startsWith('/api/dispatch/batches/')) {
+        const id = JSON.parse(bodies[0]).request_id;
+        return new Response(JSON.stringify(progress(id)));
+      }
+      return base(input, init);
+    });
+    const view = render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 50 EVs' }));
+    await screen.findByTestId('batch-recommendation');
+    fireEvent.click(screen.getByRole('button', { name: 'Review dispatch' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve 1 EV' }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    view.unmount();
+    render(<App/>);
+    const notifications = openNotifications();
+    fireEvent.click(notifications.getByRole('button', { name: 'Retry same batch approval' }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual(bodies[0]);
+    await waitFor(() => expect(notifications.getByRole('button', { name: 'Check batch status' })).toBeEnabled());
+    fireEvent.click(notifications.getByRole('button', { name: 'Check batch status' }));
+    expect(await screen.findByRole('region', { name: 'Batch approval outcomes' })).toHaveTextContent('Human approval accepted');
+    expect(notifications.queryByRole('button', { name: 'Retry same batch approval' })).not.toBeInTheDocument();
+    expect(JSON.parse(sessionStorage.getItem('fleet.pending-batch')!)[0]).toMatchObject({ accepted: true });
+  });
+
+  it('retains expired processing jobs through reload and polls until existing work is terminal', async () => {
+    sessionStorage.setItem('fleet.pending-batch', JSON.stringify([{
+      request_id: 'expired-batch', batch_recommendation_id: 'paced-batch', accepted: true,
+    }]));
+    const fetch = server();
+    const base = fetch.getMockImplementation()!;
+    let done = false;
+    fetch.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/dispatch/batches/expired-batch') {
+        const original = progress('expired-batch');
+        return new Response(JSON.stringify({ ...original, status: done ? 'PARTIAL' : 'PROCESSING',
+          job_status: 'EXPIRED', expires_at: new Date(Date.now() - 60000).toISOString(),
+          recommended_count: 2, admitted_count: 1, completed_count: done ? 1 : 0,
+          queued_count: done ? 0 : 1, items: [
+            { ...original.items[0], queue_status: 'ADMITTED', approval_status: 'APPROVED', state: done ? 'SUCCEEDED' : 'IN_PROGRESS' },
+            { ...original.items[0], recommendation_id: 'uncertain-child', dispatch_id: 'uncertain-dispatch', vehicle_id: 'ev-02',
+              queue_status: done ? 'REJECTED' : 'WAITING', approval_status: done ? 'REJECTED' : 'UNKNOWN',
+              state: done ? 'REJECTED' : 'UNKNOWN', error: done ? 'BATCH_AUTHORIZATION_EXPIRED' : null },
+          ],
+        }));
+      }
+      return base(input, init);
+    });
+    const view = render(<App/>);
+    const initial = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(initial).toHaveTextContent('existing work finishing');
+    expect(JSON.parse(sessionStorage.getItem('fleet.pending-batch')!)[0]).toMatchObject({ request_id: 'expired-batch', accepted: true });
+    view.unmount();
+    render(<App/>);
+    const restored = await screen.findByRole('region', { name: 'Batch approval outcomes' });
+    expect(restored).toHaveTextContent('0 arrived');
+    const notifications = openNotifications();
+    expect(notifications.getByText(/New starts are blocked\./)).toBeInTheDocument();
+    expect(notifications.queryByRole('button', { name: 'Retry same batch approval' })).not.toBeInTheDocument();
+    done = true;
+    await waitFor(() => expect(restored).toHaveTextContent('1 arrived'), { timeout: 4000 });
+    expect(restored).toHaveTextContent('Approval window expired');
+    expect(sessionStorage.getItem('fleet.pending-batch')).toBeNull();
+    expect(fetch.mock.calls.filter(([path]) => path === '/api/dispatch/batches/expired-batch').length).toBeGreaterThanOrEqual(3);
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
+  it('allows a charging request for 50 EVs while keeping the physical shortfall visible', async () => {
+    const fetch = server({ '/api/rebalancing/batch-recommendations': recommendation() });
+    render(<App/>);
+    fireEvent.click(await screen.findByRole('button', { name: /CBD Critical/ }));
+    fireEvent.change(screen.getByLabelText('Destination purpose'), { target: { value: 'CHARGE' } });
+    fireEvent.change(screen.getByLabelText('Number of EVs needed'), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Recommend 50 EVs' }));
+    expect(await screen.findByTestId('batch-recommendation')).toHaveTextContent('1 of 50 EVs recommended');
+    const request = fetch.mock.calls.find(([path, init]) => path === '/api/rebalancing/batch-recommendations' && init?.method === 'POST');
+    expect(JSON.parse(String(request![1]!.body))).toMatchObject({ quantity: 50, purpose: 'CHARGE' });
+    expect(fetch.mock.calls.some(([path, init]) => path === '/api/dispatch/batches' && init?.method === 'POST')).toBe(false);
   });
 });

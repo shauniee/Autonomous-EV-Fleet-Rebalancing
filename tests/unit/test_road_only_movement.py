@@ -320,7 +320,7 @@ def test_expired_parking_grace_stops_charging_without_refresh(monkeypatch):
         parking = {
             "facility_id": "test-charger", "name": "Test charger", "position": position,
             "zone_id": "woodlands", "source": "MOCK", "charging_allocated": True,
-            "charging_power_kw": 50, "charging_target_soc_pct": 80,
+            "charging_power_kw": 50, "charging_target_soc_pct": 80, "cable_status": "CONNECTED",
         }
         node = MovingNode("http://fleet.test", "http://dispatch.test", "ev-expired-charge",
                           position, 70, facilities_url="http://facilities.test",

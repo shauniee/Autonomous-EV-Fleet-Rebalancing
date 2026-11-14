@@ -1,6 +1,7 @@
 """Read-only CRDS observations; Fleet is the sole source of actual stock."""
 import asyncio
 from collections import Counter, defaultdict
+from typing import TypeVar
 
 import httpx
 from fastapi import HTTPException
@@ -16,6 +17,8 @@ from ev_fleet.demand.clients import parking_snapshot
 from ev_fleet.demand.settings import DemandSettings
 from .clients import get_json
 
+
+_Snapshot = TypeVar("_Snapshot", FleetSnapshot, CrdsPlanningSnapshot)
 
 ACTIVE_JOURNEY_STATES = {"PENDING", "SENT", "ACKNOWLEDGED", "IN_PROGRESS", "ARRIVAL_PENDING"}
 
@@ -135,19 +138,47 @@ async def collect_inputs(client, settings, dispatch_url, clock, traffic, *, time
              f"{settings.facilities_url}/api/v1/facilities",
              f"{dispatch_url}/api/v1/dispatch-planning-state"]
 
+    deadline = clock.monotonic() + timeout_seconds
+
     async def read_inputs():
         raw = await asyncio.gather(*(get_json(client, url) for url in reads))
         fleet = FleetSnapshot.model_validate(raw[0])
+        demand = CrdsDemandSnapshot.model_validate(raw[1])
+        facilities = FacilitiesSnapshot.model_validate(raw[2])
+        planning = CrdsPlanningSnapshot.model_validate(raw[3])
+        # A full Facilities catalogue may outlast the small snapshots' freshness
+        # window. Read those again once after assembling the catalogue, using
+        # the original deadline. Never relabel an old snapshot as fresh.
+        now = clock.now()
+        remaining = min(policy.fleet_timeout_seconds, deadline - clock.monotonic())
+
+        async def refresh(url: str, model: type[_Snapshot], original: _Snapshot) -> _Snapshot:
+            if remaining <= 0:
+                return original
+            try:
+                data = await asyncio.wait_for(get_json(client, url), remaining)
+                return model.model_validate(data)
+            except (asyncio.TimeoutError, HTTPException, httpx.HTTPError, ValueError):
+                return original  # The unchanged freshness checks still defer.
+
+        async def current_fleet() -> FleetSnapshot:
+            if -5 <= (now - fleet.snapshot_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
+                return fleet
+            return await refresh(reads[0], FleetSnapshot, fleet)
+
+        async def current_planning() -> CrdsPlanningSnapshot:
+            if -5 <= (now - planning.observed_at).total_seconds() < policy.fleet_snapshot_max_age_seconds:
+                return planning
+            return await refresh(reads[3], CrdsPlanningSnapshot, planning)
+
+        fleet, planning = await asyncio.gather(current_fleet(), current_planning())
         parking = None
         if any(v.telemetry and v.telemetry.parked_facility_id and not v.stale
                for v in fleet.vehicles):
             parking = await parking_snapshot(client, settings.facilities_url, policy.fleet_timeout_seconds)
-        return raw, fleet, parking
+        return fleet, demand, facilities, planning, parking
 
-    raw, fleet, parking = await asyncio.wait_for(read_inputs(), timeout_seconds)
-    demand = CrdsDemandSnapshot.model_validate(raw[1])
-    facilities = FacilitiesSnapshot.model_validate(raw[2])
-    planning = CrdsPlanningSnapshot.model_validate(raw[3])
+    fleet, demand, facilities, planning, parking = await asyncio.wait_for(read_inputs(), timeout_seconds)
     now = clock.now()
     policy = policy.model_copy(update={"min_reserve_pct": settings.min_reserve_pct,
         "telemetry_max_age_seconds": min(policy.telemetry_max_age_seconds, settings.stale_seconds)})

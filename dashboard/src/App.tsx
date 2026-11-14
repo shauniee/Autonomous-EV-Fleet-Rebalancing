@@ -3,7 +3,7 @@ import { applyTheme, type Theme } from './theme';
 import type { Approval, BatchApproval, BatchDispatch, BatchRecommendation, ChargerAdvice, ChargingAdvice, TrafficSnapshot, DispatchApprovalResult, DispatchList, Facility, FacilitiesSnapshot, Fleet, HeatMap, Recommendation } from './api/contracts';
 import { api, ApiError } from './api/client';
 import { recommendationError } from './components/crdsMessages';
-import { approvalErrorMessage, approvalStatus, batchApprovalLabels, dispatchApprovalMessage } from './components/approvalMessages';
+import { approvalErrorMessage, approvalStatus, batchInProgress, batchProgressLabel, dispatchApprovalMessage } from './components/approvalMessages';
 import { usePendingApprovals } from './hooks/usePendingApprovals';
 import { usePolling } from './hooks/usePolling';
 import { OperationalTabs } from './components/OperationalTabs';
@@ -23,6 +23,7 @@ import { DemandThresholds, defaultDemandThresholds, demandLevel, demandLevels, r
 
 const pendingKey = 'fleet.pending-approval';
 const batchPendingKey = 'fleet.pending-batch';
+type PendingBatchApproval = BatchApproval & { accepted?: boolean };
 interface RoutingConfiguration {
   provider: 'SIMULATED' | 'ONEMAP';
   configured: boolean;
@@ -87,8 +88,12 @@ export default function App() {
   const [selectedFacility, setSelectedFacility] = useState('');
   const [batch, setBatch] = useState<BatchRecommendation | null>(null);
   const [batchConfirming, setBatchConfirming] = useState(false);
-  const [batchResult, setBatchResult] = useState<BatchDispatch | null>(null);
-  const [pendingBatches, updateBatch] = usePendingApprovals<BatchApproval>(batchPendingKey, 'batch_recommendation_id');
+  const [batchResults, setBatchResults] = useState<Record<string, BatchDispatch>>({});
+  const [batchProgressErrors, setBatchProgressErrors] = useState<Record<string, boolean>>({});
+  const [pendingBatches, updateBatch] = usePendingApprovals<PendingBatchApproval>(batchPendingKey, 'batch_recommendation_id');
+  const clearFinishedBatches = useCallback(() => {
+    setBatchResults(previous => Object.fromEntries(Object.entries(previous).filter(([, result]) => batchInProgress(result))));
+  }, []);
   const [recommending, setRecommending] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [activity, setActivity] = useState<Notification[]>([]);
@@ -137,7 +142,7 @@ export default function App() {
   }, [dispatches.data, pendingApprovals, updateApproval, notify]);
   const choose = useCallback((id: string) => {
     recommendationRequest.current?.abort(); setRecommending(false);
-    setSelected(id); setDemandDetails(false); setSelectedFacility(''); setRecommendation(null); setBatch(null); setBatchResult(null); setConfirming(false); setBatchConfirming(false);
+    setSelected(id); setDemandDetails(false); setSelectedFacility(''); setRecommendation(null); setBatch(null); clearFinishedBatches(); setConfirming(false); setBatchConfirming(false);
   }, []);
   const zones = heat.data?.zones ?? [];
   const vehicles = fleet.data?.vehicles ?? [];
@@ -178,7 +183,7 @@ export default function App() {
   async function recommend() {
     recommendationRequest.current?.abort();
     const controller = new AbortController(); recommendationRequest.current = controller;
-    setRecommending(true); setRecommendation(null); setBatch(null); setBatchResult(null);
+    setRecommending(true); setRecommendation(null); setBatch(null); clearFinishedBatches();
     try {
       if (!facilityWorkflow) {
         const result = await api<Recommendation>('/api/rebalancing/recommendations', {
@@ -188,7 +193,7 @@ export default function App() {
       } else {
         const result = await api<BatchRecommendation>('/api/rebalancing/batch-recommendations', {
           method: 'POST', timeoutMs: 135000, body: JSON.stringify({ target_zone_id: selected, quantity,
-            ...(purpose === 'CHARGE' ? { purpose } : {}),
+            ...(purpose === 'CHARGE' ? { purpose } : { planning_mode: 'FULFIL_REQUEST' }),
             ...(selectedVehicle ? { vehicle_id: selectedVehicle } : {}),
             ...(purpose === 'CHARGE' && selectedFacility ? { facility_id: selectedFacility } : {}) }), signal: controller.signal,
         });
@@ -222,23 +227,22 @@ export default function App() {
       if (mounted.current) { setSubmitting(false); dispatches.refresh(); fleet.refresh(); heat.refresh(); }
     }
   }
-  async function approveBatch(retry?: BatchApproval) {
+  async function approveBatch(retry?: PendingBatchApproval) {
+    if (retry?.accepted) return;
     if (submittingRef.current || (!retry && (!batch || batchBlocked || Date.now() >= Date.parse(batch.expires_at)))) return;
     submittingRef.current = true; setSubmitting(true); setBatchConfirming(false);
     const approval = retry ?? { request_id: crypto.randomUUID(), batch_recommendation_id: batch!.batch_recommendation_id };
     updateBatch(approval, true);
     if (!retry) setBatch(null);
     try {
-      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000, body: JSON.stringify(approval) });
+      const result = await api<BatchDispatch>('/api/dispatch/batches', { method: 'POST', timeoutMs: 135000,
+        body: JSON.stringify({ request_id: approval.request_id, batch_recommendation_id: approval.batch_recommendation_id }) });
       if (!mounted.current) return;
-      setBatchResult(result);
+      receiveBatchResult(result, approval, true);
       const dispatched = result.items.find(item => item.dispatch_id && !['REJECTED', 'FAILED'].includes(item.state));
       if (dispatched?.dispatch_id) setSelectedDispatch(dispatched.dispatch_id);
-      if (result.status === 'UNKNOWN') {
+      if (result.status === 'UNKNOWN' && !result.job_status) {
         notify('warning', 'Some batch outcomes are uncertain. Reconcile or retry using the same batch request ID.');
-      } else {
-        updateBatch(approval, false);
-        reportBatchOutcome(result);
       }
     } catch (e) {
       if (!mounted.current) return;
@@ -253,10 +257,47 @@ export default function App() {
       }
     }
   }
-  function reportBatchOutcome(result: BatchDispatch) {
-    notify(result.status === 'REJECTED' ? 'error' : result.status === 'PARTIAL' ? 'warning' : 'info',
-      `Batch ${batchApprovalLabels[result.status].toLowerCase()}. See the batch results for each EV’s outcome.`);
-  }
+  const reportBatchOutcome = useCallback((result: BatchDispatch) => {
+    const issues = result.job_status === 'EXPIRED' || (result.job_status === 'COMPLETED'
+      && result.completed_count !== result.recommended_count);
+    notify(result.status === 'REJECTED' ? 'error' : issues || result.status === 'PARTIAL' ? 'warning' : 'info',
+      batchInProgress(result) && result.job_status === 'EXPIRED'
+        ? 'Authorization expired. Existing journeys and claim confirmation continue automatically. New starts are blocked; follow batch progress in Dispatch.'
+        : batchInProgress(result)
+        ? 'Human approval accepted. EVs start gradually over a 30-minute window. Temporary failures retry automatically; follow batch progress in Dispatch.'
+        : `${batchProgressLabel(result)}. See the batch results for each EV. The journey status records arrival separately from admission.`);
+  }, [notify]);
+  const receiveBatchResult = useCallback((result: BatchDispatch, approval: PendingBatchApproval, announce = false) => {
+    setBatchResults(previous => ({ ...previous, [result.request_id]: result }));
+    setBatchProgressErrors(previous => ({ ...previous, [result.request_id]: false }));
+    if (batchInProgress(result)) {
+      // Accepted jobs survive a reload without creating another approval or recommendation.
+      if (!approval.accepted) updateBatch({ ...approval, accepted: true }, true);
+    } else if (result.job_status || result.status !== 'UNKNOWN') {
+      updateBatch(approval, false);
+    }
+    if (announce && (result.job_status || result.status !== 'UNKNOWN')) reportBatchOutcome(result);
+  }, [updateBatch, reportBatchOutcome]);
+  useEffect(() => {
+    const accepted = pendingBatches.filter(pending => pending.accepted);
+    if (!accepted.length) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function pollBatches() {
+      await Promise.all(accepted.map(async pending => {
+        try {
+          const result = await api<BatchDispatch>(`/api/dispatch/batches/${pending.request_id}`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          receiveBatchResult(result, pending, !batchInProgress(result));
+        } catch {
+          if (!controller.signal.aborted) setBatchProgressErrors(previous => ({ ...previous, [pending.request_id]: true }));
+        }
+      }));
+      if (!controller.signal.aborted) timer = setTimeout(() => void pollBatches(), 2000);
+    }
+    void pollBatches();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [pendingBatches, receiveBatchResult]);
   const [checkingApproval, setCheckingApproval] = useState(false);
   async function checkApproval(requestId: string, close = false) {
     setCheckingApproval(true);
@@ -280,12 +321,10 @@ export default function App() {
       const result = closeItem
         ? await api<BatchDispatch>(`${path}/items/${closeItem}/close`, { method: 'POST' })
         : await api<BatchDispatch>(path);
-      setBatchResult(result);
-      const pending = pendingBatches.find(item => item.request_id === requestId);
-      if (result.status !== 'UNKNOWN') {
-        if (pending) updateBatch(pending, false);
-        reportBatchOutcome(result);
-      } else notify('warning', 'Some approvals are still unconfirmed. Check the individual batch results.');
+      const pending = pendingBatches.find(item => item.request_id === requestId)
+        ?? { request_id: result.request_id, batch_recommendation_id: result.batch_recommendation_id };
+      receiveBatchResult(result, pending, true);
+      if (result.status === 'UNKNOWN' && !result.job_status) notify('warning', 'Some approvals are still unconfirmed. Check the individual batch results.');
       setOperationalTab('dispatch');
       dispatches.refresh();
     } catch (error) {
@@ -303,11 +342,13 @@ export default function App() {
     </>,
   });
   for (const pending of pendingBatches) activeNotifications.push({
-    id: pending.request_id, title: 'Unconfirmed batch approval',
-    message: `Batch ${pending.request_id}. You can continue with other relocations.`,
+    id: pending.request_id, title: pending.accepted ? 'Accepted batch in progress' : 'Unconfirmed batch approval',
+    message: pending.accepted
+      ? `Batch ${pending.request_id}. ${batchResults[pending.request_id]?.job_status === 'EXPIRED' ? 'Authorization expired. Existing journeys and claim confirmation continue automatically. New starts are blocked.' : 'Starts and temporary retries run automatically.'} ${batchProgressErrors[pending.request_id] ? 'Progress update unavailable; checking again automatically.' : 'See live progress in Dispatch.'}`
+      : `Batch ${pending.request_id}. You can continue with other relocations.`,
     actions: <>
       <button disabled={submitting || checkingApproval} onClick={() => void reconcileBatch(pending.request_id)}>Check batch status</button>
-      <button disabled={submitting || checkingApproval} onClick={() => void approveBatch(pending)}>Retry same batch approval</button>
+      {!pending.accepted && <button disabled={submitting || checkingApproval} onClick={() => void approveBatch(pending)}>Retry same batch approval</button>}
     </>,
   });
   const unavailable = [
@@ -445,21 +486,22 @@ export default function App() {
                     <div className="request-field"><label htmlFor="relocation-purpose">Destination purpose</label>
                       <div className="select-wrap"><select className="form-select" id="relocation-purpose" value={purpose} disabled={recommending || submitting} onChange={event => {
                         setPurpose(event.target.value as 'REBALANCE' | 'CHARGE'); setSelectedFacility('');
-                        setBatchResult(null);
+                        clearFinishedBatches();
                       }}><option value="REBALANCE">{facilityWorkflow ? 'Automatic' : 'Rebalance'}</option><option value="CHARGE">Charging only</option></select></div>
                     </div>
-                    <div className="request-field request-count"><label htmlFor="ev-count">EV count</label><input id="ev-count" aria-label="Number of EVs needed" type="number" min={1} max={20} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
-                      setQuantity(Math.max(1, Math.min(20, Math.trunc(Number(event.target.value) || 1))));
-                      setBatchResult(null);
+                    <div className="request-field request-count"><label htmlFor="ev-count">EV count</label><input id="ev-count" aria-label="Number of EVs needed" type="number" min={1} max={50} value={quantity} disabled={recommending || submitting || !!selectedVehicle} onChange={event => {
+                      setQuantity(Math.max(1, Math.min(50, Math.trunc(Number(event.target.value) || 1))));
+                      clearFinishedBatches();
                     }}/></div>
                     <div className="request-field request-vehicle"><label htmlFor="relocation-vehicle">Vehicle</label>
                       <div className="select-wrap"><select className="form-select" id="relocation-vehicle" value={selectedVehicle} disabled={recommending || submitting} onChange={event => {
                         setSelectedVehicle(event.target.value); setSelectedFacility(''); if (event.target.value) setQuantity(1);
-                        setBatchResult(null);
+                        clearFinishedBatches();
                       }}><option value="">Any eligible</option>{vehicles.map(vehicle => <option key={vehicle.vehicle_id} value={vehicle.vehicle_id} disabled={vehicle.stale || vehicle.effective_availability !== 'AVAILABLE'}>{vehicle.vehicle_id} · {vehicle.telemetry?.soc_pct.toFixed(1) ?? '—'}% · {vehicle.effective_availability}</option>)}</select></div>
                     </div>
                   </div>
-                  {purpose === 'CHARGE' ? <p className="muted">Simulated charging after arrival, up to 80%.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
+                  {purpose === 'REBALANCE' && facilityWorkflow && <p className="muted">Plan the requested number of feasible relocations. Coverage trade-offs are shown for dispatcher review; safety and capacity checks still apply.</p>}
+                  {purpose === 'CHARGE' ? <p className="muted">After arrival, ground staff connect the cable. Simulated charging runs to 80%; staff then disconnect it before the EV returns to service.</p> : facilityWorkflow && <p className="muted">Automatic chooses charging below 35% predicted arrival SOC, or parking otherwise.</p>}
                   {selectedFacility && <p className="muted">Charging advisory destination: <strong>{selectedFacility}</strong> (exact facility required). <button disabled={recommending || submitting} onClick={() => setSelectedFacility('')}>Clear advised charger</button></p>}
                 </section>}
                 {!demandDetails && recommendation && <RecommendationPanel key={recommendation.recommendation_id} recommendation={recommendation} onRelocation={openPlanningRelocation}/>}
@@ -500,8 +542,9 @@ export default function App() {
               </div>}
             </aside>
           </div>
-          {batchResult && <BatchResult result={batchResult} onRelocation={openRelocation} busy={submitting || checkingApproval}
-            onClose={item => void reconcileBatch(batchResult.request_id, item)}/>}
+          {Object.values(batchResults).map(result => <BatchResult key={result.request_id} result={result}
+            onRelocation={openRelocation} busy={submitting || checkingApproval} progressError={batchProgressErrors[result.request_id]}
+            onClose={item => void reconcileBatch(result.request_id, item)}/>)}
         </> },
         { id: 'fleet', label: 'Fleet', content: <>
           <FleetPulse rentalDemandLevel={rentalDemandLevel} fleet={fleet} heat={heat} dispatches={dispatches} now={now}/>
@@ -527,7 +570,8 @@ export default function App() {
           summary: fleetFeedHealthy
             ? `EVs ≤30% SOC: ${vehicles.filter(v => !v.stale && v.connectivity === 'ONLINE' && v.telemetry && v.telemetry.soc_pct <= 30).length}`
             : 'unavailable',
-          content: <ChargingOperations notify={notify} vehicles={vehicles} onUpdated={() => fleet.refresh()}
+          content: <ChargingOperations notify={notify} vehicles={vehicles}
+            fleetFresh={!fleet.error && !!fleet.updatedAt && now - Date.parse(fleet.updatedAt) < 10000} onUpdated={() => fleet.refresh()}
             advice={chargingAdvice.data} adviceError={chargingAdvice.error} adviceFresh={chargingAdviceFresh}
             canPrepare={!!fresh && facilitiesFresh && !submitting && !recommending}
             onPrepare={(item: ChargerAdvice) => {

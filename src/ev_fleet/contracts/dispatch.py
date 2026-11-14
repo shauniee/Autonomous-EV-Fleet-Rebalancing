@@ -7,6 +7,7 @@ from .routing import RoadRoute
 
 
 class DispatchState(str, Enum):
+    QUEUED = "QUEUED"
     PENDING = "PENDING"
     SENT = "SENT"
     ACKNOWLEDGED = "ACKNOWLEDGED"
@@ -160,6 +161,9 @@ class BatchDispatchItem(Model):
     error: str | None = None
     approval_status: ApprovalStatus | None = None
     approval_decision: ApprovalDecision | None = None
+    queue_status: Literal["QUEUED", "WAITING", "ADMITTED", "REJECTED", "CANCELLED"] | None = None
+    attempts: int = Field(default=0, ge=0)
+    retry_at: AwareDatetime | None = None
 
 
 class BatchDispatch(Model):
@@ -168,4 +172,11 @@ class BatchDispatch(Model):
     requested_count: int = Field(ge=1)
     recommended_count: int = Field(ge=0)
     items: list[BatchDispatchItem]
-    status: Literal["APPROVED", "PARTIAL", "REJECTED", "UNKNOWN"]
+    status: Literal["APPROVED", "PARTIAL", "REJECTED", "UNKNOWN", "QUEUED", "PROCESSING"]
+    job_status: Literal["QUEUED", "RUNNING", "COMPLETED", "EXPIRED"] | None = None
+    accepted_at: AwareDatetime | None = None
+    expires_at: AwareDatetime | None = None
+    admitted_count: int = Field(default=0, ge=0)
+    completed_count: int = Field(default=0, ge=0)
+    queued_count: int = Field(default=0, ge=0)
+    in_flight_limit: int = Field(default=4, ge=1)

@@ -215,12 +215,13 @@ class SnapshotRepository:
         if self.pool is None:
             raise RuntimeError("Snapshot repository has not been started")
         try:
-            # Fleet's frequent telemetry updates previously serialized the
-            # whole model on the ASGI event loop. Offload CPU encoding while
-            # its owner already holds its single-writer lock.
+            # Fleet telemetry is protected by its owner lock; Dispatch passes
+            # an already-frozen snapshot. Keep their JSON encoding off the
+            # request loop so command polls and lease heartbeats stay responsive.
             def encode():
                 return json.dumps(encode_state(payload), allow_nan=False, separators=(",", ":"))
-            encoded = (await asyncio.to_thread(encode) if telemetry_sample is not None
+            encoded = (await asyncio.to_thread(encode)
+                       if telemetry_sample is not None or self.namespace == "dispatch"
                        else encode())
             async with self.pool.acquire() as connection:
                 async with connection.transaction():
