@@ -235,6 +235,22 @@ class FacilitiesStore:
             await self.persist()
             return deepcopy(entry["receipt"])
 
+    async def vacate(self, vehicle_id):
+        """The car has left its bay (a confirmed customer rental): free its occupied hold."""
+        # shortcut: a Dispatch retry of a lost "complete" reply after vacate gets 409
+        # PARKING_HOLD_TERMINAL and only logs; needs a sub-second race, revisit if seen.
+        async with self.lock:
+            occupied = [entry for entry in self.holds.values()
+                        if entry["receipt"]["vehicle_id"] == vehicle_id and entry["status"] == "OCCUPIED"]
+            if any(entry.get("cable", {}).get("status") == "CONNECTED" for entry in occupied):
+                raise HTTPException(409, "CHARGING_CABLE_CONNECTED")
+            for entry in occupied:
+                entry["status"] = entry["receipt"]["status"] = "RELEASED"
+            if occupied:
+                self.version += 1
+                await self.persist()
+            return self._vehicle_parking(vehicle_id)
+
     async def get_hold(self, dispatch_id):
         entry = self.holds.get(str(dispatch_id))
         if not entry:

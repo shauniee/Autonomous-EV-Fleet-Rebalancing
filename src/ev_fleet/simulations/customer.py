@@ -125,11 +125,14 @@ class RentalMovement(Movement):
 
 
 class RentalVehicle(MovingNode):
-    def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct, **kwargs):
+    def __init__(self, fleet_url, dispatch_url, vehicle_id, position, soc_pct, *,
+                 parking_url=None, **kwargs):
         # Customer-rental trips use a separate synthetic straight-line model;
         # do not falsely claim its initial locations/journeys were road-matched.
         super().__init__(fleet_url, dispatch_url, vehicle_id, position, soc_pct,
                          road_match_initial=False, **kwargs)
+        # Kept apart from MovingNode.facilities_url, which enables parking restore/repair.
+        self.parking_url = parking_url
         self.movement = RentalMovement(position, soc_pct)
         self.telemetry_lock = asyncio.Lock()
 
@@ -153,6 +156,16 @@ class RentalVehicle(MovingNode):
         if self.movement.rental is not None:
             return
         await super().command_step()
+
+    async def vacate_parking(self):
+        """Free the carpark bay this car leaves; the rental itself is already confirmed."""
+        if not self.parking_url:
+            return
+        try:
+            await self.request("POST", f"{self.parking_url}/api/v1/vehicles/{self.vehicle_id}/parking/vacate")
+        except httpx.HTTPError as exc:
+            # A missed vacate only under-reports free bays; never abort a started trip.
+            LOG.warning("CUSTOMER_VACATE_FAILED vehicle=%s kind=%s", self.vehicle_id, type(exc).__name__)
 
     async def run_customer_trip(self, destination_zone, on_started=None):
         """One attempt; Fleet is authoritative on availability and return."""
@@ -183,6 +196,7 @@ class RentalVehicle(MovingNode):
             raise
         # Only the owning EV process changes physical position and SOC.
         self.movement.start_customer_trip(rental_id, target)
+        await self.vacate_parking()
         if on_started is not None:
             on_started()
         LOG.info("CUSTOMER_START vehicle=%s rental=%s origin=%s destination=%s",
@@ -229,7 +243,7 @@ async def run_experiment(args):
     rng = random.Random(args.seed)
     zones = [START_ZONES[i % len(START_ZONES)] for i in range(args.vehicles)]
     nodes = [RentalVehicle(args.fleet_url, args.dispatch_url, f"customer-ev-{i+1:02d}",
-                           ZONES[zone], 85 - (i % 4) * 3,
+                           ZONES[zone], 85 - (i % 4) * 3, parking_url=args.facilities_url,
                            time_scale=args.time_scale, telemetry_interval=2,
                            tick_seconds=0.2, poll_interval=1)
              for i, zone in enumerate(zones)]
@@ -305,6 +319,7 @@ def main():
     parser = argparse.ArgumentParser(description="Finite simulated customer rental Job (same ev-fleet Kubernetes cluster)")
     parser.add_argument("--fleet-url", default=os.getenv("FLEET_URL", "http://localhost:8001"))
     parser.add_argument("--dispatch-url", default=os.getenv("DISPATCH_URL", "http://localhost:8004"))
+    parser.add_argument("--facilities-url", default=os.getenv("FACILITIES_URL", "http://localhost:8005"))
     parser.add_argument("--scenario", choices=sorted(PICKUP_WEIGHTS), default="morning")
     parser.add_argument("--vehicles", type=int, default=6)
     parser.add_argument("--duration-minutes", type=float, default=60)

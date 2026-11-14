@@ -52,3 +52,42 @@ def test_facility_rejects_double_counted_charging_capacity():
     payload["charging_bays"] = payload["parking_capacity"] + 1
     with pytest.raises(ValidationError):
         Facility.model_validate(payload)
+
+
+def test_vacate_frees_occupied_bay_once_and_keeps_connected_cable():
+    from uuid import uuid4
+    from ev_fleet.contracts.facilities import ParkingHoldRequest
+    from ev_fleet.facilities.store import FacilitiesStore
+
+    async def occupy(store, site, vehicle_id):
+        hold = ParkingHoldRequest(dispatch_id=uuid4(), vehicle_id=vehicle_id,
+                                  expected_zone_id=site.zone_id, expected_position=site.position)
+        await store.reserve(site.facility_id, hold)
+        await store.change(hold.dispatch_id, "OCCUPIED")
+        return hold.dispatch_id
+
+    async def scenario():
+        store = FacilitiesStore()
+        app = create_app(store)
+        site = next(s for s in CATALOGUE if s.facility_type == "PARKING"
+                    and s.status == "OPEN" and s.parking_available > 1)
+        before = (await store.get(site.facility_id)).parking_available
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            await occupy(store, site, "customer-ev-01")
+            assert (await store.get(site.facility_id)).parking_available == before - 1
+            vacated = await client.post("/api/v1/vehicles/customer-ev-01/parking/vacate")
+            assert vacated.status_code == 200 and vacated.json()["parking"] is None
+            assert (await store.get(site.facility_id)).parking_available == before
+            version = store.version
+            again = await client.post("/api/v1/vehicles/customer-ev-01/parking/vacate")
+            assert again.status_code == 200 and store.version == version
+
+            # A car still tethered to a charger has not left its bay.
+            dispatch_id = await occupy(store, site, "customer-ev-02")
+            store.holds[str(dispatch_id)]["cable"] = {"status": "CONNECTED"}
+            tethered = await client.post("/api/v1/vehicles/customer-ev-02/parking/vacate")
+            assert tethered.status_code == 409
+            assert tethered.json()["error"]["code"] == "CHARGING_CABLE_CONNECTED"
+            assert store.holds[str(dispatch_id)]["status"] == "OCCUPIED"
+
+    asyncio.run(scenario())
