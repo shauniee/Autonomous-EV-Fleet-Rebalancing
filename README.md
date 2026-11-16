@@ -1,4 +1,4 @@
-# Autonomous EV Fleet Rebalancing – Singapore
+# Autonomous EV Fleet Rebalancing
 
 A distributed, simulation-only system that helps a human dispatcher move
 electric vehicles between six Singapore zones (Jurong East, Woodlands, Bishan,
@@ -18,16 +18,35 @@ deployment on Kubernetes.
 
 ## How it works
 
-```text
-Simulation console ──► Demand: CBD needs 12 cars
-                          │
-Operator dashboard ──► Rebalancing (CRDS): should an EV move?  ──►  MOVE / HOLD / DEFER
-        │
-        └─ operator approves ──► Dispatch ──► Facilities holds a parking bay
-                                         └──► Fleet claims the EV
-                                                   │
-                         EV simulator polls Dispatch, drives the OneMap route,
-                         reports telemetry ──► Fleet ──► arrival verified, EV released
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Op as Operator
+    participant Con as Simulation console
+    participant Dash as Operator dashboard
+    participant Dem as Demand
+    participant Reb as Rebalancing (CRDS)
+    participant Dis as Dispatch
+    participant Fac as Facilities
+    participant Flt as Fleet
+    participant EV as EV simulator
+
+    Con->>Dem: Set zone demand (e.g. CBD needs 12 EVs)
+    Op->>Dash: Request a recommendation for CBD
+    Dash->>Reb: POST /recommendations
+    Reb->>Flt: Read fresh vehicle telemetry
+    Reb->>Dem: Read demand and shortages
+    Reb-->>Dash: MOVE / HOLD / DEFER with evidence
+    Op->>Dash: Review and approve a MOVE
+    Dash->>Dis: POST /dispatches
+    Dis->>Reb: Revalidate the benefit
+    Dis->>Fac: Hold a parking bay
+    Dis->>Flt: Claim the EV
+    EV->>Dis: Poll and acknowledge the command
+    loop Driving the approved OneMap route
+        EV->>Flt: Report position and battery
+    end
+    Dis->>Flt: Verify arrival and release the EV
 ```
 
 - **Recommendations are advice.** CRDS (Counterfactual Rebalancing under Delayed
