@@ -1,0 +1,135 @@
+{
+  "trials": 2000,
+  "with_candidates": 2000,
+  "crds_hold_share": 0.194,
+  "policies": {
+    "nearest": {
+      "move_share": 1.0,
+      "mean_worst_gain": 1.9415,
+      "harmful_share": 0.5065,
+      "not_useful_share": 0.5815,
+      "donor_harm_share": 0.5675,
+      "mean_km_when_moving": 11.209527006072923,
+      "crds_minus_policy_worst_gain": 16.9735,
+      "crds_minus_policy_ci95": [
+        16.242,
+        17.72
+      ]
+    },
+    "weighted": {
+      "move_share": 1.0,
+      "mean_worst_gain": 4.6885,
+      "harmful_share": 0.458,
+      "not_useful_share": 0.5335,
+      "donor_harm_share": 0.5125,
+      "mean_km_when_moving": 14.291153589275709,
+      "crds_minus_policy_worst_gain": 14.2265,
+      "crds_minus_policy_ci95": [
+        13.528,
+        14.912
+      ]
+    },
+    "crds_nominal": {
+      "move_share": 0.9965,
+      "mean_worst_gain": 10.673,
+      "harmful_share": 0.2695,
+      "not_useful_share": 0.3595,
+      "donor_harm_share": 0.305,
+      "mean_km_when_moving": 13.277170201004328,
+      "crds_minus_policy_worst_gain": 8.242,
+      "crds_minus_policy_ci95": [
+        7.556,
+        8.872
+      ]
+    },
+    "crds": {
+      "move_share": 0.806,
+      "mean_worst_gain": 18.915,
+      "harmful_share": 0.0,
+      "not_useful_share": 0.0,
+      "donor_harm_share": 0.0085,
+      "mean_km_when_moving": 14.490456401451645
+    }
+  },
+  "latency": [
+    {
+      "futures": 6,
+      "candidates": 5,
+      "p50_ms": 0.21987500076647848,
+      "p95_ms": 0.27049999334849417
+    },
+    {
+      "futures": 6,
+      "candidates": 10,
+      "p50_ms": 0.2625420020194724,
+      "p95_ms": 0.34691700420808047
+    },
+    {
+      "futures": 6,
+      "candidates": 20,
+      "p50_ms": 0.37075000000186265,
+      "p95_ms": 0.39858299714978784
+    },
+    {
+      "futures": 6,
+      "candidates": 40,
+      "p50_ms": 0.5654590058838949,
+      "p95_ms": 0.6583340000361204
+    },
+    {
+      "futures": 6,
+      "candidates": 80,
+      "p50_ms": 0.9224999957950786,
+      "p95_ms": 1.0273750085616484
+    },
+    {
+      "futures": 6,
+      "candidates": 160,
+      "p50_ms": 1.713332996587269,
+      "p95_ms": 1.8094170081894845
+    },
+    {
+      "futures": 9,
+      "candidates": 5,
+      "p50_ms": 0.4114170005777851,
+      "p95_ms": 0.4429589898791164
+    },
+    {
+      "futures": 9,
+      "candidates": 10,
+      "p50_ms": 0.47050000284798443,
+      "p95_ms": 0.49687499995343387
+    },
+    {
+      "futures": 9,
+      "candidates": 20,
+      "p50_ms": 0.6081669998820871,
+      "p95_ms": 0.7180829998105764
+    },
+    {
+      "futures": 9,
+      "candidates": 40,
+      "p50_ms": 0.8443330007139593,
+      "p95_ms": 0.9645419922890142
+    },
+    {
+      "futures": 9,
+      "candidates": 80,
+      "p50_ms": 1.3542919914470986,
+      "p95_ms": 1.4452500035986304
+    },
+    {
+      "futures": 9,
+      "candidates": 160,
+      "p50_ms": 2.318790997378528,
+      "p95_ms": 2.4287499982165173
+    }
+  ],
+  "runtime_seconds": 2.185900540993316,
+  "manifest": {
+    "commit": "377c3b3",
+    "src_dirty": false,
+    "seed": 20261114,
+    "trials": 2000
+  }
+}
