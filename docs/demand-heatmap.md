@@ -163,7 +163,7 @@ allow at most five seconds of future clock skew, matching existing observation p
 
 ## Configuration and running
 
-Install/start the existing services as in README. To enable simulation in PowerShell
+Start the services as in the [setup guides](README.md#setup). To enable simulation in PowerShell
 before starting Demand locally, or before `docker compose ... up`:
 
 ```powershell

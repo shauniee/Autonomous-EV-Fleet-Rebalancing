@@ -2,6 +2,12 @@
 
 Start with [architecture](architecture.md), then follow the topic you need.
 
+## Setup
+
+- [Setup on Windows](setup-windows.md)
+- [Setup on macOS](setup-macos.md)
+- [Configuration and credentials](configuration.md): `.env`, LTA DataMall, OneMap and offline demo mode
+
 ## System
 
 - [Architecture](architecture.md): services, ownership, consistency and failure handling

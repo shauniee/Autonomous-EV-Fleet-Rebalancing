@@ -31,12 +31,17 @@ and has its own pinned dependencies. It finds the services through
 1. **Console, Demand:** pause automatic demand generation for stable values, set
    a current target in every zone, then raise one zone (for example CBD to 12
    desired EVs). CRDS needs a fresh target in every zone.
-2. **Dashboard:** the heat map shows the new shortage. Select the zone and
-   request a recommendation.
-3. **Dashboard:** CRDS answers MOVE, HOLD or DEFER with its evidence. The
-   operator reviews a MOVE and approves it.
-4. **Dashboard:** the relocation panel and map follow the command, the OneMap
-   route and the EV's reported movement.
+2. **Dashboard, Dispatch:** confirm Fleet, Demand and Facilities data is
+   available. The heat map shows the new shortage. Select the zone and request a
+   recommendation; for queued requests, select **View request** or open
+   **Recommendations**.
+3. **Dashboard:** CRDS answers MOVE, HOLD or DEFER. Check **Evidence** for HOLD
+   or DEFER. For a MOVE, review the EV, parking destination, arrival battery and
+   road route, then click **Review dispatch** and **Approve**.
+4. **Dashboard, Relocations and Map:** follow the acknowledgement, reported
+   movement, arrival, battery use and claim release. Bulk jobs show queued,
+   admitted and arrived counts. If an approval's outcome is unclear, check or
+   retry the original request ID instead of approving again.
 5. **Console, Traffic or Rentals:** add a road closure on that route, or start
    customer rentals. The dashboard picks up the traffic overlay, the rented
    cars and the change in supply.

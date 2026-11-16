@@ -30,7 +30,7 @@ If PowerShell restricts scripts:
 
 ## macOS and Linux
 
-The PowerShell runner uses Windows-only executable paths. From the repository root, after creating `.venv` (see the README) and running `npm ci` in each frontend directory once:
+The PowerShell runner uses Windows-only executable paths. From the repository root, after creating `.venv` (see [setup on macOS](setup-macos.md#5-local-development-environment)) and running `npm ci` in each frontend directory once:
 
     env -u TELEMETRY_TEST_DATABASE_URL .venv/bin/python -m pytest -q
     npm --prefix dashboard test -- --run
