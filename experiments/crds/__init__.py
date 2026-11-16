@@ -1,1 +1,1 @@
-"""CRDS research recording infrastructure. Controlled cases belong to Phase 12."""
+"""CRDS decision study (see decision_study.py)."""
