@@ -53,17 +53,23 @@ EV simulators may still be starting. Check with
 in the operator dashboard, then follow the
 [demo flow](simulation-console.md#typical-demo-flow).
 
-To reopen the dashboards without redeploying:
-
-```sh
-bash scripts/start-kubernetes.sh --connect-only
-```
-
 If a port is taken, set `DASHBOARD_PORT` or `SIMULATION_CONSOLE_PORT` first and
 use the URLs printed in Terminal.
 
 Unlike the Windows script, the macOS script does not block a redeploy during
 active relocations, rentals or charging, so wait for those to finish first.
+
+## Other commands
+
+| Command | Use it when |
+|---|---|
+| `scripts/start-kubernetes.sh --connect-only` | The deployment is running and you only need the dashboards. Does not rebuild, restart Pods or reload `.env`. |
+| `scripts/start-kubernetes.sh --setup-metrics-server --allow-insecure-local-kubelet-tls` | A fresh cluster needs Metrics Server for the dashboard HPA. The TLS flag is for local Docker Desktop only. |
+| `scripts/setup-local-metrics.sh --allow-insecure-kubelet-tls` | The deployment is running but the HPA shows `cpu: <unknown>`. Installs or repairs Metrics Server without rebuilding. |
+
+Prefix each with `bash`. Without Metrics Server the simulation console's
+performance analytics have no CPU or replica data; see
+[the HPA section](kubernetes-local.md#dashboard-horizontal-pod-autoscaler-hpa).
 
 ## 5. Local development environment
 

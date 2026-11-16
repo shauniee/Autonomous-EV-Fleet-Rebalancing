@@ -2,9 +2,20 @@
 # Build/deploy both apps, or reconnect to an existing deployment without changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-mode="${1:-}"
-if [[ "$mode" != "" && "$mode" != "--connect-only" ]]; then
-  echo 'Usage: bash scripts/start-kubernetes.sh [--connect-only]' >&2; exit 1
+mode=''; setup_metrics=false; insecure_tls=false
+for arg in "$@"; do
+  case "$arg" in
+    --connect-only) mode=--connect-only ;;
+    --setup-metrics-server) setup_metrics=true ;;
+    --allow-insecure-local-kubelet-tls) insecure_tls=true ;;
+    *) echo 'Usage: bash scripts/start-kubernetes.sh [--connect-only | --setup-metrics-server [--allow-insecure-local-kubelet-tls]]' >&2; exit 1 ;;
+  esac
+done
+if $insecure_tls && ! $setup_metrics; then
+  echo 'TLS workaround requires --setup-metrics-server.' >&2; exit 1
+fi
+if [[ "$mode" == "--connect-only" ]] && $setup_metrics; then
+  echo '--connect-only cannot be combined with Metrics Server setup flags.' >&2; exit 1
 fi
 for tool in kubectl curl; do
   command -v "$tool" >/dev/null || { echo "Required command missing: $tool" >&2; exit 1; }
@@ -27,6 +38,12 @@ print(settings["TRAFFIC_SOURCE"], settings["TRAFFIC_SIMULATION_ENABLED"])
 ')
   read -r traffic_source traffic_simulation_enabled <<< "$traffic_settings"
   kubectl --context docker-desktop wait --for=condition=Ready node/docker-desktop --timeout=120s
+  if $setup_metrics; then
+    if $insecure_tls; then bash scripts/setup-local-metrics.sh --allow-insecure-kubelet-tls
+    else bash scripts/setup-local-metrics.sh; fi
+  else
+    echo 'Metrics Server setup skipped; HPA needs an existing healthy Metrics API.'
+  fi
   architecture=$(docker --context desktop-linux info --format '{{.Architecture}}')
   case "$architecture" in arm64|aarch64) platform=linux/arm64 ;; x86_64|amd64) platform=linux/amd64 ;; *) echo "Unsupported Docker architecture: $architecture" >&2; exit 1 ;; esac
   tag="local-$(date +%Y%m%d%H%M%S)"
@@ -115,5 +132,7 @@ fi
 echo "EV rebalancing: http://127.0.0.1:$dashboard_port"
 echo "Simulation console: http://127.0.0.1:$console_port"
 echo 'EV readiness: kubectl --context docker-desktop -n ev-fleet get pods'
+echo 'Dashboard HPA: kubectl --context docker-desktop get hpa dashboard -n ev-fleet'
+echo 'CPU metrics: kubectl --context docker-desktop top pods -n ev-fleet'
 echo 'Keep this terminal open. Ctrl+C closes owned tunnels; Kubernetes keeps running.'
 wait
