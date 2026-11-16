@@ -1,191 +1,205 @@
-# Dispatch lifecycle and autonomous EV relocation
+# Dispatch lifecycle and EV relocation
 
-Singapore simulation only. Recommendation creation does not claim an EV or move it.
-Dispatch approval is a separate POST, using an existing recommendation ID and a
-caller-generated request UUID. Fleet, Demand, Rebalancing, Dispatch and Facilities
-communicate over HTTP.
-
-## Run locally
-
-For the default [CRDS](crds.md) path, start Fleet, Demand, Rebalancing and Facilities
-and configure [OneMap](onemap-routing.md) for Dispatch. Start Dispatch in a separate terminal:
-
-```powershell
-.\.venv\Scripts\python -m uvicorn ev_fleet.dispatch.app:app --port 8004 --workers 1
-```
-
-Use new vehicle IDs for moving nodes, or stop stationary nodes before reusing their
-IDs. A vehicle ID belongs to one simulator process. In separate terminals:
-
-```powershell
-.\.venv\Scripts\python -m ev_fleet.simulator.cli --vehicle-id ev-moving-01 --zone bishan --soc 90 --dispatch-url http://localhost:8004
-.\.venv\Scripts\python -m ev_fleet.simulator.cli --vehicle-id ev-moving-02 --zone tampines --soc 60 --dispatch-url http://localhost:8004
-```
-
-The original CLI without `--dispatch-url` remains stationary. Moving mode supports
-`--speed-kph` (30), `--time-scale` (10 simulated seconds per real second by default), `--tick-seconds`
-(0.2), `--poll-interval` (1), and existing `--interval` for telemetry (5 seconds).
-`--updates` is only valid for stationary mode.
-
-## Compose relocation profile
-
-For a clean dedicated demo, start only moving nodes and their dependencies:
-
-```powershell
-docker compose --profile relocation up --build -d --wait fleet demand rebalancing dispatch ev-moving-01 ev-moving-02
-```
-
-Default `docker compose up` preserves the original stationary service set. An
-unqualified `--profile relocation up` also starts the default stationary nodes;
-use the explicit service list above to avoid recommending a stationary node.
-Do not mix independently running simulators with the same vehicle IDs.
-
-Host ports are configurable with FLEET_PORT, DEMAND_PORT, REBALANCING_PORT and
-DISPATCH_PORT; defaults remain 8001..8004. This lets a verification project run
-alongside an existing project. Internal Compose URLs keep using service DNS/8000.
+Singapore simulation only. Creating a recommendation does not claim or move an
+EV. A relocation starts only when an operator approves it with a separate POST
+to Dispatch, quoting the recommendation ID and a caller-generated request UUID.
+Fleet, Demand, Rebalancing, Dispatch and Facilities talk to each other over HTTP.
 
 ## Explicit approval
 
-Select a Singapore hotspot/zone through the existing API, request a recommendation,
-inspect it, then approve before its `expires_at` (120 seconds by default). For
-CRDS, proceed only on `MOVE` with `approval_allowed=true`:
+The operator picks a target zone, requests a recommendation, reviews it and
+approves it before its `expires_at` (120 seconds by default). With
+[CRDS](crds.md), only a `MOVE` with `approval_allowed=true` can be approved.
 
-```powershell
-$recommendation = Invoke-RestMethod -Method Post -Uri http://localhost:8003/api/v1/recommendations -ContentType application/json -Body '{"target_zone_id":"cbd"}'
-$approval = @{ request_id = [guid]::NewGuid().ToString(); recommendation_id = $recommendation.recommendation_id } | ConvertTo-Json
-$dispatch = Invoke-RestMethod -Method Post -Uri http://localhost:8004/api/v1/dispatches -ContentType application/json -Body $approval
-Invoke-RestMethod "http://localhost:8004/api/v1/dispatches/$($dispatch.dispatch_id)" | ConvertTo-Json -Depth 12
-```
+Approval works from the latest state, not the state at recommendation time.
+Dispatch revalidates the vehicle, battery reserve, route, parking and CRDS
+benefit against the final OneMap route and current commitments. It then takes a
+Facilities parking hold and asks Fleet to claim the vehicle at its current
+version. A race during that step returns 409 rather than silently approving a
+different vehicle. An expired or changed recommendation needs a fresh
+recommendation and a new request ID.
 
-An expired/changed recommendation requires a fresh recommendation and new request
-ID. Normal telemetry after recommendation is allowed: approval checks the latest
-state, then atomically claims its current version. A race during that operation
-returns 409 rather than silently approving another vehicle. CRDS also re-evaluates
-the exact EV and facility against the final OneMap route and current commitments.
-If benefit or evidence has changed, review the approval reason and request a new
-recommendation when appropriate.
+Approvals are idempotent:
 
-Repeat the exact approval body after a lost response: it identifies the same
-dispatch. Reusing a request ID for another recommendation is 409. Approving the same
-recommendation under a new request ID is 409 with the existing dispatch ID. A first
-validation failure is 409; its stored REJECTED record remains inspectable and an
-identical retry returns that record. Transient dependency failures can return a
-tracked UNKNOWN record with 202; inspect state rather than treating 202 as movement.
+- Repeating the exact approval body after a lost response returns the same dispatch.
+- Reusing a request ID for a different recommendation is 409.
+- Approving the same recommendation under a new request ID is 409 and names the existing dispatch.
+- A first validation failure is 409. Its stored REJECTED record stays inspectable, and an identical retry returns it.
+- A transient dependency failure can return a tracked UNKNOWN record with 202. A 202 means "tracked", not "moving".
 
 ## Ownership and state machines
 
-Fleet owns atomic vehicle claims. A claim request includes expected Fleet instance
-ID, expected vehicle version, command/dispatch IDs, target, expiry and reserve/energy
-parameters. Fleet checks freshness, availability, existing claims and energy reserve
-inside its store lock. It applies at least its own configured safety parameters.
-No network I/O occurs while that lock is held.
+Fleet owns atomic vehicle claims. A claim request carries the expected Fleet
+instance ID, the expected vehicle `control_version` (see
+[telemetry](telemetry.md#frequent-telemetry-and-claim-versions)), command and
+dispatch IDs, target, expiry and energy-reserve parameters. Fleet checks
+freshness, availability, rentals, existing claims, battery reserve and that the
+route starts at the vehicle's latest reported position, all inside its store
+lock. No network I/O happens while that lock is held.
 
-Dispatch stores the exact claim request before sending it. Lost responses are retried
-with the same identity/body; Fleet returns its original receipt even after the
-recommendation expires. An unexecuted expired request cannot acquire a new claim.
-Fleet keeps release receipts so delayed retries cannot resurrect completed claims.
+Dispatch stores the exact claim request before sending it. Lost responses are
+retried with the same identity and body, and Fleet returns its original receipt
+even after the recommendation expires. Fleet keeps release receipts so a delayed
+retry cannot resurrect a completed claim.
 
-Reported telemetry stays separate from cloud ownership. `effective_availability`
-is UNAVAILABLE whenever a claim exists; `effective_relocation_state` shows DISPATCHED
-while an EV has a claim but still reports IDLE. Connectivity remains independent.
+Reported telemetry is kept separate from cloud ownership.
+`effective_availability` is UNAVAILABLE whenever a claim exists, and
+`effective_relocation_state` shows DISPATCHED while the EV still reports IDLE.
 
     AVAILABLE -> DISPATCHED -> RELOCATING -> ARRIVED -> AVAILABLE
 
-The final AVAILABLE corresponds to fresh IDLE telemetry after verified claim release.
-Fleet confirms `current_zone_id` at arrival, clears it during relocation, and leaves
-it unknown before the first confirmed arrival. Initial CLI zone names choose seed
-coordinates; they are not a trusted zone-membership assignment.
+The final AVAILABLE needs fresh IDLE telemetry after a verified claim release.
+Fleet sets `current_zone_id` on arrival, clears it during relocation, and leaves
+it unknown before the first confirmed arrival.
 
     PENDING -> SENT -> ACKNOWLEDGED -> IN_PROGRESS -> ARRIVAL_PENDING -> SUCCEEDED
 
-Dispatch also supports REJECTED, FAILED and UNKNOWN. A matching fresh telemetry
-observation may establish progress without a separately received ACK. Physical
-arrival must match the dispatch and target within ARRIVAL_TOLERANCE_KM (0.05 default).
-Arrival telemetry may complete finalization before an explicit arrival event reaches
-Dispatch. Final distance can also be recovered from telemetry. An ARRIVED event
-alone cannot release a vehicle without matching fresh Fleet telemetry.
+Dispatch also has REJECTED, FAILED and UNKNOWN. Fresh telemetry that matches the
+command can establish progress without a separate ACK. Arrival must match the
+dispatch and target within `ARRIVAL_TOLERANCE_KM` (0.05 by default), and an
+ARRIVED event alone cannot release a vehicle without matching fresh Fleet
+telemetry.
 
-Explicit command rejection releases a claim only after matching IDLE telemetry at
-the origin. Confirmed execution failure retains the claim. The dispatch and relocation system deliberately
-does not expose an unsafe force-release or automatic reassignment on timeout.
+An explicit command rejection releases the claim only after matching IDLE
+telemetry at the origin. A confirmed execution failure keeps the claim. There is
+deliberately no force-release or automatic reassignment on timeout; stuck
+journeys go through the operator recovery and resolution flows.
 
 ## Communication and failure handling
 
-EVs poll for commands; repeated polls return the same command ID. EV memory stores
-accepted/completed IDs to avoid repeat movement. ACK duplicates must match their
-original content. Events have per-dispatch sequence numbers: exact repeats are
-idempotent; conflicting/out-of-order events, regressing distance and backward
-lifecycle progress are rejected.
+EVs poll Dispatch for commands, and repeated polls return the same command ID.
+Each EV remembers accepted and completed command IDs so it never repeats a move.
+Duplicate ACKs must match the original. Events carry a per-dispatch sequence
+number: exact repeats are idempotent, while conflicting or out-of-order events,
+shrinking distance and backward lifecycle steps are rejected.
 
-Dispatch uses a per-record operation lock around its coordination steps, allowing
-unrelated HTTP handlers to proceed. Its background loop retries reconciliation at
-a configurable interval; each dependency HTTP call uses a 2-second per-I/O timeout.
-This is not a global hard deadline. In-memory state owners still need one worker.
+Dispatch locks per record around its coordination steps, so unrelated requests
+proceed in parallel. A background loop reconciles open dispatches, and every
+dependency call has a 2-second timeout.
 
-ACK_TIMEOUT_SECONDS defaults to 15; PROGRESS_TIMEOUT_SECONDS defaults to 30.
-The acknowledgement timer starts at claim acquisition, including commands that
-have never been polled. Redelivery does not reset that timer.
-Unacknowledged, offline/stale or unreachable outcomes become UNKNOWN while keeping
-ownership. `claim_held: null` means a claim attempt had an ambiguous result, not that
-the vehicle is available. A confirmed claim is true until an idempotent release.
-Fresh command-matching telemetry can recover IN_PROGRESS/ARRIVED after disconnection.
+`ACK_TIMEOUT_SECONDS` (15) starts when the claim is acquired, even if the EV has
+never polled, and redelivery does not reset it. `PROGRESS_TIMEOUT_SECONDS` is 30.
+Unacknowledged, stale, offline or unreachable outcomes become UNKNOWN while the
+claim is kept. `claim_held: null` means a claim attempt had an ambiguous result,
+not that the vehicle is free. Fresh telemetry that matches the command can move
+an UNKNOWN record back to IN_PROGRESS or ARRIVED.
 
-Movement uses an independent asyncio task and monotonic elapsed time. Network
-outages do not pause physical simulation; network tasks back off and send fresh
-telemetry/events after reconnect. A newly started simulator refuses to overwrite an
-unresolved journey with initial CLI coordinates. Duplicate session identities are
-treated as conflicts, not as a reason to steal another node's session.
+The simulator moves in its own asyncio task on monotonic time, so a network
+outage does not pause the simulated journey. It backs off and resends fresh
+telemetry and events after reconnecting. A restarted simulator refuses to
+overwrite an unresolved journey with its start-up coordinates.
 
-## Distance and SOC
+## Distance and battery
 
-Route length is the direct geographic distance multiplied by the route factor. Position
-interpolates along a synthetic segment according to fractional route completion;
-this is not a road route, animation or external maps integration. Incremental
-distance is speed times elapsed simulated time, clamped to the remaining route.
+The approved route comes from OneMap (or a labelled `OFFLINE_DEMO` straight line,
+see [OneMap routing](onemap-routing.md)). The simulator follows that route
+geometry, advancing by speed × elapsed simulated time and never past the end.
+Energy used is distance travelled × kWh/km, converted to SOC using battery
+capacity. Forecasts keep a conservative energy margin, so predicted arrival SOC
+can be lower than the observed one. A battery that unexpectedly runs out makes
+the dispatch FAILED and keeps the claim.
 
-Energy consumed is actual simulated distance times kWh/km, converted to SOC using
-battery capacity. Forecasts retain the conservative energy margin, so predicted
-arrival SOC can be lower than observed SOC. Zero-distance moves consume no travel
-energy; an unexpected depleted battery causes FAILED and leaves the claim held.
+## Multi-EV plans and parking holds
+
+For demand rebalancing, CRDS plans requests of 1 to 50 EVs. It chooses a
+compatible destination per EV, verifies road evidence, and updates modelled
+supply and remaining facility capacity after each proposed move. A plan can
+contain fewer assignments than requested.
+
+Two planning modes exist:
+
+- **Optimise coverage** (`OPTIMIZE_COVERAGE`, the API default) proposes only
+  moves that clear the useful-gain threshold.
+- **Fulfil exact quantity** (`FULFIL_REQUEST`) keeps going past that threshold
+  and may take the last available EV from a donor zone. The UI shows the signed
+  coverage change and warns about any step that does not pay off. It never
+  plans with stock that does not exist, and cars already assigned to the
+  destination count towards the quantity.
+
+A capacity-aware matching step spreads EVs across compatible car parks instead
+of sending them all to the closest one. Ordinary and charger bays are matched
+separately so chargers stay free for EVs that need them.
+
+Approval creates one child dispatch per assignment, each with its own identity.
+Facilities reserves simulated space before Fleet claims the EV. A definitively
+rejected claim releases its parking hold, while an ambiguous one keeps it until
+reconciliation. Verified arrival turns the hold into occupied capacity, which
+stays occupied until the car leaves (for example at the start of a rental).
+
+With `CRDS_MODE=DISABLED`, the legacy weighted planner is used instead. It
+scores each EV and facility pair as 85% energy-aware score plus 15% available
+parking ratio and picks pairs greedily. EVs predicted to arrive below 35% SOC,
+and every explicit `CHARGE` request, need a free charging bay.
+
+## Paced bulk jobs
+
+A bulk approval creates a durable job instead of holding the browser request
+open while every vehicle is admitted. The operator approves the exact
+assignments while the recommendation is fresh, and that authorisation lasts up
+to 30 minutes (`BATCH_AUTHORIZATION_SECONDS`, maximum 1800).
+
+Dispatch then admits the assignments gradually. By default at most four
+relocating or uncertain journeys run at once (`DISPATCH_IN_FLIGHT_LIMIT`), with
+at least one second between admissions (`DISPATCH_ADMISSION_INTERVAL_SECONDS`).
+Single approvals take slots too. Each admission rechecks the vehicle, route,
+battery reserve, ownership, facility capacity and CRDS policy. Dispatch never
+swaps in another EV or destination.
+
+Transient dependency, routing, rate-limit and planning-timeout failures retry
+with bounded backoff. Permanent safety or policy failures stay visible. Stable
+child request and claim IDs prevent duplicate claims or holds across retries
+and restarts. After authorisation expires, no new claims or holds are created,
+but known effects still reconcile. Queued items that have not started can be
+cancelled; an item that may have touched Fleet or Facilities must first be
+reconciled.
+
+### Planning revision
+
+CRDS checks a global planning revision during approval and retries once if it
+changed. The revision only advances for things that change commitments:
+admissions, claims, parking, arrival, failure, recovery and entering or leaving
+UNKNOWN. Routine distance updates and the normal SENT, ACKNOWLEDGED and
+IN_PROGRESS steps of an already-admitted journey do not advance it. Without
+this, ordinary movement of one EV would invalidate every other child in a batch.
+
+## Durable storage
+
+Fleet and Dispatch write each vehicle or dispatch as its own row in
+`snapshot_records`, plus compact metadata in `service_snapshots`. Metadata,
+changed rows, deletions and telemetry history commit in one PostgreSQL
+statement, and a response is only sent after the commit. An ambiguous write
+fences the service until durable state is reloaded (see
+[architecture](architecture.md#failure-handling)).
+
+Fleet groups frequent checkpoints and lease renewals into shared transactions
+(up to 64 vehicles per transaction, 2 ms collection window). Dispatch batches
+overlapping observations into one durable frame the same way. Unchanged command
+polls do not write anything.
 
 ## APIs
 
-Dispatch exposes typed OpenAPI at port 8004 `/docs` and `/openapi.json`.
+Dispatch exposes OpenAPI at `/docs` and `/openapi.json` on port 8004.
 
-| Method and path under /api/v1 | Purpose |
+| Method and path under `/api/v1` | Purpose |
 |---|---|
-| POST /dispatches | Approve with recommendation_id and request_id; 202 tracked record |
+| POST /dispatches | Approve one recommendation (`recommendation_id`, `request_id`); 202 tracked record |
 | GET /dispatches/{id} | Reconcile and return state, progress, metrics and errors |
-| GET /dispatches?vehicle_id=... | Read stored records; background reconciliation updates them |
-| GET /vehicles/{id}/commands | Poll current command, returning commands: [] when none |
-| POST /dispatches/{id}/acknowledgements | command_id, vehicle_id, accepted, optional reason |
-| POST /dispatches/{id}/events | command_id, vehicle_id, sequence, observed_at, kind, distance_travelled_km, optional reason |
+| GET /dispatches?vehicle_id=... | Read stored records |
+| POST /batches | Approve a batch recommendation (`request_id`, `batch_recommendation_id`); may be PARTIAL |
+| GET /batches/{request_id} | Saved batch receipt |
+| GET /vehicles/{id}/commands | Simulator command poll; `commands: []` when none |
+| POST /dispatches/{id}/acknowledgements | Simulator ACK |
+| POST /dispatches/{id}/events | Simulator progress events |
 
-Fleet internal operations: PUT/GET `/vehicles/{id}/claims/{dispatch_id}` and POST
-`/vehicles/{id}/claims/{dispatch_id}/release`. Existing Fleet and recommendation APIs
-remain available; claims are an additional BUSY exclusion and do not change scores.
-New optional telemetry `distance_travelled_km` supports completion reconciliation.
+Rebalancing serves `POST /api/v1/batch-recommendations` and
+`GET /api/v1/batch-recommendations/{id}`. Fleet's claim endpoints
+(`/vehicles/{id}/claims/{dispatch_id}` and `.../release`) and the Facilities hold
+endpoints are internal. The dashboard's nginx blocks them from the browser (see
+[deployment](deployment.md#nginx-in-the-dashboard)).
 
-## Verification and limits
+## Limits
 
-Run `python -m pytest -q` using the project virtual environment. The original 37 tests
-remain unchanged. New tests cover claims, concurrency, idempotency, lifecycle,
-response loss, stale/offline EVs, insufficient SOC, incremental motion, network-outage
-movement, and four real backend processes with two separate moving-node processes.
-
-For a repeatable smoke test of an already-running moving demo:
-
-```powershell
-.\.venv\Scripts\python scripts/dispatch_relocation_smoke.py --base-port 8001 --output docs/evidence/my-dispatch-smoke.json
-```
-
-This command explicitly approves one simulated relocation and records raw API
-observations. It is an acceptance check, not an experiment framework.
-
-State, command deduplication and receipts remain in memory and are capped only for
-dispatch admission (10,000 records). Use finite demonstration populations. There
-is no authentication, durable journal, exactly-once delivery or guaranteed recovery
-after arbitrary combined restarts. A Fleet instance change invalidates ownership
-assumptions; unresolved journeys stay blocked. Persistence and operational recovery
-remain later work. No frontend, ML, reservations, maintenance, external maps/charging
-APIs, Kubernetes deployment or real-road autonomy has been added.
+There is no authentication. Delivery is at-least-once with idempotent receivers,
+not exactly-once. State-owning services must run as one replica with one worker.
+Parking holds are simulated allocations and give no real parking or charging
+rights.

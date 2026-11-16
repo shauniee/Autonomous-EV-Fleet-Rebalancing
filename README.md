@@ -51,8 +51,8 @@ or [macOS](#quick-start-on-macos).
 ## Quick start on Windows (laptop or desktop)
 
 Run these commands from **Windows PowerShell** in the repository root. Each
-computer needs its own Docker Desktop setup and local `.env` file. For a longer
-demonstration checklist, see [Local demo readiness](docs/local-demo-readiness.md).
+computer needs its own Docker Desktop setup and local `.env` file. For the demo
+flow across both dashboards, see [Simulation console](docs/simulation-console.md#typical-demo-flow).
 
 ### Step 1 — Install prerequisites and get the code
 
@@ -169,7 +169,7 @@ adequate battery reserve, the applicable planning policy and **verified OneMap r
 route** all exist. Manual demand can become stale (default: **300 seconds**);
 refresh it if a subsequent recommendation reports expired observations.
 Traffic scenarios, rentals, and charging may temporarily make vehicles
-ineligible. See [demo readiness and recovery](docs/local-demo-readiness.md)
+ineligible. See [why a recommendation may not appear](docs/simulation-console.md#why-a-recommendation-may-not-appear)
 for expected failure cases.
 
 ### Other PowerShell commands and when to use them
@@ -361,7 +361,7 @@ fulfilment. A bulk approval durably queues the reviewed assignments for up to
 30 minutes. Dispatch starts at most four relocations at once by default and retries
 transient failures automatically. Every admission revalidates current vehicle,
 route, battery, parking and configured policy checks. See
-[human-approved bulk jobs](docs/paced-bulk-relocation.md).
+[human-approved bulk jobs](docs/dispatch-relocation.md#paced-bulk-jobs).
 For coverage optimization, CRDS recalculates fleet-wide benefit after each move.
 Operator-requested quantity planning instead fulfils physically feasible demand,
 with modeled coverage trade-offs shown for human review. Recommendation requests
@@ -426,9 +426,7 @@ confirmations are recorded with the occupied charging allocation. The separate
 manual assistance task log remains available. These features do not connect to
 a real charging provider or physically charge a vehicle.
 
-See [Human charging handoff](docs/charging-cable-handoff.md) for the demonstration.
-
-See [Rental forecasts and charging operations](docs/rental-forecast-charging-ops.md).
+See [Parking, charging and handoff](docs/facilities-and-charging.md) for the charging workflows.
 
 ## Repository map
 
@@ -450,7 +448,7 @@ scripts/                      Setup, startup, verification and evaluation comman
 tests/                        Python unit and integration tests
 experiments/                  Reproducible strategy evaluation code
 results/                      Preserved evaluation output
-docs/                         Architecture, API, operations and feature guides
+docs/                         Architecture, deployment and concept guides
 
 pyproject.toml                Python project metadata and dependency ranges
 requirements.lock             Exact backend container dependency set
@@ -582,7 +580,7 @@ Connect-only mode reopens the dashboards using the existing configuration.
 
 ## Simulation analytics and HPA observability
 
-The [Simulation Analytics guide](docs/simulation-analytics.md) describes a
+The [Simulation console guide](docs/simulation-console.md#performance-analytics) describes a
 local-only Performance Analytics panel at <http://127.0.0.1:8090> with bounded
 Normal / High / Extreme HTTP load presets, read-only Dashboard HPA CPU and Pod
 metrics, observed scaling-event charts, and persistent experiment CSV exports.
@@ -594,7 +592,7 @@ measurements, and HPA scale-out depends on actual CPU utilisation.
 
 ## Shared live traffic cache
 
-The [Shared Traffic Cache guide](docs/shared-traffic-cache.md) describes a
+The [Shared traffic cache section](docs/traffic-aware-routing.md#shared-traffic-cache) describes a
 single LTA collector, versioned Redis snapshots, per-feed freshness enforcement,
 and the lightweight reads used by Rebalancing. Missing traffic remains unknown.
 
@@ -629,7 +627,7 @@ kubectl -n ev-fleet logs -f deployment/customer-rental-demo
 ```
 
 Do not run both at the same time because they use the same six vehicle IDs. See
-[Customer rental simulation](docs/customer-rental-simulation.md) for safe stop and
+[Customer rentals](docs/simulation-console.md#customer-rentals) for safe stop and
 restart instructions.
 
 ## Testing and validation
@@ -672,14 +670,12 @@ selection policy.
 
 ## Documentation by topic
 
+See the [documentation index](docs/README.md) for every guide. Main entry points:
+
 - [Architecture and service ownership](docs/architecture.md)
+- [Docker, nginx and Kubernetes](docs/deployment.md)
+- [Operator dashboard](docs/operator-dashboard.md) and [simulation console](docs/simulation-console.md)
+- [CRDS recommendations](docs/crds.md) and [dispatch lifecycle](docs/dispatch-relocation.md)
 - [API contracts](docs/api-contracts.md)
-- [Dispatch lifecycle](docs/dispatch-relocation.md)
-- [Demand and heat-map calculations](docs/demand-heatmap.md)
-- [Operator dashboard behaviour](docs/operator-dashboard.md)
-- [Parking and charging facilities](docs/parking-charging-facilities.md)
-- [Rental lifecycle](docs/rental-lifecycle.md)
-- [Multi-EV parking-aware allocation](docs/multi-ev-parking-allocation.md)
-- [Evaluation method](docs/strategy-evaluation.md)
 - [Local Kubernetes deployment](docs/kubernetes-local.md)
 - [PostgreSQL persistence and recovery](docs/kubernetes-local.md#postgresql-bootstrap-and-safe-recovery)

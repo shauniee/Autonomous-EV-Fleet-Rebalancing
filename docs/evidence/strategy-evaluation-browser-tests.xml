@@ -1,8 +1,0 @@
-<testsuites id="" name="" tests="2" failures="0" skipped="0" errors="0" time="58.53975">
-<testsuite name="dispatch.spec.ts" timestamp="2026-10-09T14:09:03.175Z" hostname="" tests="2" failures="0" skipped="0" time="40.669" errors="0">
-<testcase name="select hotspot, recommend, explicitly approve, observe real relocation and arrival" classname="dispatch.spec.ts" time="38.11">
-</testcase>
-<testcase name="tile and Demand failures preserve working Fleet and dispatch panels" classname="dispatch.spec.ts" time="2.559">
-</testcase>
-</testsuite>
-</testsuites>

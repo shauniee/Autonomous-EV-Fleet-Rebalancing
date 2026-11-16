@@ -1,7 +1,7 @@
 # Traffic-aware EV selection and road-disruption routing
 
 Live LTA traffic is optional and requires `TRAFFIC_SOURCE=LTA_DATAMALL`.
-The separate [traffic simulator](traffic-simulation-controller.md) can provide
+The [simulation console's traffic controller](simulation-console.md#traffic-scenarios) can provide
 synthetic disruptions. All examples below use synthetic
 fixtures unless a valid LTA DataMall AccountKey is explicitly configured.
 
@@ -15,7 +15,7 @@ LTA HTTPS feeds and publishes validated compressed observations to Redis:
 
 Rebalancing uses a locally cached, background-refreshed Redis read model,
 never making LTA calls on a request path. See
-[Shared Traffic Cache](shared-traffic-cache.md) for consistency and failure
+[Shared traffic cache](#shared-traffic-cache) for consistency and failure
 handling.
 
 Source: LTA DataMall API User Guide, Traffic sections 2.16, 2.18, 2.19.
@@ -113,10 +113,6 @@ under normal, congested, roadworks and roadblock synthetic inputs; outputs
 JSON annotated SYNTHETIC_OFFLINE_COMPARISON. Unit tests cover feed parsing,
 cache TTL, safe route exclusions, ranked EV changes and alternate road
 geometry. These are demonstrations, **not real research measurements**.
-For the final report, also collect repeated, independently timestamped
-live-feed experiments, route latency, simulator arrivals, SOC consumption,
-unknown-coverage incidence and provider/API costs. Test at least five
-trials per scenario on an idle Kubernetes cluster.
 
 ## Configuration
 
@@ -148,3 +144,36 @@ operations or relocations. The Windows startup script has safeguards and
 versioned images. The real integration needs a live LTA key, OneMap token
 and (for alternative selection) a separately hosted, Singapore-loaded OSRM
 instance. Those integrations are *not* live-verified by offline CI.
+
+## Shared traffic cache
+
+Live LTA feeds are fetched by one process and shared through Redis, so neither
+Rebalancing nor the simulators call DataMall themselves:
+
+- A single `traffic-collector` Deployment (`python -m ev_fleet.rebalancing.shared_traffic`,
+  `Recreate` strategy) fetches and normalises the feeds. It writes the
+  compressed data to Redis first and then swaps a small metadata pointer, so a
+  reader never sees half an update.
+- Rebalancing refreshes in-process copies from Redis about every 10 seconds in
+  the background. API requests read those copies and never wait on Redis or LTA.
+- Simulators read only the small `/api/v1/traffic/simulation-events` feed.
+- Only the collector receives the LTA AccountKey. The browser never sees it.
+
+| LTA feed | Checked every | Maximum usable age |
+|---|---:|---:|
+| Traffic Speed Bands (v4) | 300 s | 900 s |
+| Traffic Incidents | 90 s | 300 s |
+| Approved Road Works | 86,400 s | 172,800 s |
+
+A SHA-256 digest of the normalised rows is the content version, so unchanged
+data is not decoded again. Freshness comes from the last successful LTA fetch,
+never from the time it was read out of Redis. After the maximum age, rows are
+withheld and marked `STALE`. A missing, evicted or malformed cache reports
+`CACHE_UNAVAILABLE`, `CACHE_PENDING` or `CACHE_INVALID`, and roads are never
+assumed clear. Speed Bands pagination is capped at 400 pages and a 40 MiB
+payload; going over fails the feed instead of accepting partial data.
+
+Redis is ephemeral here (256 MiB limit, `noeviction`), so display-cache writes
+cannot silently push out traffic data. With `TRAFFIC_SOURCE=DISABLED` the
+collector stays idle. A collector crash does not affect Rebalancing; it only
+makes live observations go stale.
