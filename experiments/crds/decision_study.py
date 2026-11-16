@@ -69,11 +69,63 @@ def candidates(vehicles, available, desired, target):
     return rows
 
 
-def run(trials, seed):
+def sample_future(rng, future_id, vehicles, available, desired, params):
+    """One realised future from a stochastic model CRDS never sees.
+
+    Unlike the declared profiles (fixed +-1 shift, +10 min returns, +5 min trips), returns are
+    early or late by a random amount, can go missing or land in another zone, and every zone's
+    demand moves independently and can step mid-horizon.
+    """
+    slots = params.slot_count
+    stock = {z: [available[z]] * slots for z in ZONES}
+    for v in vehicles:
+        rental = v.active_rental
+        if rental is None or v.telemetry.soc_pct < 30 or rng.random() < 0.10:
+            continue  # same usability rule as production; 10% not back within the horizon
+        zone = rental.expected_return_zone_id if rng.random() >= 0.20 else rng.choice(list(ZONES))
+        minutes = max(params.slot_minutes, (rental.expected_end_at - SAMPLE_NOW).total_seconds() / 60
+                      + rng.uniform(-5, 20))
+        for slot in range(min(slots, math.ceil(minutes / params.slot_minutes)), slots):
+            stock[zone][slot] += 1
+    zones = {}
+    for z in ZONES:
+        base = max(0, desired[z] + rng.choices((-2, -1, 0, 1, 2), (.05, .2, .5, .2, .05))[0])
+        path = [base] * slots
+        if rng.random() < 0.3:  # demand steps by one car part-way through the horizon
+            step, delta = rng.randrange(slots), rng.choice((-1, 1))
+            path = path[:step] + [max(0, base + delta)] * (slots - step)
+        zones[z] = CrdsZoneTrajectory(desired_stock=path, usable_stock=stock[z])
+    return CrdsFuture(future_id=future_id, zones=zones)
+
+
+def out_of_sample(rng, samples, vehicles, available, desired, moves, choice, params):
+    """Realised gain of each policy's choice in each sampled future (HOLD counts as 0)."""
+    gains = {p: [] for p in choice}
+    for i in range(samples):
+        future = sample_future(rng, f"s{i}", vehicles, available, desired, params)
+        factor = rng.lognormvariate(0, 0.3)  # travel and charging time noise
+        sampled = [m.model_copy(update={"outcomes": {future.future_id: CrdsMoveOutcome(
+            arrival_minutes=m.outcomes["nominal"].arrival_minutes * factor,
+            availability_delay_minutes=m.outcomes["nominal"].availability_delay_minutes * factor,
+            energy_required_kwh=m.outcomes["nominal"].energy_required_kwh)}}) for m in moves]
+        realised = {c.vehicle_id: c.worst_case_gain_vehicle_minutes
+                    for c in evaluate_moves([future], sampled, params).ranked_candidates}
+        for p, vid in choice.items():
+            gains[p].append(0.0 if vid is None else realised[vid])
+    worst = max(1, samples // 10)
+    return {p: {"mean": statistics.fmean(g), "harm": sum(x < 0 for x in g) / samples,
+                "cvar10": statistics.fmean(sorted(g)[:worst])} for p, g in gains.items()}
+
+
+SAMPLE_NOW = datetime(2026, 11, 14, tzinfo=timezone.utc)
+
+
+def run(trials, seed, samples=0):
     settings = CrdsSettings()
     params = parameters_for(settings)
-    now = datetime(2026, 11, 14, tzinfo=timezone.utc)
+    now = SAMPLE_NOW
     rng = random.Random(seed)
+    sample_rng = random.Random(seed + 7)  # separate stream keeps the declared-futures results unchanged
     records = []
     for trial in range(trials):
         vehicles, available, desired, target = random_state(rng, now)
@@ -124,9 +176,13 @@ def run(trials, seed):
                     "nominal_gain": nominal_gain[vehicle_id],
                     "donor_harm": max(0.0, c.shortage_changes_by_zone[origin]), "km": info[vehicle_id][0]}
 
-        records.append({"trial": trial, "candidates": len(rows), "futures": len(futures),
-                        "crds_decision": robust.decision,
-                        **{f"{p}_{k}": val for p, vid in choice.items() for k, val in outcome(vid).items()}})
+        record = {"trial": trial, "candidates": len(rows), "futures": len(futures),
+                  "crds_decision": robust.decision,
+                  **{f"{p}_{k}": val for p, vid in choice.items() for k, val in outcome(vid).items()}}
+        if samples:
+            oos = out_of_sample(sample_rng, samples, vehicles, available, desired, moves, choice, params)
+            record.update({f"{p}_oos_{k}": val for p, row in oos.items() for k, val in row.items()})
+        records.append(record)
     return records
 
 
@@ -180,6 +236,18 @@ def summarise(records, seed):
         diffs = [r["crds_worst_gain"] - r[f"{base}_worst_gain"] for r in rows]
         summary["policies"][base]["crds_minus_policy_worst_gain"] = statistics.fmean(diffs)
         summary["policies"][base]["crds_minus_policy_ci95"] = bootstrap(diffs, rng)
+    if "crds_oos_mean" in rows[0]:
+        oos = summary["out_of_sample"] = {}
+        for p in policies:
+            oos[p] = {"mean_gain": statistics.fmean(r[f"{p}_oos_mean"] for r in rows),
+                      "harm_share": statistics.fmean(r[f"{p}_oos_harm"] for r in rows),
+                      "mean_cvar10": statistics.fmean(r[f"{p}_oos_cvar10"] for r in rows),
+                      "states_expected_harm": sum(r[f"{p}_oos_mean"] < 0 for r in rows) / len(rows)}
+        for base in ("nearest", "weighted", "crds_nominal"):
+            for key in ("mean", "cvar10"):
+                diffs = [r[f"crds_oos_{key}"] - r[f"{base}_oos_{key}"] for r in rows]
+                oos[base][f"crds_minus_policy_{key}"] = statistics.fmean(diffs)
+                oos[base][f"crds_minus_policy_{key}_ci95"] = bootstrap(diffs, rng)
     return summary
 
 
@@ -187,17 +255,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trials", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=20261114)
+    parser.add_argument("--samples", type=int, default=50,
+                        help="out-of-sample futures per state (0 disables the check)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    records = run(args.trials, args.seed)
+    records = run(args.trials, args.seed, args.samples)
     summary = summarise(records, args.seed)
     summary["latency"] = latency(args.seed)
     summary["runtime_seconds"] = time.perf_counter() - started
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", "src"], capture_output=True, text=True).stdout)
-    summary["manifest"] = {"commit": commit, "src_dirty": dirty, "seed": args.seed, "trials": args.trials}
+    summary["manifest"] = {"commit": commit, "src_dirty": dirty, "seed": args.seed, "trials": args.trials,
+                           "samples": args.samples}
     (args.out / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
