@@ -111,4 +111,4 @@ EVs poll GET /vehicles/{id}/commands and POST acknowledgements/events under the
 dispatch ID. These operations are now implemented by the separate Dispatch Service
 and Fleet claim API. See [dispatch and relocation contracts and lifecycle](dispatch-relocation.md).
 
-Queued recommendation requests also accept `planning_mode` (`OPTIMIZE_COVERAGE` by default, or `FULFIL_REQUEST`) and up to 50 EVs. Multi-plan approval queues each reviewed batch through the durable Dispatch admission queue; accepted approval and completed relocation are separate outcomes. See [paced bulk relocation](paced-bulk-relocation.md).
+Queued recommendation requests also accept `planning_mode` (`OPTIMIZE_COVERAGE` by default, or `FULFIL_REQUEST`) and up to 50 EVs. Multi-plan approval queues each reviewed batch through the durable Dispatch admission queue; accepted approval and completed relocation are separate outcomes. See [paced bulk jobs](dispatch-relocation.md#paced-bulk-jobs).

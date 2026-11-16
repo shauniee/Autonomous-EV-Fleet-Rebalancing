@@ -64,6 +64,31 @@ Missing actual arrival SOC after a failed request remains null. It is never impu
 
 Continuous metrics use descriptive summaries and deterministic percentile-bootstrap 95% confidence intervals. Rates include counts and Wilson intervals. Paired differences use matched scenario/seed inputs. Results are presented per scenario before the equally weighted aggregate. No weights are fitted, no scenarios are discarded after viewing outcomes, and no single trial is treated as evidence.
 
+## Results
+
+The saved run is `results/strategy-evaluation/run-20261009-final`: 600 of 600
+trials recorded, no paired starting-state hash mismatches and no infrastructure
+errors. Its manifest records `dirty: true`, meaning it ran on a working tree
+with uncommitted changes. Its [report](../results/strategy-evaluation/run-20261009-final/report.md)
+has the full tables and graphs.
+
+Effects are energy-aware minus nearest EV, with scenarios weighted equally.
+
+| Metric | Energy-aware | Nearest EV | Paired effect | 95% bootstrap CI |
+|---|---:|---:|---:|---:|
+| Operationally poor outcome | 0.1000 | 0.2000 | -0.1000 | [-0.1367, -0.0667] |
+| Actual arrival SOC | 76.64% | 57.26% | +19.38 pp | [+16.83, +22.06] |
+| Relocation distance | 13.44 km | 10.55 km | +2.89 km | [+2.50, +3.30] |
+| Completion time | 1102.9 s | 880.7 s | +222.2 s | [+190.0, +253.4] |
+| Recommendation latency | 12.41 ms | 12.45 ms | -0.04 ms | [-0.48, +0.42] |
+
+Energy-aware selection produced no arrivals below 30% SOC; nearest EV produced
+30. Each algorithm completed 300 of 330 dispatch requests; the other 30 were the
+deliberately concurrent second claims, all refused with
+`VEHICLE_VERSION_CONFLICT`. In this simulation the energy-aware policy reduced
+poor relocations at the cost of longer trips, with no measurable latency
+difference.
+
 ## Limitations
 
 Locations, demand, charging availability and outages are synthetic. Distance uses approximate Singapore coordinates and a route factor rather than roads or traffic. Prediction and movement use related energy assumptions, so arrival-SOC error understates real-world uncertainty. Services run in memory and latency excludes deployed network/container behavior. The fleet is small, the six zones are coarse, and strategy evaluation evaluates fixed policy weights rather than optimizing them.

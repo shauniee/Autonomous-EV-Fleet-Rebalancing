@@ -163,7 +163,7 @@ allow at most five seconds of future clock skew, matching existing observation p
 
 ## Configuration and running
 
-Install/start the existing services as in README. To enable simulation in PowerShell
+Start the services as in the [setup guides](README.md#setup). To enable simulation in PowerShell
 before starting Demand locally, or before `docker compose ... up`:
 
 ```powershell
@@ -220,11 +220,6 @@ destination/command is unchanged by subsequent demand ticks or manual updates. T
 heat map reflects the new demand and observed inbound vehicle. No automatic dispatch,
 cancellation or rerouting is introduced.
 
-Tests cover formulas, boundaries, classification, deterministic ticks, concurrency,
-dependency failure, approval across observation updates, simulation lifecycle and
-real HTTP demand updates during a moving EV journey. See
-[verification evidence](demand-heatmap-verification.md) for actual outcomes and runtime limits.
-
-This capability remains in-memory, single-worker per state owner, simulation-only and
-without frontend/ML/external map APIs. A later dashboard should consume `/heat-map`,
-not reinterpret the legacy raw-demand `/hotspots` as shortage severity.
+Demand runs as a single worker and is simulation-only. Clients should read
+`/heat-map` for shortage severity, not reinterpret the legacy raw-demand
+`/hotspots`.

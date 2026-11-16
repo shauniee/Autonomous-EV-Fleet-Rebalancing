@@ -1,38 +1,51 @@
 # Architecture
 
 How the services divide ownership, keep state consistent and handle failure.
-For the component list, ports and main workflows, see the README sections
-*Runtime components* and *Main workflows*. Topic details are linked below.
-The earlier "initial service foundation" version of this page is in git history.
-
 All demand, vehicles, movement, rentals and charging are simulated. Nothing
 controls a real vehicle.
 
+## Components
+
+All backend code is in `src/ev_fleet/`. Each service is a FastAPI app built by
+`create_app()` in `<service>/app.py`, and all of them ship in one container image.
+
+| Component | Port (host) | Owns |
+|---|---|---|
+| Fleet | 8001 | Vehicles, telemetry sessions, rentals, charging tasks, vehicle claims |
+| Demand | 8002 | Zones, demand targets, heat map, optional demand generator |
+| Rebalancing | 8003 | Recommendations (CRDS or legacy weighted), request queue, batches, traffic scenarios, charger advice |
+| Dispatch | 8004 | Approvals, relocation commands and their lifecycle, recovery |
+| Facilities | 8005 | Parking and charger catalogue, parking holds, cable handoff |
+| EV simulators | none | Their own simulated position and battery, reported as telemetry |
+| Traffic collector | none | Fetches LTA traffic feeds into Redis |
+| CRDS workers | none | Optional HTTP scoring workers (`CRDS_EXECUTION_MODE=HTTP`) |
+
+Two browser apps sit on top:
+
+- The **operator dashboard** (`dashboard/`, port 8080) is how a person runs the
+  fleet. See [operator dashboard](operator-dashboard.md).
+- The **simulation console** (`simulation-console/`, port 8090) drives the
+  simulated world. See [simulation console](simulation-console.md).
+
+Shared code is limited to `contracts/` (validated Pydantic wire models that
+forbid extra fields) and `common/` (settings, clock, persistence, travel maths,
+the `base_app` factory).
+
 ## Ownership
 
-Each state-owning service is the only writer of its data. Others read it over HTTP.
+Each state-owning service is the only writer of its data. Others read it over
+HTTP.
 
-| Owner | Authoritative state |
-|---|---|
-| Fleet | Vehicle registrations, telemetry sessions and sequence numbers, rentals, charging tasks, and the vehicle claim (who may move a car) |
-| Demand | Zones, demand targets and their versions |
-| Rebalancing | Short-lived recommendations, the CRDS request queue, traffic scenarios |
-| Dispatch | Approvals, relocation commands and their lifecycle |
-| Facilities | Parking and charger catalogue, parking holds |
-| EV simulators | Their own simulated position and battery, reported as telemetry |
-
-Rules:
-
-- A service never imports another service's store or runtime state. Shared code is
-  limited to `contracts/` (validated Pydantic wire models), `common/` (settings,
-  clock, persistence, travel maths) and pure helper functions.
+- A service never imports another service's store or runtime state. Importing
+  pure helper functions is allowed.
 - Redis (`DashboardCache`, shared traffic cache) is display-only and fails open.
   Decisions never read it.
 
 ## Consistency
 
 - **One writer per service.** Each state-owning service runs as one replica with
-  one worker. Its state lives in memory behind an `asyncio.Lock`.
+  one worker. Its state lives in memory behind an `asyncio.Lock`, and no lock is
+  held across network I/O.
 - **Recommendation is not dispatch.** A recommendation reserves nothing. Only an
   explicit `POST /api/v1/dispatches` approval starts a relocation. Dispatch then
   revalidates the vehicle, route, battery, parking and CRDS benefit, takes a
@@ -44,8 +57,8 @@ Rules:
   by request or dispatch ID. A retry returns the original receipt. A different
   body with the same ID is a 409.
 - **Ordered telemetry.** Each simulator session has an ID and a rising sequence
-  number. Fleet ignores exact repeats and rejects out-of-order samples and samples
-  from a replaced session.
+  number. Fleet ignores exact repeats and rejects out-of-order samples and
+  samples from a replaced session.
 - **Freshness bounds.** Missing or old data is never guessed. Telemetry is stale
   after 15 s and offline after 30 s, demand expires after 300 s, and
   recommendations after 120 s. CRDS returns DEFER instead of MOVE when its inputs
@@ -53,50 +66,51 @@ Rules:
 
 ## Failure handling
 
-- **Fail-closed persistence.** With `DATABASE_URL` set, each service saves one JSONB
-  snapshot per namespace to PostgreSQL after every change. If a save fails or its
-  outcome is unknown, the service stops trusting RAM: every non-health request
-  returns `503 PERSISTENCE_STATE_UNCERTAIN`, and the process exits with code 75 so
+- **Fail-closed persistence.** With `DATABASE_URL` set, each service saves one
+  JSONB snapshot per namespace to PostgreSQL after every change (Fleet and
+  Dispatch also save per-record rows). If a save fails or its outcome is
+  unknown, the service stops trusting RAM: every non-health request returns
+  `503 PERSISTENCE_STATE_UNCERTAIN`, and the process exits with code 75 so
   Kubernetes restarts it and reloads the last committed snapshot.
 - **Uncertain dispatch outcomes.** A lost acknowledgement or an ambiguous claim
-  moves the dispatch to `UNKNOWN`. The claim is kept, never released on a guess. A
-  reconciliation loop in Dispatch (every second) re-reads Fleet and Facilities
-  until the outcome is known.
+  moves the dispatch to `UNKNOWN`. The claim is kept, never released on a guess.
+  A reconciliation loop in Dispatch re-reads Fleet and Facilities until the
+  outcome is known.
 - **Lifecycles.** Vehicle: IDLE → DISPATCHED → RELOCATING → ARRIVED → IDLE.
   Dispatch: PENDING → SENT → ACKNOWLEDGED → IN_PROGRESS → SUCCEEDED, or REJECTED,
   FAILED or UNKNOWN. Recovery and resolution flows let an operator close stuck
   relocations explicitly.
-- **Simulator recovery.** Moving simulators hold a lease and checkpoints in Fleet,
-  so a restarted simulator pod resumes its journey without acting twice.
+- **Simulator recovery.** Moving simulators hold a lease and checkpoints in
+  Fleet, so a restarted simulator Pod resumes without acting twice. See
+  [telemetry](telemetry.md#restart-and-recovery).
 
 ## Communication
 
-All service-to-service traffic is HTTP request/response. Simulators poll Dispatch
-for commands about every second, and the dashboards poll the services. Polling is a
-deliberate choice: it is at-least-once, works through `kubectl port-forward`, and
-pairs with idempotent endpoints. There is no message broker and no push channel.
+All service-to-service traffic is HTTP request and response. Simulators poll
+Dispatch for commands about every second, and both browser apps poll the
+services. Polling is a deliberate choice: it is at-least-once, works through
+`kubectl port-forward`, and pairs with idempotent endpoints. There is no message
+broker and no push channel.
 
-## Deployment (local Kubernetes)
+The dashboard reaches the services through nginx, which maps
+`/api/<service>/...` to `/api/v1/...` and blocks internal routes. See
+[deployment](deployment.md).
 
-Defined with Kustomize in `k8s/` and run on Docker Desktop Kubernetes
-(`imagePullPolicy: Never`, so no managed cloud):
+## Conventions
 
-- Five backend Deployments (one replica each) with readiness, liveness and
-  startup probes and resource limits.
-- PostgreSQL StatefulSet and Redis.
-- EV simulators: a StatefulSet of 18 plus two Deployments, and an optional
-  customer-rental workload with its own RBAC.
-- Traffic collector, operator dashboard (nginx), simulation console.
-- One HorizontalPodAutoscaler, currently on the dashboard.
-- Optional CRDS HTTP scoring workers (`k8s/crds-worker.yaml`) are **not** in the
-  default deployment. The default `CRDS_EXECUTION_MODE` is `LOCAL`.
-
-See [local Kubernetes deployment](kubernetes-local.md).
+- Timestamps are UTC in APIs and Asia/Singapore in the UIs. Units are km, kWh and SOC %.
+- Errors are `{"error": {"code", "request_id"}}` with an `UPPER_SNAKE_CASE` code.
+- Settings come from environment variables matching the field name in upper
+  case (`Settings.from_env`), with prefixed groups such as `CRDS_*` and
+  `DEMAND_*`. `.env.example` lists them.
 
 ## Further reading
 
-- [CRDS](crds.md): the recommendation model, futures, and HOLD/MOVE/DEFER
-- [Dispatch lifecycle](dispatch-relocation.md)
+- [CRDS](crds.md): the recommendation model, futures, and MOVE/HOLD/DEFER
+- [Dispatch lifecycle](dispatch-relocation.md): approval, claims, bulk jobs
+- [Demand and heat map](demand-heatmap.md)
+- [Telemetry and digital twin](telemetry.md)
+- [Parking, charging and handoff](facilities-and-charging.md)
+- [OneMap routing](onemap-routing.md), [traffic-aware routing](traffic-aware-routing.md), [LTA DataMall](lta-datamall.md)
+- [Docker, nginx and Kubernetes](deployment.md)
 - [API contracts](api-contracts.md)
-- [Parking and charging facilities](parking-charging-facilities.md)
-- [OneMap routing](onemap-routing.md)

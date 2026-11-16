@@ -187,12 +187,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-local-metrics.ps1 `
   -AllowInsecureKubeletTls
 ```
 
+On macOS, the equivalents are:
+
+```sh
+bash scripts/start-kubernetes.sh --setup-metrics-server --allow-insecure-local-kubelet-tls
+bash scripts/setup-local-metrics.sh --allow-insecure-kubelet-tls
+```
+
 Do **not** follow this with `kubectl apply -k k8s`, because that would
 overwrite the versioned image references with the `k8s-local` template tags.
 
 The installer preserves an existing Metrics Server version and installs
 v0.9.0 only if missing. It requires GitHub access to download the release.
-`-AllowInsecureLocalKubeletTls` and `-AllowInsecureKubeletTls` explicitly
+`-AllowInsecureLocalKubeletTls`, `-AllowInsecureKubeletTls` and their macOS
+equivalents explicitly
 add `--kubelet-insecure-tls`: this disables kubelet TLS certificate
 verification to work around the Docker Desktop node certificate missing
 IP SANs. **Never use this workaround on production or shared clusters.**
