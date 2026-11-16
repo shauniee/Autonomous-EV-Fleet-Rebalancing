@@ -1,0 +1,167 @@
+{"t": 0.0, "preset": "NORMAL", "state": "RUNNING", "rps": 67.82, "p95": 1.7, "errors": 0, "attempted": 1, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 3.0, "preset": "NORMAL", "state": "RUNNING", "rps": 2.31, "p95": 3.9, "errors": 0, "attempted": 7, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 6.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.14, "p95": 51.0, "errors": 0, "attempted": 13, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 9.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.08, "p95": 51.0, "errors": 0, "attempted": 19, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 12.2, "preset": "NORMAL", "state": "RUNNING", "rps": 2.06, "p95": 3.9, "errors": 0, "attempted": 25, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 15.2, "preset": "NORMAL", "state": "RUNNING", "rps": 2.04, "p95": 3.9, "errors": 0, "attempted": 31, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 18.2, "preset": "NORMAL", "state": "RUNNING", "rps": 2.03, "p95": 3.9, "errors": 0, "attempted": 37, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 21.2, "preset": "NORMAL", "state": "RUNNING", "rps": 2.03, "p95": 3.7, "errors": 0, "attempted": 43, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 24.3, "preset": "NORMAL", "state": "RUNNING", "rps": 2.02, "p95": 3.7, "errors": 0, "attempted": 49, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 27.3, "preset": "NORMAL", "state": "RUNNING", "rps": 2.02, "p95": 3.7, "errors": 0, "attempted": 55, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 30.3, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 3.0, "errors": 0, "attempted": 61, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 33.4, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 3.7, "errors": 0, "attempted": 67, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 36.4, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 3.7, "errors": 0, "attempted": 73, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 39.4, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 3.7, "errors": 0, "attempted": 79, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 42.4, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 85, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 45.5, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 91, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 48.5, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 97, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 51.5, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 2.9, "errors": 0, "attempted": 103, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 54.5, "preset": "NORMAL", "state": "RUNNING", "rps": 2.02, "p95": 2.9, "errors": 0, "attempted": 110, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 57.6, "preset": "NORMAL", "state": "RUNNING", "rps": 2.02, "p95": 2.9, "errors": 0, "attempted": 116, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 60.6, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 122, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 63.6, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 128, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 66.6, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 134, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 69.6, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 140, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 72.7, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.4, "errors": 0, "attempted": 146, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 75.7, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 152, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 78.7, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 158, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 81.8, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 164, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 84.8, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.8, "errors": 0, "attempted": 170, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 87.9, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 2.9, "errors": 0, "attempted": 176, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 90.9, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 182, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 93.9, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 188, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 97.0, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 194, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 100.0, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 200, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 103.0, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 206, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 106.0, "preset": "NORMAL", "state": "RUNNING", "rps": 2.0, "p95": 3.0, "errors": 0, "attempted": 212, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 109.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 3.0, "errors": 0, "attempted": 219, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 112.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.9, "errors": 0, "attempted": 225, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 115.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.9, "errors": 0, "attempted": 231, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 118.1, "preset": "NORMAL", "state": "RUNNING", "rps": 2.01, "p95": 2.9, "errors": 0, "attempted": 237, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 121.2, "preset": "NORMAL", "state": "COMPLETED", "rps": 2.0, "p95": 2.9, "errors": 0, "attempted": 240, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 124.2, "preset": "NORMAL", "state": "COMPLETED", "rps": 2.0, "p95": 2.9, "errors": 0, "attempted": 240, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 127.2, "preset": "HIGH", "state": "RUNNING", "rps": 44.87, "p95": 5.4, "errors": 0, "attempted": 1, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 130.3, "preset": "HIGH", "state": "RUNNING", "rps": 49.85, "p95": 2.5, "errors": 0, "attempted": 152, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 133.3, "preset": "HIGH", "state": "RUNNING", "rps": 49.91, "p95": 2.6, "errors": 0, "attempted": 303, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 136.3, "preset": "HIGH", "state": "RUNNING", "rps": 50.04, "p95": 2.4, "errors": 0, "attempted": 455, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 139.3, "preset": "HIGH", "state": "RUNNING", "rps": 50.04, "p95": 2.0, "errors": 0, "attempted": 606, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 142.4, "preset": "HIGH", "state": "RUNNING", "rps": 50.03, "p95": 2.5, "errors": 0, "attempted": 757, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 145.4, "preset": "HIGH", "state": "RUNNING", "rps": 50.02, "p95": 2.3, "errors": 0, "attempted": 908, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 148.4, "preset": "HIGH", "state": "RUNNING", "rps": 50.02, "p95": 2.6, "errors": 0, "attempted": 1059, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 151.4, "preset": "HIGH", "state": "RUNNING", "rps": 49.98, "p95": 2.8, "errors": 0, "attempted": 1210, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 154.4, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.7, "errors": 0, "attempted": 1361, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 157.5, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.9, "errors": 0, "attempted": 1513, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 160.5, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 3.0, "errors": 0, "attempted": 1664, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 163.6, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.9, "errors": 0, "attempted": 1816, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 166.6, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.8, "errors": 0, "attempted": 1968, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 169.6, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.9, "errors": 0, "attempted": 2119, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 172.6, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 3.0, "errors": 0, "attempted": 2270, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 175.6, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.9, "errors": 0, "attempted": 2421, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 178.7, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 3.0, "errors": 0, "attempted": 2572, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 181.7, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.9, "errors": 0, "attempted": 2723, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 184.7, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.9, "errors": 0, "attempted": 2875, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 187.7, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.8, "errors": 0, "attempted": 3026, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 190.8, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.7, "errors": 0, "attempted": 3177, "cpu": 10, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 193.8, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.7, "errors": 0, "attempted": 3329, "cpu": 80, "replicas": 2, "ready": 1, "desired": 2}
+{"t": 196.8, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.5, "errors": 0, "attempted": 3480, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 199.9, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.5, "errors": 0, "attempted": 3631, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 202.9, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.5, "errors": 0, "attempted": 3783, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 205.9, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.4, "errors": 0, "attempted": 3935, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 208.9, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 4086, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 212.0, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.2, "errors": 0, "attempted": 4237, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 215.0, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 4389, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 218.0, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.3, "errors": 0, "attempted": 4540, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 221.1, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.4, "errors": 0, "attempted": 4692, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 224.1, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 4844, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 227.1, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 4995, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 230.1, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.4, "errors": 0, "attempted": 5146, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 233.2, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 5297, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 236.2, "preset": "HIGH", "state": "RUNNING", "rps": 49.99, "p95": 2.3, "errors": 0, "attempted": 5448, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 239.2, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 5600, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 242.2, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 5751, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 245.3, "preset": "HIGH", "state": "RUNNING", "rps": 50.0, "p95": 2.3, "errors": 0, "attempted": 5902, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 248.3, "preset": "HIGH", "state": "COMPLETED", "rps": 49.99, "p95": 2.3, "errors": 0, "attempted": 6000, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 251.3, "preset": "HIGH", "state": "COMPLETED", "rps": 49.99, "p95": 2.3, "errors": 0, "attempted": 6000, "cpu": 80, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 254.4, "preset": "EXTREME", "state": "RUNNING", "rps": 135.6, "p95": 3.5, "errors": 0, "attempted": 2, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 257.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.61, "p95": 6.1, "errors": 0, "attempted": 607, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 260.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.83, "p95": 5.0, "errors": 0, "attempted": 1211, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 263.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.85, "p95": 3.5, "errors": 0, "attempted": 1815, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 266.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.89, "p95": 2.2, "errors": 0, "attempted": 2420, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 269.5, "preset": "EXTREME", "state": "RUNNING", "rps": 199.94, "p95": 2.3, "errors": 0, "attempted": 3024, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 272.5, "preset": "EXTREME", "state": "RUNNING", "rps": 199.94, "p95": 2.0, "errors": 0, "attempted": 3628, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 275.5, "preset": "EXTREME", "state": "RUNNING", "rps": 199.88, "p95": 2.2, "errors": 0, "attempted": 4234, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 278.5, "preset": "EXTREME", "state": "RUNNING", "rps": 199.97, "p95": 2.1, "errors": 0, "attempted": 4840, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 281.6, "preset": "EXTREME", "state": "RUNNING", "rps": 199.95, "p95": 3.0, "errors": 0, "attempted": 5444, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 284.6, "preset": "EXTREME", "state": "RUNNING", "rps": 199.98, "p95": 2.8, "errors": 0, "attempted": 6049, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 287.7, "preset": "EXTREME", "state": "RUNNING", "rps": 199.92, "p95": 3.4, "errors": 0, "attempted": 6663, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 290.8, "preset": "EXTREME", "state": "RUNNING", "rps": 199.76, "p95": 3.0, "errors": 0, "attempted": 7275, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 293.8, "preset": "EXTREME", "state": "RUNNING", "rps": 199.97, "p95": 3.0, "errors": 0, "attempted": 7886, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 296.8, "preset": "EXTREME", "state": "RUNNING", "rps": 199.96, "p95": 3.0, "errors": 0, "attempted": 8490, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 299.8, "preset": "EXTREME", "state": "RUNNING", "rps": 199.98, "p95": 1.8, "errors": 0, "attempted": 9095, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 302.9, "preset": "EXTREME", "state": "RUNNING", "rps": 199.95, "p95": 35.5, "errors": 0, "attempted": 9701, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 305.9, "preset": "EXTREME", "state": "RUNNING", "rps": 199.98, "p95": 35.8, "errors": 0, "attempted": 10307, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 308.9, "preset": "EXTREME", "state": "RUNNING", "rps": 199.98, "p95": 37.3, "errors": 0, "attempted": 10911, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 311.9, "preset": "EXTREME", "state": "RUNNING", "rps": 199.99, "p95": 8.9, "errors": 0, "attempted": 11517, "cpu": 35, "replicas": 2, "ready": 2, "desired": 2}
+{"t": 315.0, "preset": "EXTREME", "state": "RUNNING", "rps": 199.99, "p95": 1.7, "errors": 0, "attempted": 12122, "cpu": 80, "replicas": 3, "ready": 2, "desired": 3}
+{"t": 318.0, "preset": "EXTREME", "state": "RUNNING", "rps": 199.87, "p95": 1.3, "errors": 0, "attempted": 12728, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 321.2, "preset": "EXTREME", "state": "RUNNING", "rps": 197.11, "p95": 63.8, "errors": 0, "attempted": 13170, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 324.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.69, "p95": 92.7, "errors": 0, "attempted": 13981, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 327.6, "preset": "EXTREME", "state": "RUNNING", "rps": 199.72, "p95": 97.7, "errors": 0, "attempted": 14616, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 330.7, "preset": "EXTREME", "state": "RUNNING", "rps": 199.82, "p95": 88.7, "errors": 0, "attempted": 15249, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 334.1, "preset": "EXTREME", "state": "RUNNING", "rps": 197.88, "p95": 97.2, "errors": 0, "attempted": 15774, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 337.2, "preset": "EXTREME", "state": "RUNNING", "rps": 197.9, "p95": 104.0, "errors": 0, "attempted": 16403, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 340.3, "preset": "EXTREME", "state": "RUNNING", "rps": 200.0, "p95": 103.0, "errors": 0, "attempted": 17183, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 343.3, "preset": "EXTREME", "state": "RUNNING", "rps": 200.0, "p95": 99.4, "errors": 0, "attempted": 17789, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 346.5, "preset": "EXTREME", "state": "RUNNING", "rps": 199.67, "p95": 91.1, "errors": 0, "attempted": 18406, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 349.8, "preset": "EXTREME", "state": "RUNNING", "rps": 199.81, "p95": 96.2, "errors": 0, "attempted": 19059, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 352.8, "preset": "EXTREME", "state": "RUNNING", "rps": 200.0, "p95": 85.9, "errors": 0, "attempted": 19687, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 356.0, "preset": "EXTREME", "state": "RUNNING", "rps": 199.07, "p95": 95.9, "errors": 0, "attempted": 20229, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 359.1, "preset": "EXTREME", "state": "RUNNING", "rps": 199.83, "p95": 97.1, "errors": 0, "attempted": 20941, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 362.3, "preset": "EXTREME", "state": "RUNNING", "rps": 199.89, "p95": 97.5, "errors": 0, "attempted": 21566, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 365.3, "preset": "EXTREME", "state": "RUNNING", "rps": 199.99, "p95": 92.4, "errors": 0, "attempted": 22186, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 368.4, "preset": "EXTREME", "state": "RUNNING", "rps": 199.96, "p95": 21.9, "errors": 0, "attempted": 22801, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 371.6, "preset": "EXTREME", "state": "RUNNING", "rps": 199.96, "p95": 3.9, "errors": 0, "attempted": 23434, "cpu": 80, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 374.6, "preset": "EXTREME", "state": "COMPLETED", "rps": 199.99, "p95": 2.3, "errors": 0, "attempted": 24000, "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 377.6, "preset": "EXTREME", "state": "COMPLETED", "rps": 199.99, "p95": 2.3, "errors": 0, "attempted": 24000, "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 380.6, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 390.7, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 400.7, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 410.7, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 420.8, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 430.8, "preset": "IDLE", "cpu": 66, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 440.8, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 450.9, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 460.9, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 471.0, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 481.0, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 491.0, "preset": "IDLE", "cpu": 10, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 501.1, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 511.1, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 521.1, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 531.2, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 541.2, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 551.3, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 561.3, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 571.3, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 581.3, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 591.4, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 601.4, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 611.4, "preset": "IDLE", "cpu": 16, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 621.5, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 631.5, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 641.6, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 651.6, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 661.6, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 671.7, "preset": "IDLE", "cpu": 13, "replicas": 3, "ready": 3, "desired": 3}
+{"t": 681.7, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 691.7, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 701.8, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 711.8, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 721.8, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 731.9, "preset": "IDLE", "cpu": 13, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 741.9, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 751.9, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 761.9, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 772.0, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 782.0, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
+{"t": 792.0, "preset": "IDLE", "cpu": 30, "replicas": 1, "ready": 1, "desired": 1}
