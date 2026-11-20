@@ -216,7 +216,7 @@ function App() {
                       <strong>{name}</strong>
                       <p>
                         {error
-                          ? 'Unknown — console unavailable'
+                          ? 'Unknown (console unavailable)'
                           : resource?.error
                             ? 'Unavailable'
                             : resource?.data

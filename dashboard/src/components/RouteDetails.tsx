@@ -18,7 +18,7 @@ export function RouteDetails({ dispatch, vehicle }: { dispatch: Dispatch; vehicl
       <span><strong>{Math.round(progress * 100)}%</strong><small>Reported progress</small></span>
     </div>
     <progress value={progress} max={1} aria-label={`${dispatch.vehicle_id} journey progress`}/>
-    <small>EV position reported {time(telemetry?.observed_at)}{vehicle?.stale ? ' · STALE — last known position' : ''} · Route fetched {time(route.fetched_at)}</small>
+    <small>EV position reported {time(telemetry?.observed_at)}{vehicle?.stale ? ' · STALE, last known position' : ''} · Route fetched {time(route.fetched_at)}</small>
     <details className="route-directions"><summary>Journey details & driving directions · {route.instructions.length} steps</summary>
       <p className="muted">{ended ? 'Journey ended.' : dispatch.state === 'UNKNOWN'
         ? 'Execution status uncertain; remaining time unavailable.'

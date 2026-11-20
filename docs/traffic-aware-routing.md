@@ -69,7 +69,7 @@ and minimum SOC safety checks are unchanged.
 
 In OneMap mode Dispatch fetches a fresh OneMap road route when the operator
 approves. If traffic is enabled, Dispatch checks its actual geometry against
-LTA observations, and—when `OSRM_ROUTING_URL` is configured—requests up to
+LTA observations and, when `OSRM_ROUTING_URL` is configured, requests up to
 three alternative driving routes from the *server-owned* OSRM instance.
 It chooses the least disrupted valid candidate, which must have:
 - road-aligned origin within **5 m** (no start teleport or connector);
@@ -94,7 +94,7 @@ Dispatch exposes a read-only
 `GET /api/v1/dispatches/{id}/traffic-check`, which examines the
 remaining route and flags `BLOCKED_AHEAD` or `CONGESTED_AHEAD` for
 operator review. **No in-flight route mutation or remote stop command
-is implemented**; seamless mid-trip rerouting requires a future
+is implemented**; rerouting during a trip would need a future
 acknowledged, versioned safe-command protocol to prevent EV teleporting
 and stale optimistic-lock claims. Do not advertise the active-journey
 warning as executed rerouting.

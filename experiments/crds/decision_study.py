@@ -117,6 +117,23 @@ def out_of_sample(rng, samples, vehicles, available, desired, moves, choice, par
                 "cvar10": statistics.fmean(sorted(g)[:worst])} for p, g in gains.items()}
 
 
+def mean_gains(futures, moves, params):
+    """Expected gain over the declared futures: the stochastic-programming (sample average) objective."""
+    total = {}
+    for f in futures:
+        single = [m.model_copy(update={"outcomes": {f.future_id: m.outcomes[f.future_id]}}) for m in moves]
+        for c in evaluate_moves([f], single, params).ranked_candidates:
+            total[c.vehicle_id] = total.get(c.vehicle_id, 0.0) + c.worst_case_gain_vehicle_minutes / len(futures)
+    return total
+
+
+def stochastic_choice(futures, moves, params):
+    """Move with the best mean gain, or HOLD when it does not clear the CRDS minimum gain."""
+    total = mean_gains(futures, moves, params)
+    best = min(total, key=lambda k: (-total[k], k))
+    return best if total[best] > params.minimum_gain_vehicle_minutes else None
+
+
 SAMPLE_NOW = datetime(2026, 11, 14, tzinfo=timezone.utc)
 
 
@@ -165,7 +182,8 @@ def run(trials, seed, samples=0):
             .35 * (1 - min(info[k][0] / 50, 1)) + .20 * info[k][2] / 100
             + .35 * (info[k][1] - 20) / 80 + .10 * info[k][1] / 100, k))
         choice = {"nearest": nearest, "weighted": weighted,
-                  "crds_nominal": nominal.selected_vehicle_id, "crds": robust.selected_vehicle_id}
+                  "crds_nominal": nominal.selected_vehicle_id, "crds": robust.selected_vehicle_id,
+                  "stochastic": stochastic_choice(futures, moves, params)}
 
         def outcome(vehicle_id):
             if vehicle_id is None:
@@ -220,7 +238,7 @@ def latency(seed, reps=30):
 def summarise(records, seed):
     rng = random.Random(seed + 1)
     rows = [r for r in records if r["candidates"]]
-    policies = ("nearest", "weighted", "crds_nominal", "crds")
+    policies = ("nearest", "weighted", "crds_nominal", "crds", "stochastic")
     summary = {"trials": len(records), "with_candidates": len(rows),
                "crds_hold_share": sum(r["crds_decision"] == "HOLD" for r in rows) / len(rows), "policies": {}}
     for p in policies:
@@ -248,6 +266,16 @@ def summarise(records, seed):
                 diffs = [r[f"crds_oos_{key}"] - r[f"{base}_oos_{key}"] for r in rows]
                 oos[base][f"crds_minus_policy_{key}"] = statistics.fmean(diffs)
                 oos[base][f"crds_minus_policy_{key}_ci95"] = bootstrap(diffs, rng)
+    # Separate stream so adding the stochastic baseline leaves the earlier intervals unchanged.
+    extra_rng = random.Random(seed + 2)
+    diffs = [r["crds_worst_gain"] - r["stochastic_worst_gain"] for r in rows]
+    summary["policies"]["stochastic"]["crds_minus_policy_worst_gain"] = statistics.fmean(diffs)
+    summary["policies"]["stochastic"]["crds_minus_policy_ci95"] = bootstrap(diffs, extra_rng)
+    if "crds_oos_mean" in rows[0]:
+        for key in ("mean", "cvar10"):
+            diffs = [r[f"crds_oos_{key}"] - r[f"stochastic_oos_{key}"] for r in rows]
+            summary["out_of_sample"]["stochastic"][f"crds_minus_policy_{key}"] = statistics.fmean(diffs)
+            summary["out_of_sample"]["stochastic"][f"crds_minus_policy_{key}_ci95"] = bootstrap(diffs, extra_rng)
     return summary
 
 

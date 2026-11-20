@@ -52,7 +52,7 @@ DASHBOARD_PORT=18080 SIMULATION_CONSOLE_PORT=18090 bash scripts/start-kubernetes
 3. Choose **Parking / demand rebalancing**, quantity one, then **Recommend EV**.
    For an approvable `MOVE`, review its LTA carpark, approve and follow the relocation. For `HOLD` or `DEFER`, inspect [CRDS evidence](crds.md#decisions-batches-and-approval).
    Fleet overview should then show its `lta-parking-...` parked facility ID.
-4. Choose **Charging — replenish to 80%**. Select an available EV below 80% SOC
+4. Choose **Charging only** (charges to 80%). Select an available EV below 80% SOC
    (or leave Any eligible EV to prioritise the lowest-SOC eligible car). Request
    and explicitly approve a recommendation to an available LTA charger. If the
    zone has no free chargers, choose another zone; no mock substitute is used.

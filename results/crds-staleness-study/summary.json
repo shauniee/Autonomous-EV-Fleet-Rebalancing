@@ -1,0 +1,341 @@
+{
+  "lags": {
+    "0": {
+      "states": 1000,
+      "futures_per_state": 6.0,
+      "recheck_cancelled_share_of_crds_moves": 0.0,
+      "policies": {
+        "nearest": {
+          "move_share": 1.0,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.27014,
+          "mean_gain": 18.3997,
+          "mean_cvar10": -0.851
+        },
+        "crds_no_age": {
+          "move_share": 0.771,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00856,
+          "mean_gain": 24.38892,
+          "mean_cvar10": 13.34
+        },
+        "crds": {
+          "move_share": 0.771,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00856,
+          "mean_gain": 24.38892,
+          "mean_cvar10": 13.34
+        },
+        "crds_recheck": {
+          "move_share": 0.771,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00856,
+          "mean_gain": 24.38892,
+          "mean_cvar10": 13.34
+        }
+      },
+      "crds_minus_crds_no_age_harm": 0.0,
+      "crds_minus_crds_no_age_harm_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_minus_crds_no_age_cvar10": 0.0,
+      "crds_minus_crds_no_age_cvar10_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_recheck_minus_crds_harm": 0.0,
+      "crds_recheck_minus_crds_harm_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_recheck_minus_crds_cvar10": 0.0,
+      "crds_recheck_minus_crds_cvar10_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_recheck_minus_nearest_harm": -0.26158,
+      "crds_recheck_minus_nearest_harm_ci95": [
+        -0.2833,
+        -0.24165999999999999
+      ],
+      "crds_recheck_minus_nearest_cvar10": 14.191,
+      "crds_recheck_minus_nearest_cvar10_ci95": [
+        13.2486,
+        15.1666
+      ]
+    },
+    "30": {
+      "states": 1000,
+      "futures_per_state": 7.0,
+      "recheck_cancelled_share_of_crds_moves": 0.14611260053619302,
+      "policies": {
+        "nearest": {
+          "move_share": 0.955,
+          "claim_failed_share": 0.045,
+          "harm_share": 0.26030000000000003,
+          "mean_gain": 16.560959999999998,
+          "mean_cvar10": -1.467
+        },
+        "crds_no_age": {
+          "move_share": 0.746,
+          "claim_failed_share": 0.025,
+          "harm_share": 0.02026,
+          "mean_gain": 22.71788,
+          "mean_cvar10": 11.260399999999999
+        },
+        "crds": {
+          "move_share": 0.746,
+          "claim_failed_share": 0.025,
+          "harm_share": 0.02026,
+          "mean_gain": 22.71788,
+          "mean_cvar10": 11.260399999999999
+        },
+        "crds_recheck": {
+          "move_share": 0.637,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.0058,
+          "mean_gain": 20.65734,
+          "mean_cvar10": 11.7942
+        }
+      },
+      "crds_minus_crds_no_age_harm": 0.0,
+      "crds_minus_crds_no_age_harm_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_minus_crds_no_age_cvar10": 0.0,
+      "crds_minus_crds_no_age_cvar10_ci95": [
+        0.0,
+        0.0
+      ],
+      "crds_recheck_minus_crds_harm": -0.01446,
+      "crds_recheck_minus_crds_harm_ci95": [
+        -0.0189,
+        -0.010320000000000001
+      ],
+      "crds_recheck_minus_crds_cvar10": 0.5337999999999999,
+      "crds_recheck_minus_crds_cvar10_ci95": [
+        0.37039999999999995,
+        0.7193999999999999
+      ],
+      "crds_recheck_minus_nearest_harm": -0.2545,
+      "crds_recheck_minus_nearest_harm_ci95": [
+        -0.27536,
+        -0.2346
+      ],
+      "crds_recheck_minus_nearest_cvar10": 13.2612,
+      "crds_recheck_minus_nearest_cvar10_ci95": [
+        12.3132,
+        14.219
+      ]
+    },
+    "60": {
+      "states": 1000,
+      "futures_per_state": 8.0,
+      "recheck_cancelled_share_of_crds_moves": 0.09285714285714286,
+      "policies": {
+        "nearest": {
+          "move_share": 0.907,
+          "claim_failed_share": 0.093,
+          "harm_share": 0.2523,
+          "mean_gain": 14.63006,
+          "mean_cvar10": -2.389
+        },
+        "crds_no_age": {
+          "move_share": 0.709,
+          "claim_failed_share": 0.062,
+          "harm_share": 0.035160000000000004,
+          "mean_gain": 20.21886,
+          "mean_cvar10": 8.7752
+        },
+        "crds": {
+          "move_share": 0.42,
+          "claim_failed_share": 0.04,
+          "harm_share": 0.006600000000000001,
+          "mean_gain": 14.16262,
+          "mean_cvar10": 8.4826
+        },
+        "crds_recheck": {
+          "move_share": 0.381,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00122,
+          "mean_gain": 13.46248,
+          "mean_cvar10": 8.6746
+        }
+      },
+      "crds_minus_crds_no_age_harm": -0.02856,
+      "crds_minus_crds_no_age_harm_ci95": [
+        -0.03578,
+        -0.0216
+      ],
+      "crds_minus_crds_no_age_cvar10": -0.29259999999999997,
+      "crds_minus_crds_no_age_cvar10_ci95": [
+        -0.9204,
+        0.3328
+      ],
+      "crds_recheck_minus_crds_harm": -0.00538,
+      "crds_recheck_minus_crds_harm_ci95": [
+        -0.00838,
+        -0.00268
+      ],
+      "crds_recheck_minus_crds_cvar10": 0.192,
+      "crds_recheck_minus_crds_cvar10_ci95": [
+        0.064,
+        0.3428
+      ],
+      "crds_recheck_minus_nearest_harm": -0.25108,
+      "crds_recheck_minus_nearest_harm_ci95": [
+        -0.2726,
+        -0.22902
+      ],
+      "crds_recheck_minus_nearest_cvar10": 11.063600000000001,
+      "crds_recheck_minus_nearest_cvar10_ci95": [
+        9.9904,
+        12.165
+      ]
+    },
+    "90": {
+      "states": 1000,
+      "futures_per_state": 9.0,
+      "recheck_cancelled_share_of_crds_moves": 0.12,
+      "policies": {
+        "nearest": {
+          "move_share": 0.892,
+          "claim_failed_share": 0.108,
+          "harm_share": 0.26648,
+          "mean_gain": 13.108600000000001,
+          "mean_cvar10": -3.2361999999999997
+        },
+        "crds_no_age": {
+          "move_share": 0.681,
+          "claim_failed_share": 0.09,
+          "harm_share": 0.04348,
+          "mean_gain": 18.26888,
+          "mean_cvar10": 7.232600000000001
+        },
+        "crds": {
+          "move_share": 0.15,
+          "claim_failed_share": 0.023,
+          "harm_share": 0.00344,
+          "mean_gain": 5.566439999999999,
+          "mean_cvar10": 3.4698
+        },
+        "crds_recheck": {
+          "move_share": 0.132,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00035999999999999997,
+          "mean_gain": 5.15116,
+          "mean_cvar10": 3.525
+        }
+      },
+      "crds_minus_crds_no_age_harm": -0.04004,
+      "crds_minus_crds_no_age_harm_ci95": [
+        -0.04866,
+        -0.03218
+      ],
+      "crds_minus_crds_no_age_cvar10": -3.7628000000000004,
+      "crds_minus_crds_no_age_cvar10_ci95": [
+        -4.602399999999999,
+        -2.9692
+      ],
+      "crds_recheck_minus_crds_harm": -0.0030800000000000003,
+      "crds_recheck_minus_crds_harm_ci95": [
+        -0.00548,
+        -0.0011400000000000002
+      ],
+      "crds_recheck_minus_crds_cvar10": 0.055200000000000006,
+      "crds_recheck_minus_crds_cvar10_ci95": [
+        -0.018,
+        0.1416
+      ],
+      "crds_recheck_minus_nearest_harm": -0.26612,
+      "crds_recheck_minus_nearest_harm_ci95": [
+        -0.28806,
+        -0.24328
+      ],
+      "crds_recheck_minus_nearest_cvar10": 6.7612,
+      "crds_recheck_minus_nearest_cvar10_ci95": [
+        5.556,
+        7.9174
+      ]
+    },
+    "120": {
+      "states": 1000,
+      "futures_per_state": 9.0,
+      "recheck_cancelled_share_of_crds_moves": 0.20270270270270271,
+      "policies": {
+        "nearest": {
+          "move_share": 0.862,
+          "claim_failed_share": 0.138,
+          "harm_share": 0.25604000000000005,
+          "mean_gain": 11.92708,
+          "mean_cvar10": -3.6976
+        },
+        "crds_no_age": {
+          "move_share": 0.665,
+          "claim_failed_share": 0.106,
+          "harm_share": 0.047380000000000005,
+          "mean_gain": 17.04676,
+          "mean_cvar10": 6.4896
+        },
+        "crds": {
+          "move_share": 0.148,
+          "claim_failed_share": 0.025,
+          "harm_share": 0.00318,
+          "mean_gain": 5.334560000000001,
+          "mean_cvar10": 3.3376
+        },
+        "crds_recheck": {
+          "move_share": 0.118,
+          "claim_failed_share": 0.0,
+          "harm_share": 0.00023999999999999998,
+          "mean_gain": 4.73028,
+          "mean_cvar10": 3.3574
+        }
+      },
+      "crds_minus_crds_no_age_harm": -0.0442,
+      "crds_minus_crds_no_age_harm_ci95": [
+        -0.054079999999999996,
+        -0.0357
+      ],
+      "crds_minus_crds_no_age_cvar10": -3.152,
+      "crds_minus_crds_no_age_cvar10_ci95": [
+        -4.0218,
+        -2.2706
+      ],
+      "crds_recheck_minus_crds_harm": -0.00294,
+      "crds_recheck_minus_crds_harm_ci95": [
+        -0.00524,
+        -0.0011400000000000002
+      ],
+      "crds_recheck_minus_crds_cvar10": 0.019799999999999998,
+      "crds_recheck_minus_crds_cvar10_ci95": [
+        -0.0412,
+        0.0858
+      ],
+      "crds_recheck_minus_nearest_harm": -0.2558,
+      "crds_recheck_minus_nearest_harm_ci95": [
+        -0.27758,
+        -0.23326
+      ],
+      "crds_recheck_minus_nearest_cvar10": 7.055,
+      "crds_recheck_minus_nearest_cvar10_ci95": [
+        5.836,
+        8.3066
+      ]
+    }
+  },
+  "runtime_seconds": 47.15136745898053,
+  "model": {
+    "time_scale": 10,
+    "demand_change_minutes": 10,
+    "rental_minutes": 120
+  },
+  "manifest": {
+    "commit": "977e535",
+    "seed": 20261120,
+    "trials": 1000,
+    "samples": 50
+  }
+}

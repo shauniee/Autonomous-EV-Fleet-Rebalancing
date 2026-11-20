@@ -38,7 +38,7 @@ Dispatch refuses relocation approval without a verified OneMap route.
 
 ## Approved journey
 
-With LTA facilities, the default **Automatic — parking or charging** mode chooses
+With LTA facilities, the default **Automatic** mode chooses
 a facility for each EV in the selected zone. Predicted arrival SOC below 35%
 requires available charging; otherwise ordinary parking is selected. All trips
 must preserve the operational reserve (20% by default). **Charging only** is an
