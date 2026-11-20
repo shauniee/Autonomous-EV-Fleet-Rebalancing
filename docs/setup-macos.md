@@ -14,7 +14,8 @@ Run every command in Terminal from the repository root.
 
 1. Open Docker Desktop, go to **Kubernetes** and click **Create cluster**.
 2. Select **Kubeadm**, click **Create**, and wait until it shows as running.
-   An existing Kubeadm cluster is fine.
+   An existing Kubeadm cluster is fine. Do not use the **kind** type: the start
+   script waits for the Kubeadm node `docker-desktop` and uses locally built images.
 
 See [Docker Desktop's Kubernetes guide](https://docs.docker.com/desktop/use-desktop/kubernetes/#enable-kubernetes).
 Then check Docker is reachable and the node is `Ready`:
@@ -38,10 +39,11 @@ Add your LTA DataMall key and OneMap token to `.env` as described in
 ## 4. Start the system
 
 ```sh
-bash scripts/start-kubernetes.sh
+bash scripts/start-kubernetes.sh --setup-metrics-server --allow-insecure-local-kubelet-tls
 ```
 
-This builds the images, applies the configuration, waits for the core services
+The two flags install Metrics Server so the dashboard HPA can read CPU (the TLS
+flag is for local Docker Desktop only). This builds the images, applies the configuration, waits for the core services
 and opens port forwards. **Keep this terminal open.** `Ctrl+C` closes the port
 forwards; the Kubernetes workloads keep running.
 

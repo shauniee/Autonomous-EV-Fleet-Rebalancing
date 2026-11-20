@@ -38,8 +38,10 @@ HTTP.
 
 - A service never imports another service's store or runtime state. Importing
   pure helper functions is allowed.
-- Redis (`DashboardCache`, shared traffic cache) is display-only and fails open.
-  Decisions never read it.
+- Redis `DashboardCache` is display-only and fails open. Decisions never read it.
+- The shared traffic cache in Redis is written only by the traffic collector.
+  Rebalancing and Dispatch read it for route checks; a missing or old feed is
+  reported as incomplete traffic coverage, never as a clear road.
 
 ## Consistency
 

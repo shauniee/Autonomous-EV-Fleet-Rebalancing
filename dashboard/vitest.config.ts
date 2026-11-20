@@ -15,5 +15,7 @@ export default defineConfig({
     // startup stays bounded without changing any test assertions.
     pool: 'threads',
     fileParallelism: false,
+    // Node 25+ exposes an empty global localStorage that shadows jsdom's.
+    execArgv: ['--no-experimental-webstorage'],
   },
 });

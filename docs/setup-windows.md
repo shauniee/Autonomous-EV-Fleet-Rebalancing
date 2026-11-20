@@ -7,7 +7,9 @@ computer needs its own Docker Desktop and its own `.env` file.
 
 - Git and Windows PowerShell
 - Python **3.12+** and Node.js **22+**
-- Docker Desktop using **Linux containers**, with **Kubernetes** enabled
+- Docker Desktop using **Linux containers**, with **Kubernetes** enabled using
+  the **Kubeadm** cluster type (not **kind**: the start script expects the
+  Kubeadm node `docker-desktop` and locally built images)
 - `kubectl` using the **`docker-desktop`** context
 - Free local ports **8080** (operator dashboard) and **8090** (simulation console)
 
@@ -52,10 +54,11 @@ console build, installing npm dependencies if missing. A pass does not prove
 live OneMap routing or Kubernetes work.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-kubernetes.ps1 -SetupMetricsServer -AllowInsecureLocalKubeletTls
 ```
 
-Checks the local Docker and Kubernetes environment, refuses to redeploy while a
+The two flags install Metrics Server so the dashboard HPA can read CPU (the TLS
+flag is for local Docker Desktop only). Checks the local Docker and Kubernetes environment, refuses to redeploy while a
 relocation, rental or charging task is active, builds the images, deploys
 everything, waits for rollouts and opens the dashboard tunnels. **Keep this
 window open.** `Ctrl+C` closes the tunnels; the Kubernetes workloads keep running.

@@ -85,8 +85,12 @@ In short:
 git clone https://github.com/shauniee/Autonomous-EV-Fleet-Rebalancing.git
 cd Autonomous-EV-Fleet-Rebalancing
 cp .env.example .env
-bash scripts/start-kubernetes.sh        # Windows: .\scripts\start-kubernetes.ps1
+bash scripts/start-kubernetes.sh --setup-metrics-server --allow-insecure-local-kubelet-tls
+# Windows: .\scripts\start-kubernetes.ps1 -SetupMetricsServer -AllowInsecureLocalKubeletTls
 ```
+
+The Metrics Server flags let the dashboard autoscaler read CPU; without them
+`kubectl get hpa` shows `cpu: <unknown>` and the dashboard does not scale.
 
 Then open:
 
@@ -119,7 +123,7 @@ simulation-console/    Simulation console (FastAPI backend + React frontend)
 k8s/                   Kubernetes manifests (Kustomize) and optional rental workloads
 tests/                 pytest unit and integration tests and in-process test helpers
 scripts/               Setup, startup, test and evaluation scripts
-experiments/           Offline evaluation code (CRDS decision study, strategy and traffic comparisons)
+experiments/           Evaluation code (CRDS studies, cluster experiments, strategy and traffic comparisons)
 results/               Saved output of those evaluations
 docs/                  Architecture, deployment, setup and concept guides
 .github/workflows/     Manual CI: infrastructure and Kubernetes portability checks
@@ -151,6 +155,26 @@ npm --prefix dashboard run build
 
 On Windows, `.\scripts\test-local.ps1` runs all of these. See
 [local testing](docs/local-testing.md) for integration checks and environment notes.
+
+## Reproducing the article's results
+
+The two CRDS studies run offline in under a minute each and write to `results/`:
+
+```sh
+.venv/bin/python -m experiments.crds.decision_study --out results/crds-decision-study
+.venv/bin/python -m experiments.crds.staleness_study --out results/crds-staleness-study
+```
+
+The cluster experiments drive a running deployment through the 8080 and 8090
+port forwards. They approve real simulated relocations and change zone demand,
+so run them on a test deployment only:
+
+```sh
+.venv/bin/python experiments/cluster/dispatch_restart.py results/cluster-evaluation/restart.jsonl 5
+.venv/bin/python experiments/cluster/approval_contention.py results/cluster-evaluation/contention.jsonl 8 1 2 4 8
+.venv/bin/python experiments/cluster/approval_contention.py --summarise results/cluster-evaluation/contention.jsonl
+.venv/bin/python experiments/cluster/hpa_step.py results/cluster-evaluation/hpa.jsonl
+```
 
 ## Limitations
 

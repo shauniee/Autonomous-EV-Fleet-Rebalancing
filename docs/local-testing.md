@@ -47,8 +47,11 @@ GitHub Actions are manual-only (`workflow_dispatch`): open GitHub > Actions, pic
 
 ## Offline route fixture
 
-Dispatch only approves a relocation with a verified `ONEMAP` route, and the
-moving EV rejects commands without one. So that tests can exercise the real
+Dispatch approves a relocation only with a verified `ONEMAP` route, or with a
+labelled straight-line `OFFLINE_DEMO` route when it runs with
+`ROUTING_PROVIDER=OFFLINE_DEMO` (the default without credentials, so the
+deployed demo works offline). The moving EV rejects commands without a route.
+So that tests can exercise the real
 Dispatch, Fleet and movement state machines without OneMap credentials, the
 test harnesses inject a deterministic test-only `RoadRoute(source="ONEMAP")`
 from `tests/routing_fixture.py`. Its straight-line geometry is synthetic.
